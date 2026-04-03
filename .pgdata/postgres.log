@@ -1,0 +1,12 @@
+2026-03-06 16:50:48.018 -03 [32368] LOG:  iniciando PostgreSQL 18.1 on x86_64-windows, compiled by msvc-19.44.35219, 64-bit
+2026-03-06 16:50:48.021 -03 [32368] LOG:  escutando no endereço IPv6 "::1", porta 55432
+2026-03-06 16:50:48.021 -03 [32368] LOG:  escutando no endereço IPv4 "127.0.0.1", porta 55432
+2026-03-06 16:50:48.502 -03 [50124] LOG:  sistema de banco de dados foi desligado em 2026-03-06 16:50:47 -03
+2026-03-06 16:50:48.559 -03 [32368] LOG:  sistema de banco de dados está pronto para aceitar conexões
+2026-03-06 16:51:12.054 -03 [32368] LOG:  pedido de desligamento rápido foi recebido
+2026-03-06 16:51:12.054 -03 [32368] LOG:  interrompendo quaisquer transações ativas
+2026-03-06 16:51:12.060 -03 [32368] LOG:  processo trabalhador em segundo plano "logical replication launcher" (PID 47700) terminou com código de retorno 1
+2026-03-06 16:51:12.062 -03 [34788] LOG:  desligando
+2026-03-06 16:51:12.062 -03 [34788] LOG:  checkpoint starting: shutdown immediate
+2026-03-06 16:51:15.074 -03 [34788] LOG:  checkpoint complete: wrote 1098 buffers (6.7%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.045 s, sync=0.061 s, total=3.013 s; sync files=542, longest=0.001 s, average=0.001 s; distance=5466 kB, estimate=5466 kB; lsn=0/1D47B50, redo lsn=0/1D47B50
+2026-03-06 16:51:15.146 -03 [32368] LOG:  sistema de banco de dados está desligado

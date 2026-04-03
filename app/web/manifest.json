@@ -1,0 +1,9 @@
+{
+  "name": "Atalaia Social",
+  "short_name": "Atalaia",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#FFFFFF",
+  "theme_color": "#FFFFFF",
+  "description": "Atalaia Social"
+}
