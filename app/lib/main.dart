@@ -49,12 +49,12 @@ bool _supportsLocalNotifications() {
 }
 
 String _profileDisplayLabel(ProfileModel p) {
-  final name = p.name.trim();
-  final username = p.username.trim();
+  final name = _displayNameForProfile(p).trim();
+  final username = _usernameForProfile(p, userId: p.userId).trim();
   if (name.isEmpty && username.isEmpty) return 'Usuário';
   if (username.isEmpty) return name;
   if (name.isEmpty) return '@$username';
-  if (name == username) return name;
+  if (name == username || name == '@$username') return name;
   return '$name (@$username)';
 }
 
@@ -629,6 +629,70 @@ bool _looksLikeUuid(String? value) {
   final v = value?.trim();
   if (v == null || v.isEmpty) return false;
   return RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$').hasMatch(v);
+}
+
+bool _looksLikeEmail(String? value) {
+  final v = value?.trim();
+  if (v == null || v.isEmpty) return false;
+  if (!v.contains('@')) return false;
+  final parts = v.split('@');
+  if (parts.length != 2) return false;
+  if (parts.first.trim().isEmpty) return false;
+  final domain = parts.last.trim();
+  if (domain.isEmpty) return false;
+  if (!domain.contains('.')) return false;
+  return true;
+}
+
+String _normalizeDisplayUsername(String? value, {String fallback = ''}) {
+  final v = value?.trim() ?? '';
+  if (v.isEmpty) return fallback.trim();
+  if (_looksLikeEmail(v)) return fallback.trim();
+  return v;
+}
+
+String _displayNameForProfile(ProfileModel profile) {
+  final displayName = profile.name.trim();
+  if (displayName.isNotEmpty && !_looksLikeEmail(displayName)) return displayName;
+  final fullName = profile.fullName.trim();
+  if (fullName.isNotEmpty && !_looksLikeEmail(fullName)) return fullName;
+  return 'Usuário';
+}
+
+String _fallbackUsernameForUserId(String userId) {
+  final id = userId.trim();
+  if (id.isEmpty) return 'user';
+  if (_looksLikeUuid(id)) return 'user${id.substring(0, 8)}';
+  final cleaned = id.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '');
+  if (cleaned.isEmpty) return 'user';
+  return cleaned;
+}
+
+String _usernameForProfile(ProfileModel? profile, {required String userId}) {
+  final u = profile?.username.trim() ?? '';
+  if (u.isEmpty) return _fallbackUsernameForUserId(userId);
+  if (_looksLikeEmail(u)) return _fallbackUsernameForUserId(userId);
+  return u;
+}
+
+({String displayName, String username, String avatarName, String? avatarUrl, bool isVerified}) _identityForUserId(
+  DemoRepository repo,
+  String userId, {
+  bool legacyVerified = false,
+}) {
+  final profile = repo.profileForUserId(userId);
+  final displayName = profile == null ? 'Usuário' : _displayNameForProfile(profile);
+  final username = _usernameForProfile(profile, userId: userId);
+  final avatarName = displayName;
+  final avatarUrl = profile?.avatarUrl;
+  final isVerified = profile?.isVerified ?? legacyVerified;
+  return (
+    displayName: displayName,
+    username: username,
+    avatarName: avatarName,
+    avatarUrl: avatarUrl,
+    isVerified: isVerified,
+  );
 }
 
 bool _postgrestMissingColumn(PostgrestException e, String column) {
@@ -1373,20 +1437,11 @@ ReputationLevel _parseReputationLevel(String? raw) {
   };
 }
 
-String _reputationLevelLabel(ReputationLevel value) {
-  return switch (value) {
-    ReputationLevel.newbie => 'Novo',
-    ReputationLevel.bronze => 'Bronze',
-    ReputationLevel.silver => 'Prata',
-    ReputationLevel.gold => 'Ouro',
-    ReputationLevel.platinum => 'Platina',
-  };
-}
-
 final class ProfileModel {
   const ProfileModel({
     required this.userId,
     required this.name,
+    this.fullName = '',
     required this.username,
     required this.isVerified,
     this.reputationScore = 0,
@@ -1400,6 +1455,7 @@ final class ProfileModel {
 
   final String userId;
   final String name;
+  final String fullName;
   final String username;
   final bool isVerified;
 
@@ -1417,6 +1473,8 @@ final class ProfileModel {
 
   ProfileModel copyWith({
     String? name,
+    String? fullName,
+    String? username,
     String? bio,
     String? churchName,
     bool? isVerified,
@@ -1429,7 +1487,8 @@ final class ProfileModel {
     return ProfileModel(
       userId: userId,
       name: name ?? this.name,
-      username: username,
+      fullName: fullName ?? this.fullName,
+      username: username ?? this.username,
       isVerified: isVerified ?? this.isVerified,
       reputationScore: reputationScore ?? this.reputationScore,
       reputationLevel: reputationLevel ?? this.reputationLevel,
@@ -2727,6 +2786,8 @@ class DemoRepository extends ChangeNotifier {
   late List<PostModel> _posts;
   late List<ProfileModel> _profiles;
   late Map<String, List<CommentModel>> _commentsByPost;
+  final Map<String, List<String>> _prayerUsernamesByPostId = <String, List<String>>{};
+  final Set<String> _prayerUsernamesLoadingFor = <String>{};
   late List<ThreadModel> _threads;
   late Map<String, List<MessageModel>> _messagesByThread;
   late List<CommunityModel> _communities;
@@ -3013,32 +3074,38 @@ class DemoRepository extends ChangeNotifier {
       row = await sb
           .from('profiles')
           .select(
-            'username,display_name,bio,church_id,is_verified,avatar_url',
+            'username,display_name,full_name,bio,church_id,is_verified,avatar_url',
           )
           .eq('id', user.id)
           .maybeSingle();
-    } catch (_) {
-      try {
-        row = await sb
-            .from('profiles')
-            .select('username,display_name,bio,church_id,is_verified,avatar_url')
-            .eq('id', user.id)
-            .maybeSingle();
-      } catch (_) {
+    } on PostgrestException catch (e) {
+      if (_postgrestMissingColumn(e, 'full_name')) {
+        try {
+          row = await sb
+              .from('profiles')
+              .select('username,display_name,bio,church_id,is_verified,avatar_url')
+              .eq('id', user.id)
+              .maybeSingle();
+        } catch (_) {
+          row = null;
+        }
+      } else {
         row = null;
       }
+    } catch (_) {
+      row = null;
     }
-    final username = (row?['username'] as String?)?.trim();
-    final displayName = (row?['display_name'] as String?)?.trim();
-    final resolvedUsername = (username == null || username.isEmpty)
-        ? (user.email?.split('@').first ?? user.id)
-        : username;
+    final username = (row?['username'] as String?)?.trim() ?? '';
+    final displayName = (row?['display_name'] as String?)?.trim() ?? '';
+    final fullName = (row?['full_name'] as String?)?.trim() ?? '';
+    final resolvedUsername = username.isEmpty ? _fallbackUsernameForUserId(user.id) : username;
 
     _upsertProfile(
       ProfileModel(
         userId: user.id,
-        name: (displayName == null || displayName.isEmpty) ? resolvedUsername : displayName,
-        username: resolvedUsername,
+        name: displayName,
+        fullName: fullName,
+        username: username,
         isVerified: row?['is_verified'] == true,
         reputationScore: (row?['reputation_score'] as num?)?.toInt() ?? 0,
         reputationLevel: _parseReputationLevel(row?['reputation_level']?.toString()),
@@ -3065,21 +3132,31 @@ class DemoRepository extends ChangeNotifier {
     try {
       rows = await sb
           .from('profiles')
-          .select('id,username,display_name,bio,is_verified,avatar_url')
+          .select('id,username,display_name,full_name,bio,is_verified,avatar_url')
           .inFilter('id', ids.toList(growable: false));
+    } on PostgrestException catch (e) {
+      if (_postgrestMissingColumn(e, 'full_name')) {
+        try {
+          rows = await sb
+              .from('profiles')
+              .select('id,username,display_name,bio,is_verified,avatar_url')
+              .inFilter('id', ids.toList(growable: false));
+        } catch (_) {}
+      }
     } catch (_) {}
     final map = <String, ProfileModel>{};
     for (final raw in rows) {
       final r = raw as Map<String, dynamic>;
       final id = r['id']?.toString();
       if (id == null || id.isEmpty) continue;
-      final username = (r['username'] as String?)?.trim();
-      final displayName = (r['display_name'] as String?)?.trim();
-      final resolvedUsername = (username == null || username.isEmpty) ? id : username;
+      final username = (r['username'] as String?)?.trim() ?? '';
+      final displayName = (r['display_name'] as String?)?.trim() ?? '';
+      final fullName = (r['full_name'] as String?)?.trim() ?? '';
       final p = ProfileModel(
         userId: id,
-        name: (displayName == null || displayName.isEmpty) ? resolvedUsername : displayName,
-        username: resolvedUsername,
+        name: displayName,
+        fullName: fullName,
+        username: username,
         isVerified: r['is_verified'] == true,
         reputationScore: (r['reputation_score'] as num?)?.toInt() ?? 0,
         reputationLevel: _parseReputationLevel(r['reputation_level']?.toString()),
@@ -5239,9 +5316,7 @@ class DemoRepository extends ChangeNotifier {
           return null;
         }
         final user = res.user!;
-        final fallbackUsername =
-            (user.email?.split('@').first ?? user.id).trim().isEmpty ? user.id : user.email!.split('@').first;
-        var session = AuthSession(userId: user.id, username: fallbackUsername, churchId: null);
+        var session = AuthSession(userId: user.id, username: user.id, churchId: null);
         try {
           final enriched = await sessionFromSupabaseAuth();
           if (enriched != null) session = enriched;
@@ -5260,18 +5335,6 @@ class DemoRepository extends ChangeNotifier {
               isVerified: false,
             ),
           );
-        }
-        try {
-          await sb.from('profiles').upsert(<String, Object?>{
-            'id': session.userId,
-            'username': session.username,
-            'display_name': session.username,
-          });
-        } catch (e) {
-          assert(() {
-            debugPrint('[auth] profiles upsert after login error=$e');
-            return true;
-          }());
         }
         return session;
       } on AuthException catch (e) {
@@ -5523,16 +5586,33 @@ class DemoRepository extends ChangeNotifier {
     String userId, {
     required String name,
     required String bio,
+    String? username,
     String? churchName,
     String? avatarUrl,
   }) {
     final i = _profiles.indexWhere((p) => p.userId == userId);
     if (i < 0) return;
     final p = _profiles[i];
-    _profiles[i] = p.copyWith(name: name, bio: bio, churchName: churchName, avatarUrl: avatarUrl);
+    final nextUsernameRaw = (username ?? '').trim();
+    final nextUsername = nextUsernameRaw.isEmpty ? null : nextUsernameRaw.toLowerCase();
+    _profiles[i] = p.copyWith(
+      name: name,
+      username: nextUsername,
+      bio: bio,
+      churchName: churchName,
+      avatarUrl: avatarUrl,
+    );
     notifyListeners();
     if (supabase != null) {
-      unawaited(_updateProfileSupabase(userId: userId, name: name, bio: bio, avatarUrl: avatarUrl));
+      unawaited(
+        _updateProfileSupabase(
+          userId: userId,
+          name: name,
+          username: nextUsername,
+          bio: bio,
+          avatarUrl: avatarUrl,
+        ),
+      );
     }
   }
 
@@ -7844,6 +7924,7 @@ class DemoRepository extends ChangeNotifier {
     final body = text.trim();
     if (body.isEmpty) return;
     final now = DateTime.now();
+    final displayUsername = _usernameForProfile(profileForUserId(session.userId), userId: session.userId);
     final tempId = 'tmp:${now.microsecondsSinceEpoch}';
     final list = (_campaignCommentsById[campaignId] ?? const <CampaignCommentModel>[]).toList(growable: true);
     list.add(
@@ -7851,7 +7932,7 @@ class DemoRepository extends ChangeNotifier {
         id: tempId,
         campaignId: campaignId,
         userId: session.userId,
-        username: session.username,
+        username: displayUsername,
         isVerified: profileForUserId(session.userId)?.isVerified ?? false,
         content: body,
         createdAt: now,
@@ -8224,11 +8305,12 @@ class DemoRepository extends ChangeNotifier {
     String? communityId,
   }) {
     final now = DateTime.now();
+    final displayUsername = _usernameForProfile(profileForUserId(session.userId), userId: session.userId);
     final tempId = 'tmpa:${now.microsecondsSinceEpoch}';
     final local = AlertModel(
       id: tempId,
       userId: session.userId,
-      username: session.username,
+      username: displayUsername,
       isVerified: profileForUserId(session.userId)?.isVerified ?? false,
       title: title,
       description: description,
@@ -8446,6 +8528,75 @@ class DemoRepository extends ChangeNotifier {
     }
   }
 
+  List<String> prayerUsernamesForPost(String postId) {
+    return List.unmodifiable(_prayerUsernamesByPostId[postId] ?? const <String>[]);
+  }
+
+  Future<void> prefetchPrayerUsernamesForPost(String postId, {int limit = 1}) async {
+    if (limit <= 0) return;
+    if (_prayerUsernamesByPostId.containsKey(postId)) return;
+    if (_prayerUsernamesLoadingFor.contains(postId)) return;
+    _prayerUsernamesLoadingFor.add(postId);
+    try {
+      if (supabase == null || isOffline) {
+        if (_profiles.isEmpty) return;
+        final base = postId.hashCode.abs() % _profiles.length;
+        final pool = <String>[];
+        for (var i = 0; i < _profiles.length && pool.length < limit; i++) {
+          final p = _profiles[(base + i) % _profiles.length];
+          final n = _displayNameForProfile(p).trim();
+          if (n.isEmpty) continue;
+          if (!pool.contains(n)) pool.add(n);
+        }
+        _prayerUsernamesByPostId[postId] = List.unmodifiable(pool);
+        notifyListeners();
+        return;
+      }
+
+      final sb = supabase;
+      if (sb == null) return;
+      if (isOffline) return;
+      List<Map<String, dynamic>> rows = const [];
+      try {
+        final raw = await sb
+            .from('prayers')
+            .select('user_id,created_at')
+            .eq('post_id', postId)
+            .order('created_at', ascending: false)
+            .limit(limit);
+        rows = (raw as List<dynamic>).cast<Map<String, dynamic>>();
+      } catch (_) {
+        try {
+          final raw = await sb.from('prayers').select('user_id').eq('post_id', postId).limit(limit);
+          rows = (raw as List<dynamic>).cast<Map<String, dynamic>>();
+        } catch (_) {
+          rows = const [];
+        }
+      }
+
+      final ids = rows.map((r) => r['user_id']?.toString()).whereType<String>().toList(growable: false);
+      if (ids.isEmpty) {
+        _prayerUsernamesByPostId[postId] = const <String>[];
+        notifyListeners();
+        return;
+      }
+
+      final profilesById = await _fetchProfilesByIds(ids.toSet());
+      final names = <String>[];
+      for (final id in ids) {
+        final p = profilesById[id];
+        if (p == null) continue;
+        final n = _displayNameForProfile(p).trim();
+        if (n.isEmpty) continue;
+        if (!names.contains(n)) names.add(n);
+      }
+      _prayerUsernamesByPostId[postId] = List.unmodifiable(names.take(limit).toList(growable: false));
+      notifyListeners();
+    } finally {
+      _prayerUsernamesLoadingFor.remove(postId);
+    }
+  }
+
   void toggleSave(String postId, {required bool isAuthenticated}) {
     if (!isAuthenticated) return;
     final index = _posts.indexWhere((p) => p.id == postId);
@@ -8477,11 +8628,12 @@ class DemoRepository extends ChangeNotifier {
     });
 
     final now = DateTime.now();
+    final displayUsername = _usernameForProfile(profileForUserId(session.userId), userId: session.userId);
     final comment = CommentModel(
       id: now.microsecondsSinceEpoch.toString(),
       postId: postId,
       userId: session.userId,
-      username: session.username,
+      username: displayUsername,
       isVerified: supabase == null ? session.userId == _u2.userId : (profileForUserId(session.userId)?.isVerified ?? false),
       body: body,
       createdAt: now,
@@ -8750,6 +8902,8 @@ class DemoRepository extends ChangeNotifier {
     }
   }
 
+  bool isPostHidden(String postId) => _hiddenPostIds.contains(postId);
+
   void hidePost(String postId) {
     if (_hiddenPostIds.add(postId)) notifyListeners();
   }
@@ -8769,6 +8923,7 @@ class DemoRepository extends ChangeNotifier {
   Future<bool> createPost(
     AuthSession session, {
     required String body,
+    required PostKind kind,
     required PostVisibility visibility,
     String? mediaKind,
     String? mediaUrl,
@@ -8777,16 +8932,20 @@ class DemoRepository extends ChangeNotifier {
     String? communityId,
   }) async {
     _lastPostCreateError = null;
+    final displayUsername = _usernameForProfile(profileForUserId(session.userId), userId: session.userId);
     if (supabase != null) {
       final now = DateTime.now();
       final tempId = 'tmp:${now.microsecondsSinceEpoch}';
       final post = PostModel(
         id: tempId,
         userId: session.userId,
-        username: session.username,
+        username: displayUsername,
         isVerified: profileForUserId(session.userId)?.isVerified ?? false,
-        kind: PostKind.request,
-        postType: PostType.prayer,
+        kind: kind,
+        postType: switch (kind) {
+          PostKind.request => PostType.prayer,
+          PostKind.testimony => PostType.normal,
+        },
         visibility: visibility,
         body: body,
         createdAt: now,
@@ -8813,6 +8972,7 @@ class DemoRepository extends ChangeNotifier {
         _createPostSupabase(
           tempId: tempId,
           body: body,
+          kind: kind,
           visibility: visibility,
           churchId: visibility == PostVisibility.church ? session.churchId : null,
           mediaKind: mediaKind,
@@ -8827,10 +8987,13 @@ class DemoRepository extends ChangeNotifier {
     final post = PostModel(
       id: now.microsecondsSinceEpoch.toString(),
       userId: session.userId,
-      username: session.username,
+      username: displayUsername,
       isVerified: session.userId == _u2.userId,
-      kind: PostKind.request,
-      postType: PostType.prayer,
+      kind: kind,
+      postType: switch (kind) {
+        PostKind.request => PostType.prayer,
+        PostKind.testimony => PostType.normal,
+      },
       visibility: visibility,
       body: body,
       createdAt: now,
@@ -8968,6 +9131,7 @@ class DemoRepository extends ChangeNotifier {
   Future<void> _createPostSupabase({
     required String tempId,
     required String body,
+    required PostKind kind,
     required PostVisibility visibility,
     required String? churchId,
     String? mediaKind,
@@ -8986,19 +9150,14 @@ class DemoRepository extends ChangeNotifier {
       return;
     }
     final viewerId = sb.auth.currentUser?.id;
-    final bodyPreview = body.length > 120 ? '${body.substring(0, 120)}…' : body;
-    debugPrint('[post:create] starting');
-    debugPrint('[post:create] attempt=$attempt viewerId=${viewerId ?? 'null'}');
-    debugPrint('[post:create] body=$bodyPreview');
-    debugPrint('[post:create] regionPath=${regionPath ?? 'null'} communityId=${communityId ?? 'null'} churchId=${churchId ?? 'null'}');
     if (viewerId == null) {
-      debugPrint('[post:create] aborted because viewerId is null');
       if (attempt < 3 && _pendingTempPostIds.contains(tempId)) {
         Future<void>.delayed(const Duration(seconds: 2), () {
           unawaited(
             _createPostSupabase(
               tempId: tempId,
               body: body,
+              kind: kind,
               visibility: visibility,
               churchId: churchId,
               mediaKind: mediaKind,
@@ -9034,7 +9193,7 @@ class DemoRepository extends ChangeNotifier {
       }
       final basePayload = <String, Object?>{
         'user_id': viewerId,
-        'kind': 'request',
+        'kind': kind.analyticsValue,
         'visibility': visibility.analyticsValue,
         'body': body,
         'church_id': _looksLikeUuid(churchId) ? churchId : null,
@@ -9043,17 +9202,13 @@ class DemoRepository extends ChangeNotifier {
         'lat': lat,
         'lng': lng,
       };
-      debugPrint('[post:create] locationId=${locationId ?? 'null'}');
-      debugPrint('[post:create] payload=$basePayload');
       final row = await sb.from('posts').insert(basePayload).select('id').single();
       createdPostId = row['id']?.toString();
-      debugPrint('[post:create] inserted postId=$createdPostId');
-      debugPrint('[post:create] createdRow=$row');
       if (createdPostId != null && createdPostId.isNotEmpty) {
         final persisted = await sb.from('posts').select('id').eq('id', createdPostId).maybeSingle();
         if (persisted == null) createdPostId = null;
       }
-    } catch (e, st) {
+    } catch (e) {
       if (e is PostgrestException) {
         final code = (e.code ?? '').toString().trim();
         final details = (e.details ?? '').toString().trim();
@@ -9065,12 +9220,9 @@ class DemoRepository extends ChangeNotifier {
           if (hint.isNotEmpty) 'hint=$hint',
         ];
         _lastPostCreateError = parts.join(' • ');
-        debugPrint('[post:create] pg code=${e.code} message=${e.message} details=${e.details} hint=${e.hint}');
       } else {
         _lastPostCreateError = e.toString();
       }
-      debugPrint('[post:create] failed after retries attempt=$attempt tempId=$tempId: $e');
-      debugPrint('$st');
     }
 
     if (createdPostId != null && createdPostId.isNotEmpty && mediaUrl != null && mediaUrl.trim().isNotEmpty) {
@@ -9130,12 +9282,12 @@ class DemoRepository extends ChangeNotifier {
     }
 
     if (attempt < 3 && _pendingTempPostIds.contains(tempId)) {
-      debugPrint('[post:create] scheduling retry attempt=${attempt + 1} tempId=$tempId');
       Future<void>.delayed(const Duration(seconds: 2), () {
         unawaited(
           _createPostSupabase(
             tempId: tempId,
             body: body,
+            kind: kind,
             visibility: visibility,
             churchId: churchId,
             mediaKind: mediaKind,
@@ -9231,6 +9383,7 @@ class DemoRepository extends ChangeNotifier {
   Future<void> _updateProfileSupabase({
     required String userId,
     required String name,
+    String? username,
     required String bio,
     String? avatarUrl,
   }) async {
@@ -9244,6 +9397,10 @@ class DemoRepository extends ChangeNotifier {
         'display_name': name.trim(),
         'bio': bio,
       };
+      final nextUsername = username?.trim();
+      if (nextUsername != null && nextUsername.isNotEmpty) {
+        updates['username'] = nextUsername;
+      }
       final nextAvatar = avatarUrl?.trim();
       if (nextAvatar != null && nextAvatar.isNotEmpty) {
         updates['avatar_url'] = nextAvatar;
@@ -9357,7 +9514,7 @@ class DemoRepository extends ChangeNotifier {
     if (q.isEmpty) return List.unmodifiable(_profiles);
     return List.unmodifiable(
       _profiles.where((p) {
-        return p.name.toLowerCase().contains(q) || p.username.toLowerCase().contains(q);
+        return p.name.toLowerCase().contains(q) || p.fullName.toLowerCase().contains(q) || p.username.toLowerCase().contains(q);
       }).toList(growable: false),
     );
   }
@@ -9370,8 +9527,8 @@ class DemoRepository extends ChangeNotifier {
     final thread = ThreadModel(
       id: 't${now.microsecondsSinceEpoch}',
       peerUserId: peer.userId,
-      peerName: peer.name,
-      peerUsername: peer.username,
+      peerName: _displayNameForProfile(peer),
+      peerUsername: _usernameForProfile(peer, userId: peer.userId),
       peerIsVerified: peer.isVerified,
       lastMessage: '',
       lastAt: now,
@@ -14882,6 +15039,7 @@ Future<void> showPostActionsSheet(
           builder: (_) => PostComposerScreen(
             draft: ComposerDraft(
               initialText: post.body,
+              initialKind: post.kind,
               initialVisibility: post.visibility,
               initialLocation: post.location,
               initialRegionPath: post.regionPath,
@@ -14919,6 +15077,7 @@ class ShellScreen extends StatefulWidget {
 
 class _ShellScreenState extends State<ShellScreen> {
   int _index = 0;
+  final GlobalKey<_MapScreenState> _mapKey = GlobalKey<_MapScreenState>();
 
   @override
   void dispose() {
@@ -14936,21 +15095,95 @@ class _ShellScreenState extends State<ShellScreen> {
         final value = session.value;
         final cs = Theme.of(context).colorScheme;
         final viewerId = value is AuthSession ? value.userId : null;
-        final viewerUsername = value is AuthSession ? value.username : null;
-        final viewerAvatarUrl =
-            viewerId == null ? null : repo.profileForUserId(viewerId)?.avatarUrl;
-        final showCreate = _index != 1;
+        final viewerProfile = viewerId == null ? null : repo.profileForUserId(viewerId);
+        final viewerUsername = value is AuthSession ? _usernameForProfile(viewerProfile, userId: value.userId) : null;
+        final viewerName = viewerProfile == null ? '' : _displayNameForProfile(viewerProfile).trim();
+        final viewerAvatarUrl = viewerProfile?.avatarUrl;
+        final title = switch (_index) {
+          0 => 'Atalaia',
+          1 => 'Mapa',
+          2 => 'Mensagens',
+          3 => viewerName.isNotEmpty ? viewerName : 'Perfil',
+          _ => 'Atalaia',
+        };
+        final leadingLabel = switch (_index) {
+          2 => 'Nova mensagem',
+          1 => 'Momento',
+          _ => 'Criar',
+        };
+        final leadingIcon = switch (_index) {
+          2 => Icons.edit_outlined,
+          1 => Icons.photo_camera_outlined,
+          _ => Icons.add_box_outlined,
+        };
+        final VoidCallback leadingAction = () {
+          if (_index == 1) {
+            final future = _mapKey.currentState?.createMomentFromAppBar();
+            if (future == null) return;
+            unawaited(future);
+            return;
+          }
+          if (!value.isAuthenticated) {
+            showCtaSnackBar(context);
+            return;
+          }
+          if (_index == 2) {
+            Navigator.of(context).pushNamed(Routes.newMessage);
+            return;
+          }
+          Navigator.of(context).pushNamed(Routes.createPost);
+        };
+
+        final actionLabel = switch (_index) {
+          0 => 'Notificações',
+          1 => 'Comunidades',
+          2 => 'Solicitações',
+          3 => 'Menu',
+          _ => 'Notificações',
+        };
+        final actionIcon = switch (_index) {
+          0 => null,
+          1 => Icons.groups_outlined,
+          2 => Icons.inbox_outlined,
+          3 => Icons.menu_rounded,
+          _ => null,
+        };
+
+        final VoidCallback action = switch (_index) {
+          0 => () => Navigator.of(context).pushNamed(Routes.notifications),
+          1 => () {
+              final future = _mapKey.currentState?.openMapOptionsSheetFromAppBar();
+              if (future == null) return;
+              unawaited(future);
+            },
+          2 => () => showInfoSnackBar(context, 'Em breve'),
+          3 => () => Navigator.of(context).pushNamed(Routes.settings),
+          _ => () => Navigator.of(context).pushNamed(Routes.notifications),
+        };
+
+        final secondaryActionLabel = null;
+        final secondaryActionIcon = null;
+        final VoidCallback? onSecondaryAction = null;
+
         return Scaffold(
           appBar: _AtalaiaMainAppBar(
-            onCreate: showCreate ? () => Navigator.of(context).pushNamed(Routes.createPost) : null,
-            onNotifications: () => Navigator.of(context).pushNamed(Routes.notifications),
-            unreadCount: viewerId == null ? 0 : repo.unreadNotificationCount(viewerId),
+            title: title,
+            leadingIcon: leadingIcon,
+            leadingLabel: leadingLabel,
+            onLeading: leadingAction,
+            actionIcon: actionIcon,
+            actionLabel: actionLabel,
+            onAction: action,
+            secondaryActionIcon: secondaryActionIcon,
+            secondaryActionLabel: secondaryActionLabel,
+            onSecondaryAction: onSecondaryAction,
+            unreadCount: (_index == 0 && viewerId != null) ? repo.unreadNotificationCount(viewerId) : 0,
           ),
           body: IndexedStack(
             index: _index,
             children: [
               HomeFeedScreen(),
-              const _MapTab(),
+              _MapTab(mapKey: _mapKey),
               const DirectInboxScreen(args: null, embedded: true),
               const ProfileScreen(embedded: true),
             ],
@@ -15020,24 +15253,42 @@ class _ShellScreenState extends State<ShellScreen> {
 }
 
 class _MapTab extends StatelessWidget {
-  const _MapTab();
+  const _MapTab({required this.mapKey});
+
+  final GlobalKey<_MapScreenState> mapKey;
 
   @override
   Widget build(BuildContext context) {
-    return const MapScreen();
+    return MapScreen(key: mapKey);
   }
 }
 
 class _AtalaiaMainAppBar extends StatelessWidget implements PreferredSizeWidget {
   const _AtalaiaMainAppBar({
-    required this.onCreate,
-    required this.onNotifications,
+    required this.title,
+    required this.leadingIcon,
+    required this.leadingLabel,
+    required this.onLeading,
+    required this.actionLabel,
+    required this.onAction,
     required this.unreadCount,
+    this.actionIcon,
+    this.secondaryActionIcon,
+    this.secondaryActionLabel,
+    this.onSecondaryAction,
   });
 
-  final VoidCallback? onCreate;
-  final VoidCallback onNotifications;
+  final String title;
+  final IconData leadingIcon;
+  final String leadingLabel;
+  final VoidCallback onLeading;
+  final String actionLabel;
+  final VoidCallback onAction;
   final int unreadCount;
+  final IconData? actionIcon;
+  final IconData? secondaryActionIcon;
+  final String? secondaryActionLabel;
+  final VoidCallback? onSecondaryAction;
 
   @override
   Size get preferredSize => const Size.fromHeight(kToolbarHeight);
@@ -15050,68 +15301,78 @@ class _AtalaiaMainAppBar extends StatelessWidget implements PreferredSizeWidget 
       scrolledUnderElevation: 0,
       titleSpacing: 0,
       centerTitle: true,
-      leading: onCreate == null
-          ? null
-          : AtalaiaIconButton(
-              icon: Icons.add_box_outlined,
-              label: 'Incluir',
-              onPressed: onCreate,
-            ),
-      title: const SizedBox(
+      leading: AtalaiaIconButton(
+        icon: leadingIcon,
+        label: leadingLabel,
+        onPressed: onLeading,
+      ),
+      title: SizedBox(
         width: double.infinity,
         child: Center(
           child: Text(
-            'Atalaia',
-            style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 0.2),
+            title,
+            style: const TextStyle(fontWeight: FontWeight.w800, letterSpacing: 0.2),
           ),
         ),
       ),
       actions: [
-        Semantics(
-          button: true,
-          label: 'Notificações',
-          child: Tooltip(
-            message: 'Notificações',
-            child: IconButton(
-              onPressed: onNotifications,
-              constraints: const BoxConstraints(
-                minWidth: AtalaiaTapTarget.min,
-                minHeight: AtalaiaTapTarget.min,
-              ),
-              padding: const EdgeInsets.all(10),
-              icon: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  ShofarIcon(color: cs.onSurface, size: 28),
-                  if (unreadCount > 0)
-                    Positioned(
-                      right: -2,
-                      top: -2,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: cs.error,
-                          borderRadius: BorderRadius.circular(999),
-                          border: Border.all(color: cs.surface, width: 2),
-                        ),
-                        constraints: const BoxConstraints(minWidth: 18),
-                        child: Text(
-                          unreadCount > 99 ? '99+' : '$unreadCount',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: cs.onError,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w900,
-                            height: 1.1,
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
+        if (secondaryActionIcon != null && secondaryActionLabel != null && onSecondaryAction != null)
+          AtalaiaIconButton(
+            icon: secondaryActionIcon!,
+            label: secondaryActionLabel!,
+            onPressed: onSecondaryAction,
           ),
-        ),
+        actionIcon == null
+            ? Semantics(
+                button: true,
+                label: actionLabel,
+                child: Tooltip(
+                  message: actionLabel,
+                  child: IconButton(
+                    onPressed: onAction,
+                    constraints: const BoxConstraints(
+                      minWidth: AtalaiaTapTarget.min,
+                      minHeight: AtalaiaTapTarget.min,
+                    ),
+                    padding: const EdgeInsets.all(10),
+                    icon: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        ShofarIcon(color: cs.onSurface, size: 28),
+                        if (unreadCount > 0)
+                          Positioned(
+                            right: -2,
+                            top: -2,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: cs.error,
+                                borderRadius: BorderRadius.circular(999),
+                                border: Border.all(color: cs.surface, width: 2),
+                              ),
+                              constraints: const BoxConstraints(minWidth: 18),
+                              child: Text(
+                                unreadCount > 99 ? '99+' : '$unreadCount',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: cs.onError,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w900,
+                                  height: 1.1,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              )
+            : AtalaiaIconButton(
+                icon: actionIcon!,
+                label: actionLabel,
+                onPressed: onAction,
+              ),
         const SizedBox(width: 10),
       ],
     );
@@ -15593,6 +15854,8 @@ class PostCard extends StatelessWidget {
     required this.onComment,
     required this.onShare,
     required this.onSave,
+    this.margin = const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    this.compact = false,
     super.key,
   });
 
@@ -15604,29 +15867,154 @@ class PostCard extends StatelessWidget {
   final VoidCallback onComment;
   final VoidCallback onShare;
   final VoidCallback onSave;
+  final EdgeInsets margin;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final repo = RepoScope.of(context);
     final cs = Theme.of(context).colorScheme;
-    final profile = repo.profileForUserId(post.userId);
-    final displayName = (profile?.name.trim().isNotEmpty ?? false) ? profile!.name.trim() : post.username;
-    final displayUsername = (profile?.username.trim().isNotEmpty ?? false) ? profile!.username.trim() : post.username;
-    final avatarUrl = profile?.avatarUrl;
-    final visibilityLabel = switch (post.visibility) {
-      PostVisibility.public => 'Público',
-      PostVisibility.followers => 'Seguidores',
-      PostVisibility.church => 'Igreja',
-    };
+    final identity = _identityForUserId(repo, post.userId, legacyVerified: post.isVerified);
+    final session = SessionScope.of(context).value;
+    final viewerProfile = session is AuthSession ? repo.profileForUserId(session.userId) : null;
+    final viewerName = viewerProfile == null ? null : _displayNameForProfile(viewerProfile).trim();
+    void safePray() {
+      if (!isAuthenticated) {
+        showCtaSnackBar(context);
+        return;
+      }
+      onPray();
+    }
+
+    Widget actionWithCount({
+      required IconData icon,
+      required String label,
+      required VoidCallback onTap,
+      required int count,
+      Color? color,
+    }) {
+      final showCount = count > 0;
+      final fg = color ?? cs.onSurfaceVariant;
+      return Semantics(
+        button: true,
+        label: showCount ? '$label ($count)' : label,
+        child: Tooltip(
+          message: label,
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: onTap,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minWidth: AtalaiaTapTarget.min, minHeight: AtalaiaTapTarget.min),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(icon, size: 22, color: fg),
+                      if (showCount) ...[
+                        const SizedBox(width: 6),
+                        Text(
+                          '$count',
+                          style: TextStyle(color: fg, fontWeight: FontWeight.w800, fontSize: 12, height: 1.0),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    Widget prayAction() {
+      final count = post.prayerCount;
+      final showCount = count > 0;
+      if (post.viewerHasPrayed) {
+        return actionWithCount(
+          icon: Icons.volunteer_activism,
+          label: 'Orei',
+          onTap: safePray,
+          count: count,
+          color: const Color(0xFF2E7D32),
+        );
+      }
+
+      final fg = cs.onSurfaceVariant;
+      return Semantics(
+        button: true,
+        label: showCount ? 'Orei ($count)' : 'Orei',
+        child: Tooltip(
+          message: 'Orei',
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: safePray,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minWidth: AtalaiaTapTarget.min, minHeight: AtalaiaTapTarget.min),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.volunteer_activism_outlined, size: 22, color: fg),
+                      if (showCount) ...[
+                        const SizedBox(width: 6),
+                        Text(
+                          '$count',
+                          style: TextStyle(color: fg, fontWeight: FontWeight.w800, fontSize: 12, height: 1.0),
+                        ),
+                      ],
+                      const SizedBox(width: 8),
+                      Text(
+                        'Orei',
+                        style: TextStyle(color: fg, fontWeight: FontWeight.w900, fontSize: 12, height: 1.0),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    String? prayerByline() {
+      final total = post.prayerCount;
+      if (total <= 0) return null;
+      final cached = repo.prayerUsernamesForPost(post.id);
+      if (cached.isEmpty) {
+        unawaited(repo.prefetchPrayerUsernamesForPost(post.id));
+      }
+      final first = cached.isNotEmpty ? cached.first : (post.viewerHasPrayed ? viewerName : null);
+      if (total == 1) {
+        return first == null ? 'Orado por 1 pessoa' : 'Orado por $first';
+      }
+      if (total == 2) {
+        if (first != null) return 'Orado por $first e outra pessoa';
+        return 'Orado por 2 pessoas';
+      }
+      if (first != null) return 'Orado por $first e outras pessoas';
+      return 'Orado por $total pessoas';
+    }
 
     return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+      elevation: 0,
+      surfaceTintColor: Colors.transparent,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      margin: margin,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: EdgeInsets.fromLTRB(12, compact ? 10 : 12, 12, 0),
+            child: Row(
               children: [
                 InkWell(
                   onTap: () {
@@ -15636,7 +16024,7 @@ class PostCard extends StatelessWidget {
                     );
                   },
                   customBorder: const CircleBorder(),
-                  child: Avatar(name: displayName, imageUrl: avatarUrl, size: AvatarSize.s44),
+                  child: Avatar(name: identity.avatarName, imageUrl: identity.avatarUrl, size: AvatarSize.s44),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
@@ -15647,128 +16035,116 @@ class PostCard extends StatelessWidget {
                         arguments: UserProfileArgs(userId: post.userId),
                       );
                     },
-                    child: Row(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          displayName,
-                          style: const TextStyle(fontWeight: FontWeight.w800),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                identity.displayName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15, letterSpacing: 0.1),
+                              ),
+                            ),
+                            if (identity.isVerified) ...[
+                              const SizedBox(width: 6),
+                              Icon(Icons.verified, size: 16, color: context.brand.verifiedBlue),
+                            ],
+                            const SizedBox(width: 10),
+                            Text(
+                              _relativeTime(post.createdAt),
+                              style: AtalaiaText.meta(context).copyWith(fontSize: 11),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 6),
-                        Text('@$displayUsername', style: TextStyle(color: cs.outline)),
-                        if ((repo.profileForUserId(post.userId)?.isVerified ?? post.isVerified)) ...[
-                          const SizedBox(width: 6),
-                          Icon(Icons.verified, size: 18, color: context.brand.verifiedBlue),
-                        ],
-                        const Spacer(),
-                        Text(_relativeTime(post.createdAt), style: TextStyle(color: cs.outline)),
                       ],
                     ),
                   ),
                 ),
                 AtalaiaIconButton(
-                  icon: Icons.more_horiz,
+                  icon: Icons.more_horiz_rounded,
                   label: 'Mais',
+                  color: cs.onSurfaceVariant,
                   onPressed: () => showPostActionsSheet(context, post: post),
                 ),
               ],
             ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 6,
-              children: [
-                _Badge(label: visibilityLabel),
-                if (post.communityId != null) const _Badge(label: 'Comunidade'),
-              ],
-            ),
-            const SizedBox(height: 10),
-            ExpandablePostText(
-              text: post.body,
-              maxLines: 2,
-              onTap: onOpenPost,
-            ),
-            if (post.mediaKind != null) ...[
-              const SizedBox(height: 10),
-              PostMedia(
-                kind: post.mediaKind!,
-                mediaUrl: post.mediaUrl,
-                onTap: () => unawaited(
-                  _openPostMediaViewer(
-                    context,
-                    kind: post.mediaKind!,
-                    mediaUrl: post.mediaUrl,
-                  ),
-                ),
-                onDoubleTap: () {
-                  if (!post.viewerHasLiked) onLike();
-                },
-              ),
-            ],
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                AtalaiaIconButton(
-                  icon: post.viewerHasLiked ? Icons.favorite : Icons.favorite_border,
-                  label: 'Curtir',
-                  onPressed: onLike,
-                  color: post.viewerHasLiked ? cs.error : null,
-                ),
-                AtalaiaIconButton(
-                  icon: Icons.chat_bubble_outline,
-                  label: 'Comentar',
-                  onPressed: onComment,
-                ),
-                AtalaiaIconButton(
-                  icon: Icons.send_rounded,
-                  label: 'Compartilhar',
-                  onPressed: onShare,
-                ),
-                const Spacer(),
-                AtalaiaIconButton(
-                  icon: post.viewerHasSaved ? Icons.bookmark : Icons.bookmark_border,
-                  label: 'Salvar',
-                  onPressed: onSave,
-                ),
-              ],
-            ),
-            const SizedBox(height: 2),
-            if (post.likeCount > 0)
-              Row(
-                children: [
-                  Icon(Icons.favorite, size: 16, color: cs.error),
-                  const SizedBox(width: 6),
-                  Text(
-                    '${post.likeCount} curtidas',
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ],
-              ),
-            const SizedBox(height: 4),
-            Row(
-              children: [
-                Icon(Icons.volunteer_activism_outlined, size: 16, color: cs.outline),
-                const SizedBox(width: 6),
-                Text('${post.prayerCount} orações', style: TextStyle(color: cs.outline)),
-              ],
-            ),
-            if (post.commentCount > 0)
-              Align(
-                alignment: Alignment.centerLeft,
-                child: AtalaiaTextButton(
-                  label: 'Ver todos os ${post.commentCount} comentários',
-                  onPressed: onComment,
+          ),
+          if (post.mediaKind != null) ...[
+            SizedBox(height: compact ? 10 : 12),
+            PostMedia(
+              kind: post.mediaKind!,
+              mediaUrl: post.mediaUrl,
+              onTap: () => unawaited(
+                _openPostMediaViewer(
+                  context,
+                  kind: post.mediaKind!,
+                  mediaUrl: post.mediaUrl,
                 ),
               ),
-            const SizedBox(height: 8),
-            SizedBox(
-              width: double.infinity,
-              child: PrimaryButton(
-                label: post.viewerHasPrayed ? 'OREI registrada' : 'OREI',
-                onPressed: post.viewerHasPrayed ? null : onPray,
-              ),
+              onDoubleTap: () {
+                if (!post.viewerHasLiked) onLike();
+              },
             ),
           ],
-        ),
+          SizedBox(height: compact ? 8 : 10),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(
+              children: [
+                prayAction(),
+                actionWithCount(
+                  icon: post.viewerHasLiked ? Icons.favorite : Icons.favorite_border,
+                  label: 'Curtir',
+                  onTap: onLike,
+                  count: post.likeCount,
+                  color: post.viewerHasLiked ? cs.error : null,
+                ),
+                actionWithCount(
+                  icon: Icons.chat_bubble_outline,
+                  label: 'Comentar',
+                  onTap: onComment,
+                  count: post.commentCount,
+                ),
+                actionWithCount(
+                  icon: Icons.send_rounded,
+                  label: 'Compartilhar',
+                  onTap: onShare,
+                  count: 0,
+                ),
+              ],
+            ),
+          ),
+          Builder(
+            builder: (context) {
+              final byline = prayerByline();
+              if (byline == null) return SizedBox(height: compact ? 10 : 12);
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+                child: Text(
+                  byline,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AtalaiaText.meta(context).copyWith(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    color: cs.onSurfaceVariant,
+                  ),
+                ),
+              );
+            },
+          ),
+          Padding(
+            padding: EdgeInsets.fromLTRB(12, 6, 12, compact ? 10 : 12),
+            child: ExpandablePostText(
+              text: post.body,
+              maxLines: compact ? 2 : 3,
+              onTap: onOpenPost,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -16289,31 +16665,6 @@ class _PostMediaViewerScreenState extends State<_PostMediaViewerScreen> {
   }
 }
 
-class _Badge extends StatelessWidget {
-  const _Badge({required this.label});
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        color: cs.secondaryContainer,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontSize: 12,
-          color: cs.onSecondaryContainer,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    );
-  }
-}
-
 class HomeFeedScreen extends StatefulWidget {
   const HomeFeedScreen({super.key});
 
@@ -16477,7 +16828,6 @@ class _HomeFeedScreenState extends State<HomeFeedScreen> {
           },
         );
         final campaignsPreview = campaignsAll.length <= 3 ? campaignsAll : campaignsAll.take(3).toList(growable: false);
-        final campaignsHeaderCount = campaignsPreview.isEmpty ? 0 : (campaignsPreview.length + 2);
         final alertsAll = (_locationPath == 'world' ? repo.visibleAlertsFor(session.value) : repo.alertsForRegion(session.value, _locationPath))
             .where((a) => a.communityId == null)
             .where((a) => a.status == AlertStatus.active)
@@ -16485,8 +16835,7 @@ class _HomeFeedScreenState extends State<HomeFeedScreen> {
             .toList(growable: false)
           ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
         final alertsPreview = alertsAll.length <= 3 ? alertsAll : alertsAll.take(3).toList(growable: false);
-        final alertsHeaderCount = alertsPreview.isEmpty ? 0 : (alertsPreview.length + 2);
-        final headerCount = campaignsHeaderCount + alertsHeaderCount;
+        final hasHighlights = campaignsPreview.isNotEmpty || alertsPreview.isNotEmpty;
         final isAuthenticated = session.value.isAuthenticated;
         final itemCount = visible.length + (visible.length ~/ 15);
 
@@ -16508,7 +16857,7 @@ class _HomeFeedScreenState extends State<HomeFeedScreen> {
                           );
                         },
                       )
-                    : (visible.isEmpty && alertsPreview.isEmpty && campaignsPreview.isEmpty)
+                    : (visible.isEmpty && !hasHighlights)
                         ? ListView(
                             controller: _scrollController,
                             physics: const AlwaysScrollableScrollPhysics(),
@@ -16529,167 +16878,44 @@ class _HomeFeedScreenState extends State<HomeFeedScreen> {
                         : ListView.builder(
                             controller: _scrollController,
                             physics: const AlwaysScrollableScrollPhysics(),
-                            itemCount: 1 + headerCount + (visible.isEmpty ? 1 : itemCount),
+                            itemCount: 1 + (hasHighlights ? 1 : 0) + (visible.isEmpty ? 1 : itemCount),
                             itemBuilder: (context, index) {
                               if (index == 0) {
                                 return _HomeStoriesStrip(repo: repo, session: session.value);
                               }
 
-                              final idx = index - 1;
-
-                              if (campaignsPreview.isNotEmpty && idx < campaignsHeaderCount) {
-                                if (idx == 0) {
-                                  return Padding(
-                                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          children: [
-                                            const Text('Campanhas', style: TextStyle(fontWeight: FontWeight.w900)),
-                                            const Spacer(),
-                                            AtalaiaTextButton(
-                                              label: 'Ver todas',
-                                              onPressed: () {
-                                                Navigator.of(context).pushNamed(
-                                                  Routes.campaignList,
-                                                  arguments: CampaignListArgs(
-                                                    locationPath: _locationPath,
-                                                    locationLabel: _locationLabel,
-                                                    communityId: null,
-                                                  ),
-                                                );
-                                              },
-                                            ),
-                                          ],
-                                        ),
-                                        const SizedBox(height: 8),
-                                        Wrap(
-                                          spacing: 8,
-                                          runSpacing: 8,
-                                          children: [
-                                            ChoiceChip(
-                                              label: const Text('Perto'),
-                                              selected: _campaignSort == _CampaignSort.nearby,
-                                              onSelected: (_) => setState(() => _campaignSort = _CampaignSort.nearby),
-                                            ),
-                                            ChoiceChip(
-                                              label: const Text('Urgentes'),
-                                              selected: _campaignSort == _CampaignSort.urgent,
-                                              onSelected: (_) => setState(() => _campaignSort = _CampaignSort.urgent),
-                                            ),
-                                            ChoiceChip(
-                                              label: const Text('Populares'),
-                                              selected: _campaignSort == _CampaignSort.popular,
-                                              onSelected: (_) => setState(() => _campaignSort = _CampaignSort.popular),
-                                            ),
-                                          ],
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                }
-
-                                final campaignIndex = idx - 1;
-                                if (campaignIndex >= 0 && campaignIndex < campaignsPreview.length) {
-                                  final c = campaignsPreview[campaignIndex];
-                                  return CampaignCard(
-                                    campaign: c,
-                                    onOpen: () {
-                                      Navigator.of(context).pushNamed(
-                                        Routes.campaignDetail,
-                                        arguments: CampaignDetailArgs(campaignId: c.id),
-                                      );
-                                    },
-                                  );
-                                }
-
-                                return Padding(
-                                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
-                                  child: SecondaryButton(
-                                    label: 'Ver todas as campanhas',
-                                    onPressed: () {
-                                      Navigator.of(context).pushNamed(
-                                        Routes.campaignList,
-                                        arguments: CampaignListArgs(
-                                          locationPath: _locationPath,
-                                          locationLabel: _locationLabel,
-                                          communityId: null,
-                                        ),
-                                      );
-                                    },
-                                  ),
+                              final hasHighlightsHere = hasHighlights;
+                              if (hasHighlightsHere && index == 1) {
+                                return _HomeHighlightsRow(
+                                  campaigns: campaignsPreview,
+                                  campaignsCount: campaignsAll.length,
+                                  alerts: alertsPreview,
+                                  alertsCount: alertsAll.length,
+                                  locationLabel: _locationLabel,
+                                  onOpenCampaigns: () {
+                                    Navigator.of(context).pushNamed(
+                                      Routes.campaignList,
+                                      arguments: CampaignListArgs(
+                                        locationPath: _locationPath,
+                                        locationLabel: _locationLabel,
+                                        communityId: null,
+                                      ),
+                                    );
+                                  },
+                                  onOpenAlerts: () {
+                                    Navigator.of(context).pushNamed(
+                                      Routes.regionAlerts,
+                                      arguments: RegionAlertsArgs(
+                                        location: _locationRefForFeed(),
+                                        contextBreadcrumb: 'Feed • $_locationLabel',
+                                        communityId: null,
+                                      ),
+                                    );
+                                  },
                                 );
                               }
 
-                              final nextIndex = idx - campaignsHeaderCount;
-                              if (alertsPreview.isNotEmpty && nextIndex < alertsHeaderCount) {
-                                final alertsIndex = nextIndex;
-                                if (alertsIndex == 0) {
-                                  return Padding(
-                                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 2),
-                                    child: Row(
-                                      children: [
-                                        const Text('Alertas', style: TextStyle(fontWeight: FontWeight.w900)),
-                                        const Spacer(),
-                                        AtalaiaTextButton(
-                                          label: 'Ver todos',
-                                          onPressed: () {
-                                            Navigator.of(context).pushNamed(
-                                              Routes.regionAlerts,
-                                              arguments: RegionAlertsArgs(
-                                                location: _locationRefForFeed(),
-                                                contextBreadcrumb: 'Feed • $_locationLabel',
-                                                communityId: null,
-                                              ),
-                                            );
-                                          },
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                }
-
-                                final alertIndex = alertsIndex - 1;
-                                if (alertIndex >= 0 && alertIndex < alertsPreview.length) {
-                                  final alert = alertsPreview[alertIndex];
-                                  return AlertCard(
-                                    alert: alert,
-                                    isAuthenticated: isAuthenticated,
-                                    onOpen: () {
-                                      Navigator.of(context).pushNamed(
-                                        Routes.alertDetail,
-                                        arguments: AlertDetailArgs(alertId: alert.id),
-                                      );
-                                    },
-                                    onFollow: () {
-                                      if (!isAuthenticated) return showCtaSnackBar(context);
-                                      final willFollow = !alert.viewerIsFollowing;
-                                      repo.toggleFollowAlert(alert.id, isAuthenticated: true);
-                                      showInfoSnackBar(context, willFollow ? 'Seguindo alerta' : 'Parou de seguir');
-                                    },
-                                  );
-                                }
-
-                                return Padding(
-                                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
-                                  child: SecondaryButton(
-                                    label: 'Ver todos os alertas',
-                                    onPressed: () {
-                                      Navigator.of(context).pushNamed(
-                                        Routes.regionAlerts,
-                                        arguments: RegionAlertsArgs(
-                                          location: _locationRefForFeed(),
-                                          contextBreadcrumb: 'Feed • $_locationLabel',
-                                          communityId: null,
-                                        ),
-                                      );
-                                    },
-                                  ),
-                                );
-                              }
-
-                              final contentIndex = idx - headerCount;
+                              final contentIndex = index - 1 - (hasHighlightsHere ? 1 : 0);
 
                               if (visible.isEmpty) {
                                 return Padding(
@@ -17517,16 +17743,36 @@ class _CampaignDetailBody extends StatelessWidget {
           )
         else
           ...comments.map((c) {
+            final identity = _identityForUserId(repo, c.userId, legacyVerified: c.isVerified);
             return Card(
               child: ListTile(
-                leading: Avatar(name: c.username, size: AvatarSize.s44),
+                leading: Avatar(name: identity.avatarName, imageUrl: identity.avatarUrl, size: AvatarSize.s44),
                 title: Row(
                   children: [
-                    Expanded(child: Text(c.username, style: const TextStyle(fontWeight: FontWeight.w900))),
+                    Expanded(
+                      child: Text(
+                        identity.displayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w900),
+                      ),
+                    ),
+                    if (identity.isVerified) ...[
+                      const SizedBox(width: 6),
+                      Icon(Icons.verified, size: 18, color: context.brand.verifiedBlue),
+                      const SizedBox(width: 6),
+                    ],
                     Text(_relativeTime(c.createdAt), style: TextStyle(color: cs.outline, fontWeight: FontWeight.w600)),
                   ],
                 ),
-                subtitle: Text(c.content),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('@${identity.username}', style: TextStyle(color: cs.outline)),
+                    const SizedBox(height: 4),
+                    Text(c.content),
+                  ],
+                ),
               ),
             );
           }),
@@ -18401,40 +18647,6 @@ class _DirectInboxScreenState extends State<DirectInboxScreen> {
         final title = isSelecting ? 'Enviar por Direct' : 'Mensagens';
         final body = Column(
           children: [
-            if (widget.embedded)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(AtalaiaSpacing.md, AtalaiaSpacing.lg, AtalaiaSpacing.md, 0),
-                child: Row(
-                  children: [
-                    Text(title, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 24)),
-                    const Spacer(),
-                    TextButton(
-                      onPressed: () => showInfoSnackBar(context, 'Solicitações (em breve)'),
-                      child: const Text('Solicitações', style: TextStyle(fontWeight: FontWeight.w900)),
-                    ),
-                    const SizedBox(width: 6),
-                    IconButton(
-                      onPressed: () => showInfoSnackBar(context, 'Câmera (em breve)'),
-                      tooltip: 'Câmera',
-                      icon: const Icon(Icons.camera_alt_outlined),
-                      style: IconButton.styleFrom(
-                        backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
-                        shape: const CircleBorder(),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    IconButton(
-                      onPressed: () => Navigator.of(context).pushNamed(Routes.newMessage),
-                      tooltip: 'Nova mensagem',
-                      icon: const Icon(Icons.edit_outlined),
-                      style: IconButton.styleFrom(
-                        backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
-                        shape: const CircleBorder(),
-                      ),
-                    )
-                  ],
-                ),
-              ),
             if (repo.isOffline) OfflineBanner(onRetry: () => repo.setOffline(false)),
             Padding(
               padding: const EdgeInsets.fromLTRB(
@@ -18443,7 +18655,7 @@ class _DirectInboxScreenState extends State<DirectInboxScreen> {
                 AtalaiaSpacing.md,
                 AtalaiaSpacing.sm,
               ),
-              child: _DirectSearchBar(controller: _search),
+              child: SearchField(controller: _search, hintText: 'Pesquisar conversas'),
             ),
             Expanded(
               child: Builder(
@@ -18458,18 +18670,14 @@ class _DirectInboxScreenState extends State<DirectInboxScreen> {
                   }
 
                   if (threads.isEmpty) {
-                    return Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Text('Sem mensagens ainda'),
-                          const SizedBox(height: AtalaiaSpacing.md),
-                          PrimaryButton(
-                            onPressed: () => Navigator.of(context).pushNamed(Routes.newMessage),
-                            label: 'Nova mensagem',
-                          ),
-                        ],
-                      ),
+                    final q = _search.text.trim();
+                    return EmptyState(
+                      icon: Icons.send_rounded,
+                      title: q.isEmpty
+                          ? 'Seu Direct ainda está vazio.\nEnvie uma mensagem para começar.'
+                          : 'Nenhuma conversa encontrada.\nTente outro termo.',
+                      ctaLabel: q.isEmpty ? 'Nova mensagem' : null,
+                      onCta: q.isEmpty ? () => Navigator.of(context).pushNamed(Routes.newMessage) : null,
                     );
                   }
 
@@ -18545,33 +18753,6 @@ class _DirectInboxScreenState extends State<DirectInboxScreen> {
           body: body,
         );
       },
-    );
-  }
-}
-
-class _DirectSearchBar extends StatelessWidget {
-  const _DirectSearchBar({required this.controller});
-
-  final TextEditingController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return TextField(
-      controller: controller,
-      textInputAction: TextInputAction.search,
-      decoration: InputDecoration(
-        hintText: 'Pesquisar',
-        prefixIcon: Icon(Icons.search, color: cs.onSurfaceVariant),
-        filled: true,
-        fillColor: cs.surfaceContainerHighest,
-        isDense: true,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(24),
-          borderSide: BorderSide.none,
-        ),
-      ),
     );
   }
 }
@@ -18805,13 +18986,15 @@ class _NewMessageScreenState extends State<NewMessageScreen> {
                         separatorBuilder: (_, __) => const Divider(height: 1),
                         itemBuilder: (context, index) {
                           final p = people[index];
+                          final displayName = _displayNameForProfile(p);
+                          final displayUsername = _usernameForProfile(p, userId: p.userId);
                           return ListTile(
-                            leading: Avatar(name: p.name, size: AvatarSize.s44),
+                            leading: Avatar(name: displayName, imageUrl: p.avatarUrl, size: AvatarSize.s44),
                             title: Row(
                               children: [
                                 Flexible(
                                   child: Text(
-                                    p.name,
+                                    displayName,
                                     style: const TextStyle(fontWeight: FontWeight.w800),
                                     overflow: TextOverflow.ellipsis,
                                   ),
@@ -18822,7 +19005,7 @@ class _NewMessageScreenState extends State<NewMessageScreen> {
                                 ],
                               ],
                             ),
-                            subtitle: Text('@${p.username}'),
+                            subtitle: Text('@$displayUsername'),
                             onTap: () {
                               final t = repo.openOrCreateThreadWith(p);
                               Navigator.of(context).pushReplacementNamed(
@@ -19556,6 +19739,8 @@ class PostShareCardMessage extends StatelessWidget {
       );
     }
 
+    final repo = RepoScope.of(context);
+    final identity = _identityForUserId(repo, post!.userId, legacyVerified: post!.isVerified);
     return InkWell(
       onTap: onOpen,
       child: Container(
@@ -19571,19 +19756,38 @@ class PostShareCardMessage extends StatelessWidget {
             const SizedBox(height: 12),
             Row(
               children: [
-                Avatar(name: post!.username, size: AvatarSize.s24),
+                Avatar(name: identity.avatarName, imageUrl: identity.avatarUrl, size: AvatarSize.s24),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Text(
-                    post!.username,
-                    style: TextStyle(color: color, fontWeight: FontWeight.w800),
-                    overflow: TextOverflow.ellipsis,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              identity.displayName,
+                              style: TextStyle(color: color, fontWeight: FontWeight.w800),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (identity.isVerified) ...[
+                            const SizedBox(width: 6),
+                            Icon(Icons.verified, size: 18, color: context.brand.verifiedBlue),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 1),
+                      Text(
+                        '@${identity.username}',
+                        style: TextStyle(color: cs.outline, fontSize: 12, fontWeight: FontWeight.w600),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
                   ),
                 ),
-                if (post!.isVerified) ...[
-                  const SizedBox(width: 6),
-                  Icon(Icons.verified, size: 18, color: context.brand.verifiedBlue),
-                ],
               ],
             ),
             const SizedBox(height: 12),
@@ -19996,7 +20200,18 @@ class _RegionPostsScreenState extends State<RegionPostsScreen> {
                                       label: isAuthenticated ? _ctaLabel() : 'Entrar para criar',
                                       onPressed: () {
                                         if (!isAuthenticated) return showCtaSnackBar(context);
-                                        Navigator.of(context).pushNamed(Routes.createPost);
+                                        final kind = _kindFilter ?? PostKind.request;
+                                        Navigator.of(context).push(
+                                          MaterialPageRoute<void>(
+                                            builder: (_) => PostComposerScreen(
+                                              draft: ComposerDraft(
+                                                initialKind: kind,
+                                                initialRegionPath: widget.args.location.path,
+                                                initialCommunityId: widget.args.communityId,
+                                              ),
+                                            ),
+                                          ),
+                                        );
                                       },
                                     ),
                                   ),
@@ -21508,12 +21723,13 @@ class _CommentsScreenState extends State<CommentsScreen> {
 
                               final c = shown[index];
                               final cs = Theme.of(context).colorScheme;
+                              final identity = _identityForUserId(repo, c.userId, legacyVerified: c.isVerified);
                               return Padding(
                                 padding: const EdgeInsets.symmetric(vertical: 10),
                                 child: Row(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Avatar(name: c.username, size: AvatarSize.s32),
+                                    Avatar(name: identity.avatarName, imageUrl: identity.avatarUrl, size: AvatarSize.s32),
                                     const SizedBox(width: 10),
                                     Expanded(
                                       child: Column(
@@ -21521,11 +21737,15 @@ class _CommentsScreenState extends State<CommentsScreen> {
                                         children: [
                                           Row(
                                             children: [
-                                              Text(
-                                                '@${c.username}',
-                                                style: const TextStyle(fontWeight: FontWeight.w800),
+                                              Flexible(
+                                                child: Text(
+                                                  identity.displayName,
+                                                  maxLines: 1,
+                                                  overflow: TextOverflow.ellipsis,
+                                                  style: const TextStyle(fontWeight: FontWeight.w800),
+                                                ),
                                               ),
-                                              if (c.isVerified) ...[
+                                              if (identity.isVerified) ...[
                                                 const SizedBox(width: 6),
                                                 Icon(Icons.verified, size: 16, color: context.brand.verifiedBlue),
                                               ],
@@ -21547,6 +21767,14 @@ class _CommentsScreenState extends State<CommentsScreen> {
                                               ),
                                             ],
                                           ),
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            '@${identity.username}',
+                                            style: TextStyle(color: cs.outline, fontWeight: FontWeight.w600),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                          const SizedBox(height: 4),
                                           Text(c.body),
                                         ],
                                       ),
@@ -21732,16 +21960,133 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
 
         final cs = Theme.of(context).colorScheme;
         final isAuthenticated = session.value.isAuthenticated;
-        final profile = repo.profileForUserId(post.userId);
-        final displayName = (profile?.name.trim().isNotEmpty ?? false) ? profile!.name.trim() : post.username;
-        final displayUsername = (profile?.username.trim().isNotEmpty ?? false) ? profile!.username.trim() : post.username;
-        final avatarUrl = profile?.avatarUrl;
-        final visibilityLabel = switch (post.visibility) {
-          PostVisibility.public => 'Público',
-          PostVisibility.followers => 'Seguidores',
-          PostVisibility.church => 'Igreja',
-        };
-        final isVerified = repo.profileForUserId(post.userId)?.isVerified ?? post.isVerified;
+        final identity = _identityForUserId(repo, post.userId, legacyVerified: post.isVerified);
+        final viewer = session.value;
+        final viewerProfile = viewer is AuthSession ? repo.profileForUserId(viewer.userId) : null;
+        final viewerName = viewerProfile == null ? null : _displayNameForProfile(viewerProfile).trim();
+
+        Widget actionWithCount({
+          required IconData icon,
+          required String label,
+          required VoidCallback onTap,
+          required int count,
+          Color? color,
+        }) {
+          final showCount = count > 0;
+          final fg = color ?? cs.onSurfaceVariant;
+          return Semantics(
+            button: true,
+            label: showCount ? '$label ($count)' : label,
+            child: Tooltip(
+              message: label,
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(14),
+                  onTap: onTap,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(minWidth: AtalaiaTapTarget.min, minHeight: AtalaiaTapTarget.min),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(icon, size: 22, color: fg),
+                          if (showCount) ...[
+                            const SizedBox(width: 6),
+                            Text(
+                              '$count',
+                              style: TextStyle(color: fg, fontWeight: FontWeight.w800, fontSize: 12, height: 1.0),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+
+        Widget prayAction() {
+          final count = post.prayerCount;
+          final showCount = count > 0;
+          if (post.viewerHasPrayed) {
+            return actionWithCount(
+              icon: Icons.volunteer_activism,
+              label: 'Orei',
+              onTap: () {
+                if (!isAuthenticated) return showCtaSnackBar(context);
+                repo.togglePrayer(post.id, isAuthenticated: true);
+              },
+              count: count,
+              color: const Color(0xFF2E7D32),
+            );
+          }
+
+          final fg = cs.onSurfaceVariant;
+          return Semantics(
+            button: true,
+            label: showCount ? 'Orei ($count)' : 'Orei',
+            child: Tooltip(
+              message: 'Orei',
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(14),
+                  onTap: () {
+                    if (!isAuthenticated) return showCtaSnackBar(context);
+                    repo.togglePrayer(post.id, isAuthenticated: true);
+                  },
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(minWidth: AtalaiaTapTarget.min, minHeight: AtalaiaTapTarget.min),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.volunteer_activism_outlined, size: 22, color: fg),
+                          if (showCount) ...[
+                            const SizedBox(width: 6),
+                            Text(
+                              '$count',
+                              style: TextStyle(color: fg, fontWeight: FontWeight.w800, fontSize: 12, height: 1.0),
+                            ),
+                          ],
+                          const SizedBox(width: 8),
+                          Text(
+                            'Orei',
+                            style: TextStyle(color: fg, fontWeight: FontWeight.w900, fontSize: 12, height: 1.0),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+
+        String? prayerByline() {
+          final total = post.prayerCount;
+          if (total <= 0) return null;
+          final cached = repo.prayerUsernamesForPost(post.id);
+          if (cached.isEmpty) {
+            unawaited(repo.prefetchPrayerUsernamesForPost(post.id));
+          }
+          final first = cached.isNotEmpty ? cached.first : (post.viewerHasPrayed ? viewerName : null);
+          if (total == 1) {
+            return first == null ? 'Orado por 1 pessoa' : 'Orado por $first';
+          }
+          if (total == 2) {
+            if (first != null) return 'Orado por $first e outra pessoa';
+            return 'Orado por 2 pessoas';
+          }
+          if (first != null) return 'Orado por $first e outras pessoas';
+          return 'Orado por $total pessoas';
+        }
 
         return Scaffold(
           appBar: AppBar(
@@ -21778,7 +22123,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                                     );
                                   },
                                   customBorder: const CircleBorder(),
-                                  child: Avatar(name: displayName, imageUrl: avatarUrl, size: AvatarSize.s44),
+                                  child: Avatar(name: identity.avatarName, imageUrl: identity.avatarUrl, size: AvatarSize.s44),
                                 ),
                                 const SizedBox(width: 10),
                                 Expanded(
@@ -21789,20 +22134,28 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                                         arguments: UserProfileArgs(userId: post.userId),
                                       );
                                     },
-                                    child: Row(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
-                                        Text(
-                                          displayName,
-                                          style: const TextStyle(fontWeight: FontWeight.w800),
+                                        Row(
+                                          children: [
+                                            Flexible(
+                                              child: Text(
+                                                identity.displayName,
+                                                style: const TextStyle(fontWeight: FontWeight.w900),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ),
+                                            if (identity.isVerified) ...[
+                                              const SizedBox(width: 6),
+                                              Icon(Icons.verified, size: 18, color: context.brand.verifiedBlue),
+                                            ],
+                                            const Spacer(),
+                                            Text(_relativeTime(post.createdAt), style: TextStyle(color: cs.outline)),
+                                          ],
                                         ),
-                                        const SizedBox(width: 6),
-                                        Text('@$displayUsername', style: TextStyle(color: cs.outline)),
-                                        if (isVerified) ...[
-                                          const SizedBox(width: 6),
-                                          Icon(Icons.verified, size: 18, color: context.brand.verifiedBlue),
-                                        ],
-                                        const Spacer(),
-                                        Text(_relativeTime(post.createdAt), style: TextStyle(color: cs.outline)),
+                                        const SizedBox(height: 2),
                                       ],
                                     ),
                                   ),
@@ -21810,14 +22163,6 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                               ],
                             ),
                             const SizedBox(height: 8),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 6,
-                              children: [
-                                _Badge(label: visibilityLabel),
-                                if (post.communityId != null) const _Badge(label: 'Comunidade'),
-                              ],
-                            ),
                             if (post.location != null) ...[
                               const SizedBox(height: 10),
                               Row(
@@ -21834,7 +22179,6 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                               ),
                             ],
                             const SizedBox(height: 12),
-                            Text(post.body),
                             if (post.mediaKind != null) ...[
                               const SizedBox(height: 12),
                               Stack(
@@ -21878,77 +22222,60 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                             const SizedBox(height: 8),
                             Row(
                               children: [
-                                AtalaiaIconButton(
+                                prayAction(),
+                                actionWithCount(
                                   icon: post.viewerHasLiked ? Icons.favorite : Icons.favorite_border,
                                   label: 'Curtir',
-                                  onPressed: () {
+                                  onTap: () {
                                     if (!isAuthenticated) return showCtaSnackBar(context);
                                     repo.toggleLike(post.id, isAuthenticated: true);
                                   },
+                                  count: post.likeCount,
                                   color: post.viewerHasLiked ? cs.error : null,
                                 ),
-                                AtalaiaIconButton(
+                                actionWithCount(
                                   icon: Icons.chat_bubble_outline,
                                   label: 'Comentar',
-                                  onPressed: () {
+                                  onTap: () {
                                     Navigator.of(context).pushNamed(
                                       Routes.postComments,
                                       arguments: CommentsArgs(postId: post.id),
                                     );
                                   },
+                                  count: post.commentCount,
                                 ),
-                                AtalaiaIconButton(
+                                actionWithCount(
                                   icon: Icons.send_rounded,
                                   label: 'Compartilhar',
-                                  onPressed: () async {
+                                  onTap: () async {
                                     await showShareSheet(context, post: post, isAuthenticated: isAuthenticated);
                                   },
-                                ),
-                                const Spacer(),
-                                AtalaiaIconButton(
-                                  icon: post.viewerHasSaved ? Icons.bookmark : Icons.bookmark_border,
-                                  label: 'Salvar',
-                                  onPressed: () {
-                                    if (!isAuthenticated) return showCtaSnackBar(context);
-                                    final willSave = !post.viewerHasSaved;
-                                    repo.toggleSave(post.id, isAuthenticated: true);
-                                    if (willSave) showInfoSnackBar(context, 'Salvo');
-                                  },
+                                  count: 0,
                                 ),
                               ],
                             ),
-                            if (post.likeCount > 0)
-                              Row(
-                                children: [
-                                  Icon(Icons.favorite, size: 16, color: cs.error),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    '${post.likeCount} curtidas',
-                                    style: const TextStyle(fontWeight: FontWeight.w700),
+                            Builder(
+                              builder: (context) {
+                                final byline = prayerByline();
+                                if (byline == null) return const SizedBox(height: 10);
+                                return Padding(
+                                  padding: const EdgeInsets.only(top: 6),
+                                  child: Text(
+                                    byline,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: AtalaiaText.meta(context).copyWith(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w800,
+                                      color: cs.onSurfaceVariant,
+                                    ),
                                   ),
-                                ],
-                              ),
-                            const SizedBox(height: 4),
-                            Row(
-                              children: [
-                                Icon(Icons.volunteer_activism_outlined, size: 16, color: cs.outline),
-                                const SizedBox(width: 6),
-                                Text('${post.prayerCount} orações', style: TextStyle(color: cs.outline)),
-                              ],
+                                );
+                              },
                             ),
-                            const SizedBox(height: 8),
-                            SizedBox(
-                              width: double.infinity,
-                              child: PrimaryButton(
-                                label: post.viewerHasPrayed ? 'OREI registrada' : 'OREI',
-                                onPressed: post.viewerHasPrayed
-                                    ? null
-                                    : () {
-                                        if (!isAuthenticated) return showCtaSnackBar(context);
-                                        repo.togglePrayer(post.id, isAuthenticated: true);
-                                        showInfoSnackBar(context, 'Oração registrada');
-                                      },
-                              ),
+                            Padding(
+                              padding: const EdgeInsets.only(top: 6),
+                              child: Text(post.body),
                             ),
                             const SizedBox(height: 6),
                             Text(_formatTimestamp(post.createdAt), style: TextStyle(color: cs.outline)),
@@ -21956,10 +22283,6 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                         ),
                       ),
                     ),
-                    if (post.kind == PostKind.request) ...[
-                      const SizedBox(height: 14),
-                      _AiPostInsightsCard(postId: post.id, body: post.body),
-                    ],
                   ],
                 ),
               ),
@@ -21967,228 +22290,6 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
           ),
         );
       },
-    );
-  }
-}
-
-class _AiPostInsightsCard extends StatefulWidget {
-  const _AiPostInsightsCard({required this.postId, required this.body});
-
-  final String postId;
-  final String body;
-
-  @override
-  State<_AiPostInsightsCard> createState() => _AiPostInsightsCardState();
-}
-
-class _AiPostInsightsCardState extends State<_AiPostInsightsCard> {
-  var _lang = 'pt';
-  Future<AiPostAnalysisModel?>? _analysisFuture;
-  Future<String?>? _translationFuture;
-  String? _loadedPostId;
-
-  @override
-  void initState() {
-    super.initState();
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (_analysisFuture == null || _loadedPostId != widget.postId) {
-      _loadedPostId = widget.postId;
-      _analysisFuture = RepoScope.of(context).fetchAiPostAnalysis(widget.postId);
-    }
-  }
-
-  @override
-  void didUpdateWidget(covariant _AiPostInsightsCard oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.postId != widget.postId) {
-      _loadedPostId = null;
-      _analysisFuture = null;
-      _translationFuture = null;
-      _lang = 'pt';
-    }
-  }
-
-  String _labelForCategory(String raw) {
-    return switch (raw.trim().toLowerCase()) {
-      'health' => 'Saúde',
-      'family' => 'Família',
-      'finance' => 'Finanças',
-      'relationships' => 'Relacionamentos',
-      'deliverance' => 'Libertação',
-      'mental_health' => 'Saúde mental',
-      'protection' => 'Proteção',
-      'guidance' => 'Direção',
-      'gratitude' => 'Gratidão',
-      _ => 'Outros',
-    };
-  }
-
-  String _labelForUrgency(String raw) {
-    return switch (raw.trim().toLowerCase()) {
-      'critical' => 'Crítica',
-      'high' => 'Alta',
-      'medium' => 'Média',
-      _ => 'Baixa',
-    };
-  }
-
-  List<String> _suggestionsForCategory(String raw) {
-    return switch (raw.trim().toLowerCase()) {
-      'health' => const [
-          'Ore por cura, alívio de dores e restauração do corpo.',
-          'Ore por sabedoria e direção para médicos e tratamentos.',
-          'Ore por paz e fé para a família durante o processo.',
-        ],
-      'family' => const [
-          'Ore por unidade, reconciliação e amor no lar.',
-          'Ore por proteção espiritual e paz dentro de casa.',
-          'Ore por sabedoria para decisões e conversas difíceis.',
-        ],
-      'mental_health' => const [
-          'Ore por paz na mente, esperança e alegria renovada.',
-          'Ore por descanso, sono e alívio da ansiedade.',
-          'Ore por apoio saudável e cuidado pastoral.',
-        ],
-      'deliverance' => const [
-          'Ore por libertação e quebra de opressões.',
-          'Ore por fortalecimento espiritual e perseverança.',
-          'Ore por proteção e por ambientes saudáveis.',
-        ],
-      'protection' => const [
-          'Ore por livramento, proteção e guarda divina.',
-          'Ore por decisões sábias e segurança nas rotas.',
-          'Ore por paz e ausência de medo.',
-        ],
-      'finance' => const [
-          'Ore por provisão e portas abertas de trabalho.',
-          'Ore por organização financeira e sabedoria.',
-          'Ore por paz, evitando ansiedade e desespero.',
-        ],
-      'relationships' => const [
-          'Ore por perdão, reconciliação e paz.',
-          'Ore por comunicação saudável e humildade.',
-          'Ore por cura de feridas emocionais.',
-        ],
-      'guidance' => const [
-          'Ore por direção, discernimento e clareza.',
-          'Ore por coragem para obedecer e agir com fé.',
-          'Ore por confirmação e portas abertas.',
-        ],
-      'gratitude' => const [
-          'Ore com gratidão e fortaleça a fé com testemunhos.',
-          'Ore para que a vitória inspire outros a crerem.',
-          'Ore por humildade e constância.',
-        ],
-      _ => const [
-          'Ore por consolo, renovo e fortalecimento.',
-          'Ore por proteção espiritual e paz.',
-          'Ore por direção e esperança.',
-        ],
-    };
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final repo = RepoScope.of(context);
-    final cs = Theme.of(context).colorScheme;
-
-    return Card(
-      margin: EdgeInsets.zero,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: FutureBuilder<AiPostAnalysisModel?>(
-          future: _analysisFuture,
-          builder: (context, snapshot) {
-            final analysis = snapshot.data;
-
-            final categoryLabel = analysis == null ? null : _labelForCategory(analysis.category);
-            final urgencyLabel = analysis == null ? null : _labelForUrgency(analysis.urgencyLevel);
-            final suggestions = analysis == null ? const <String>[] : _suggestionsForCategory(analysis.category);
-            final keywords = analysis?.keywords ?? const <String>[];
-
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('IA — Intercessão', style: TextStyle(fontWeight: FontWeight.w900)),
-                const SizedBox(height: 8),
-                if (analysis == null) ...[
-                  Text('Analisando pedido…', style: TextStyle(color: cs.outline)),
-                ] else ...[
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 6,
-                    children: [
-                      _Badge(label: categoryLabel ?? 'Outros'),
-                      _Badge(label: 'Urgência: ${urgencyLabel ?? 'Baixa'}'),
-                      if (analysis.spamScore >= 85) _Badge(label: 'Suspeito'),
-                    ],
-                  ),
-                  if ((analysis.summary ?? '').trim().isNotEmpty) ...[
-                    const SizedBox(height: 10),
-                    Text(analysis.summary!.trim()),
-                  ],
-                  if (keywords.isNotEmpty) ...[
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 6,
-                      children: [for (final k in keywords.take(10)) _Badge(label: '#$k')],
-                    ),
-                  ],
-                  const SizedBox(height: 10),
-                  for (final s in suggestions.take(3)) ...[
-                    Text('• $s', style: TextStyle(color: cs.onSurface.withValues(alpha: 0.90))),
-                    const SizedBox(height: 4),
-                  ],
-                ],
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        key: ValueKey<String>(_lang),
-                        initialValue: _lang,
-                        decoration: const InputDecoration(
-                          isDense: true,
-                          border: OutlineInputBorder(),
-                          labelText: 'Tradução',
-                        ),
-                        items: const [
-                          DropdownMenuItem(value: 'pt', child: Text('Português')),
-                          DropdownMenuItem(value: 'en', child: Text('English')),
-                          DropdownMenuItem(value: 'es', child: Text('Español')),
-                        ],
-                        onChanged: (v) {
-                          final next = (v ?? 'pt').trim().toLowerCase();
-                          setState(() {
-                            _lang = next;
-                            _translationFuture = next == 'pt' ? null : repo.translateText(text: widget.body, targetLang: next);
-                          });
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-                if (_lang != 'pt') ...[
-                  const SizedBox(height: 10),
-                  FutureBuilder<String?>(
-                    future: _translationFuture,
-                    builder: (context, snap) {
-                      final txt = (snap.data ?? '').trim();
-                      if (txt.isEmpty) return Text('Traduzindo…', style: TextStyle(color: cs.outline));
-                      return Text(txt);
-                    },
-                  ),
-                ],
-              ],
-            );
-          },
-        ),
-      ),
     );
   }
 }
@@ -22303,10 +22404,19 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
   }
 
   Future<void> _openPostText() async {
+    final repo = RepoScope.of(context);
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => const PostComposerScreen(draft: ComposerDraft()),
+        builder: (_) => PostComposerScreen(draft: _draftForQuickPost(repo)),
       ),
+    );
+  }
+
+  ComposerDraft _draftForQuickPost(DemoRepository repo) {
+    return ComposerDraft(
+      initialRegionPath: repo.lastFeedLocationPath,
+      initialCommunityId: repo.activeCommunityFilterId,
+      initialKind: PostKind.request,
     );
   }
 
@@ -22370,7 +22480,7 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
     if (!context.mounted || media == null) return;
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => MediaEditScreen(draft: media),
+        builder: (_) => MediaEditScreen(draft: media, baseDraft: _draftForQuickPost(RepoScope.of(context))),
       ),
     );
   }
@@ -22384,7 +22494,7 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
     }
     Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => MediaEditScreen(draft: media),
+        builder: (_) => MediaEditScreen(draft: media, baseDraft: _draftForQuickPost(RepoScope.of(context))),
       ),
     );
   }
@@ -22643,17 +22753,17 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
                           Text('Post', style: TextStyle(color: cs.onSurface, fontWeight: FontWeight.w900, fontSize: 16)),
                           const SizedBox(height: 10),
                           PrimaryButton(
-                            label: 'Selecionar mídia',
-                            onPressed: () => unawaited(_openPostMediaAny()),
+                            label: 'Escrever agora',
+                            onPressed: _openPostText,
                           ),
                           const SizedBox(height: 10),
                           SecondaryButton(
-                            label: 'Continuar sem mídia',
-                            onPressed: _openPostText,
+                            label: 'Adicionar mídia',
+                            onPressed: () => unawaited(_openPostMediaAny()),
                           ),
                           const SizedBox(height: 14),
                           Text(
-                            'Primeiro mídia, depois composição. Também dá para postar só texto.',
+                            'Você pode publicar só texto ou anexar mídia sem perder o contexto da região/comunidade.',
                             style: TextStyle(color: cs.outline),
                           ),
                         ],
@@ -22859,6 +22969,7 @@ final class ComposerDraft {
   const ComposerDraft({
     this.media,
     this.initialText = '',
+    this.initialKind = PostKind.request,
     this.initialVisibility = PostVisibility.public,
     this.initialLocation,
     this.initialRegionPath,
@@ -22869,6 +22980,7 @@ final class ComposerDraft {
 
   final ComposerMediaDraft? media;
   final String initialText;
+  final PostKind initialKind;
   final PostVisibility initialVisibility;
   final String? initialLocation;
   final String? initialRegionPath;
@@ -23179,6 +23291,7 @@ class _MediaEditScreenState extends State<MediaEditScreen> {
                   draft: ComposerDraft(
                     media: _draft,
                     initialText: base.initialText,
+                    initialKind: base.initialKind,
                     initialVisibility: base.initialVisibility,
                     initialLocation: base.initialLocation,
                     initialRegionPath: base.initialRegionPath,
@@ -23318,6 +23431,7 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
   final TextEditingController _tagInput = TextEditingController();
   final List<String> _tags = <String>[];
   PostVisibility _visibility = PostVisibility.public;
+  PostKind _kind = PostKind.request;
   String? _location;
 
   bool _uploading = false;
@@ -23326,6 +23440,7 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
   @override
   void initState() {
     super.initState();
+    _kind = widget.draft.initialKind;
     _visibility = widget.draft.initialVisibility;
     _location = widget.draft.initialLocation;
   }
@@ -23435,6 +23550,7 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
           draft: media,
           baseDraft: ComposerDraft(
             initialText: _text.text,
+            initialKind: _kind,
             initialVisibility: _visibility,
             initialLocation: _location,
             initialRegionPath: widget.draft.initialRegionPath,
@@ -23624,10 +23740,11 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
     final created = await repo.createPost(
       session,
       body: body,
+      kind: _kind,
       visibility: _visibility,
       mediaKind: media == null ? null : (media.kind == ComposerMediaKind.photo ? 'image' : 'video'),
       mediaUrl: uploadedMediaUrl,
-      regionPath: _regionFromLocation(_location) ?? 'world',
+      regionPath: _regionFromLocation(_location) ?? widget.draft.initialRegionPath ?? 'world',
       location: _location,
       communityId: widget.draft.initialCommunityId,
     );
@@ -23657,7 +23774,6 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
     final media = widget.draft.media;
     final existingMediaKind = widget.draft.existingMediaKind;
     final existingMediaUrl = widget.draft.existingMediaUrl;
-    final isEditing = widget.editingPostId != null && widget.editingPostId!.isNotEmpty;
 
     final Widget? mediaPreview;
     if (media != null) {
@@ -23729,16 +23845,23 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
     return ValueListenableBuilder(
       valueListenable: session,
       builder: (context, s, _) {
+        final isEditing = widget.editingPostId != null && widget.editingPostId!.isNotEmpty;
         return Scaffold(
           appBar: AppBar(
-            title: Text(isEditing ? 'Editar post' : 'Novo post'),
+            title: Text(
+              isEditing
+                  ? 'Editar post'
+                  : switch (_kind) {
+                      PostKind.request => 'Novo pedido',
+                      PostKind.testimony => 'Novo testemunho',
+                    },
+            ),
             actions: [
-              if (isEditing)
-                AtalaiaIconButton(
-                  icon: Icons.photo_library_outlined,
-                  label: 'Mídia',
-                  onPressed: _uploading ? null : _changeMedia,
-                ),
+              AtalaiaIconButton(
+                icon: Icons.photo_library_outlined,
+                label: 'Mídia',
+                onPressed: _uploading ? null : _changeMedia,
+              ),
               AtalaiaTextButton(
                 label: isEditing ? 'Salvar' : 'Publicar',
                 onPressed: _isValid && !_uploading ? () => _publish(isAuthenticated: s.isAuthenticated) : null,
@@ -23756,6 +23879,23 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
                 mediaPreview,
                 const SizedBox(height: 12),
               ],
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  ChoiceChip(
+                    label: const Text('Pedido'),
+                    selected: _kind == PostKind.request,
+                    onSelected: isEditing || _uploading ? null : (_) => setState(() => _kind = PostKind.request),
+                  ),
+                  ChoiceChip(
+                    label: const Text('Testemunho'),
+                    selected: _kind == PostKind.testimony,
+                    onSelected: isEditing || _uploading ? null : (_) => setState(() => _kind = PostKind.testimony),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
               AtalaiaTextField(
                 controller: _text,
                 minLines: 4,
@@ -23763,7 +23903,10 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
                 keyboardType: TextInputType.multiline,
                 textInputAction: TextInputAction.newline,
                 onChanged: (_) => setState(() {}),
-                hintText: 'Escreva seu pedido de oração…',
+                hintText: switch (_kind) {
+                  PostKind.request => 'Escreva seu pedido de oração…',
+                  PostKind.testimony => 'Compartilhe seu testemunho…',
+                },
               ),
               const SizedBox(height: 12),
               AtalaiaTextField(
@@ -23839,9 +23982,9 @@ class AlertCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final repo = RepoScope.of(context);
     final cs = Theme.of(context).colorScheme;
-    final isVerified = repo.profileForUserId(alert.userId)?.isVerified ?? alert.isVerified;
     final urgencyColor = _alertUrgencyColor(alert.urgency);
     final followLabel = alert.viewerIsFollowing ? 'Seguindo' : 'Seguir';
+    final identity = _identityForUserId(repo, alert.userId, legacyVerified: alert.isVerified);
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -23863,21 +24006,41 @@ class AlertCard extends StatelessWidget {
                       );
                     },
                     customBorder: const CircleBorder(),
-                    child: Avatar(name: alert.username, size: AvatarSize.s44),
+                    child: Avatar(name: identity.avatarName, imageUrl: identity.avatarUrl, size: AvatarSize.s44),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: Row(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(alert.username, style: const TextStyle(fontWeight: FontWeight.w900)),
-                        const SizedBox(width: 6),
-                        Text('@${alert.username}', style: TextStyle(color: cs.outline)),
-                        if (isVerified) ...[
-                          const SizedBox(width: 6),
-                          Icon(Icons.verified, size: 18, color: context.brand.verifiedBlue),
-                        ],
-                        const Spacer(),
-                        Text(_relativeTime(alert.createdAt), style: TextStyle(color: cs.outline, fontWeight: FontWeight.w600)),
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                identity.displayName,
+                                style: const TextStyle(fontWeight: FontWeight.w900),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            if (identity.isVerified) ...[
+                              const SizedBox(width: 6),
+                              Icon(Icons.verified, size: 18, color: context.brand.verifiedBlue),
+                            ],
+                            const Spacer(),
+                            Text(
+                              _relativeTime(alert.createdAt),
+                              style: TextStyle(color: cs.outline, fontWeight: FontWeight.w600),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '@${identity.username}',
+                          style: AtalaiaText.meta(context).copyWith(fontWeight: FontWeight.w700),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ],
                     ),
                   ),
@@ -24077,8 +24240,8 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
 
         final cs = Theme.of(context).colorScheme;
         final isAuthenticated = session.value.isAuthenticated;
-        final isVerified = repo.profileForUserId(alert.userId)?.isVerified ?? alert.isVerified;
         final urgencyColor = _alertUrgencyColor(alert.urgency);
+        final identity = _identityForUserId(repo, alert.userId, legacyVerified: alert.isVerified);
 
         Future<void> openAlertMenu() async {
           final choice = await showAtalaiaBottomSheet<String>(
@@ -24177,23 +24340,40 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
                                     );
                                   },
                                   customBorder: const CircleBorder(),
-                                  child: Avatar(name: alert.username, size: AvatarSize.s44),
+                                  child: Avatar(name: identity.avatarName, imageUrl: identity.avatarUrl, size: AvatarSize.s44),
                                 ),
                                 const SizedBox(width: 10),
                                 Expanded(
-                                  child: Row(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      Text(alert.username, style: const TextStyle(fontWeight: FontWeight.w900)),
-                                      const SizedBox(width: 6),
-                                      Text('@${alert.username}', style: TextStyle(color: cs.outline)),
-                                      if (isVerified) ...[
-                                        const SizedBox(width: 6),
-                                        Icon(Icons.verified, size: 18, color: context.brand.verifiedBlue),
-                                      ],
-                                      const Spacer(),
+                                      Row(
+                                        children: [
+                                          Flexible(
+                                            child: Text(
+                                              identity.displayName,
+                                              style: const TextStyle(fontWeight: FontWeight.w900),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                          if (identity.isVerified) ...[
+                                            const SizedBox(width: 6),
+                                            Icon(Icons.verified, size: 18, color: context.brand.verifiedBlue),
+                                          ],
+                                          const Spacer(),
+                                          Text(
+                                            _relativeTime(alert.createdAt),
+                                            style: TextStyle(color: cs.outline, fontWeight: FontWeight.w600),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 2),
                                       Text(
-                                        _relativeTime(alert.createdAt),
-                                        style: TextStyle(color: cs.outline, fontWeight: FontWeight.w600),
+                                        '@${identity.username}',
+                                        style: AtalaiaText.meta(context).copyWith(fontWeight: FontWeight.w700),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
                                       ),
                                     ],
                                   ),
@@ -24569,44 +24749,78 @@ class _HomeStoriesStrip extends StatelessWidget {
     final hasMyStories = (myStories ?? const <StoryModel>[]).isNotEmpty;
     final others = orderedUserIds.where((id) => id != viewerId).take(24).toList(growable: false);
 
-    Widget bubble({
+    Widget tile({
       required String label,
       required VoidCallback onTap,
       VoidCallback? onLongPress,
       String? avatarUrl,
       bool isAdd = false,
       Color? borderColor,
+      double? labelFontSize,
+      FontWeight? labelWeight,
+      bool showUnreadDot = false,
     }) {
+      final imageProvider = (avatarUrl != null && avatarUrl.trim().isNotEmpty) ? NetworkImage(avatarUrl.trim()) : null;
       return InkWell(
         onTap: onTap,
         onLongPress: onLongPress,
-        borderRadius: BorderRadius.circular(999),
+        borderRadius: BorderRadius.circular(18),
         child: SizedBox(
-          width: 74,
+          width: 104,
           child: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Stack(
                 children: [
                   Container(
-                    padding: const EdgeInsets.all(2),
                     decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(color: borderColor ?? cs.outlineVariant),
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: borderColor ?? cs.outlineVariant, width: (borderColor == null) ? 1 : 2),
+                      boxShadow: [
+                        BoxShadow(
+                          color: cs.shadow.withValues(alpha: 0.08),
+                          blurRadius: 14,
+                          offset: const Offset(0, 8),
+                        ),
+                      ],
                     ),
-                    child: CircleAvatar(
-                      radius: 26,
-                      backgroundColor: cs.surfaceContainerHighest,
-                      backgroundImage: (avatarUrl != null && avatarUrl.trim().isNotEmpty) ? NetworkImage(avatarUrl) : null,
-                      child: (avatarUrl == null || avatarUrl.trim().isEmpty)
-                          ? Icon(isAdd ? Icons.add : Icons.person, color: cs.onSurfaceVariant)
-                          : null,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(16),
+                      child: Container(
+                        height: 132,
+                        decoration: BoxDecoration(
+                          color: cs.surfaceContainerHighest,
+                          image: imageProvider == null
+                              ? null
+                              : DecorationImage(
+                                  image: imageProvider,
+                                  fit: BoxFit.cover,
+                                ),
+                        ),
+                        alignment: Alignment.center,
+                        child: imageProvider == null ? Icon(isAdd ? Icons.add : Icons.person, color: cs.onSurfaceVariant) : null,
+                      ),
                     ),
                   ),
+                  if (showUnreadDot)
+                    Positioned(
+                      left: 10,
+                      top: 10,
+                      child: Container(
+                        width: 10,
+                        height: 10,
+                        decoration: BoxDecoration(
+                          color: cs.primary,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: cs.surface, width: 2),
+                        ),
+                      ),
+                    ),
                   if (isAdd)
                     Positioned(
-                      right: 0,
-                      bottom: 0,
+                      right: 8,
+                      bottom: 8,
                       child: Container(
                         decoration: BoxDecoration(
                           color: cs.primary,
@@ -24617,14 +24831,29 @@ class _HomeStoriesStrip extends StatelessWidget {
                         child: Icon(Icons.add, size: 14, color: cs.onPrimary),
                       ),
                     ),
+                  Positioned(
+                    left: 8,
+                    bottom: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: cs.surface.withValues(alpha: 0.9),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: cs.onSurface,
+                          fontSize: labelFontSize ?? 12,
+                          fontWeight: labelWeight ?? FontWeight.w700,
+                          height: 1.1,
+                        ),
+                      ),
+                    ),
+                  ),
                 ],
-              ),
-              const SizedBox(height: 6),
-              Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: cs.onSurface, fontSize: 12, fontWeight: FontWeight.w600),
               ),
             ],
           ),
@@ -24651,15 +24880,17 @@ class _HomeStoriesStrip extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           SizedBox(
-            height: 92,
+            height: 142,
             child: ListView(
               scrollDirection: Axis.horizontal,
               children: [
-                bubble(
+                tile(
                   label: 'Seu story',
                   isAdd: true,
                   avatarUrl: viewerId == null ? null : repo.profileForUserId(viewerId)?.avatarUrl,
                   borderColor: hasMyStories ? cs.primary : cs.outlineVariant,
+                  labelFontSize: 11,
+                  labelWeight: FontWeight.w600,
                   onTap: () {
                     if (!session.isAuthenticated) return showCtaSnackBar(context);
                     if (hasMyStories) {
@@ -24682,10 +24913,11 @@ class _HomeStoriesStrip extends StatelessWidget {
                 ),
                 const SizedBox(width: 10),
                 for (final userId in others) ...[
-                  bubble(
-                    label: repo.profileForUserId(userId)?.username ?? 'Story',
+                  tile(
+                    label: '@${_normalizeDisplayUsername(repo.profileForUserId(userId)?.username, fallback: userId)}',
                     avatarUrl: repo.profileForUserId(userId)?.avatarUrl,
                     borderColor: cs.primary,
+                    showUnreadDot: true,
                     onTap: () {
                       final stories = byUser[userId] ?? const <StoryModel>[];
                       if (stories.isEmpty) return;
@@ -24710,6 +24942,143 @@ class _HomeStoriesStrip extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _HomeHighlightsRow extends StatelessWidget {
+  const _HomeHighlightsRow({
+    required this.campaigns,
+    required this.campaignsCount,
+    required this.alerts,
+    required this.alertsCount,
+    required this.locationLabel,
+    required this.onOpenCampaigns,
+    required this.onOpenAlerts,
+  });
+
+  final List<CampaignModel> campaigns;
+  final int campaignsCount;
+  final List<AlertModel> alerts;
+  final int alertsCount;
+  final String locationLabel;
+  final VoidCallback onOpenCampaigns;
+  final VoidCallback onOpenAlerts;
+
+  @override
+  Widget build(BuildContext context) {
+    if (campaigns.isEmpty && alerts.isEmpty) return const SizedBox.shrink();
+    final cs = Theme.of(context).colorScheme;
+
+    Widget card({
+      required IconData icon,
+      required String title,
+      required String subtitle,
+      required String? preview,
+      required VoidCallback onTap,
+      Color? accent,
+    }) {
+      final a = accent ?? cs.primary;
+      return SizedBox(
+        width: 280,
+        child: Card(
+          margin: EdgeInsets.zero,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: a.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    alignment: Alignment.center,
+                    child: Icon(icon, color: a),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+                        const SizedBox(height: 2),
+                        Text(subtitle, style: TextStyle(color: cs.outline, fontWeight: FontWeight.w600)),
+                        if ((preview ?? '').trim().isNotEmpty) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            preview!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: cs.onSurface, fontWeight: FontWeight.w700),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  Icon(Icons.chevron_right, color: cs.outline),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    AlertUrgency? maxUrgency() {
+      if (alerts.isEmpty) return null;
+      var u = alerts.first.urgency;
+      for (final a in alerts.skip(1)) {
+        if (a.urgency.index > u.index) u = a.urgency;
+      }
+      return u;
+    }
+
+    final urgency = maxUrgency();
+    final alertAccent = urgency == null ? cs.primary : _alertUrgencyColor(urgency);
+    final alertSubtitle = urgency == null ? '$alertsCount ativos • $locationLabel' : '${_alertUrgencyLabel(urgency)} • $alertsCount ativos';
+
+    final items = <Widget>[];
+    if (campaigns.isNotEmpty) {
+      items.add(
+        card(
+          icon: Icons.volunteer_activism_outlined,
+          title: 'Campanhas',
+          subtitle: '$campaignsCount ativas • $locationLabel',
+          preview: campaigns.first.title,
+          onTap: onOpenCampaigns,
+        ),
+      );
+    }
+    if (alerts.isNotEmpty) {
+      if (items.isNotEmpty) items.add(const SizedBox(width: 10));
+      items.add(
+        card(
+          icon: Icons.warning_amber_outlined,
+          title: 'Alertas',
+          subtitle: alertSubtitle,
+          preview: alerts.first.title,
+          accent: alertAccent,
+          onTap: onOpenAlerts,
+        ),
+      );
+    }
+
+    return Container(
+      color: Theme.of(context).scaffoldBackgroundColor,
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      child: SizedBox(
+        height: 92,
+        child: ListView(
+          scrollDirection: Axis.horizontal,
+          children: items,
+        ),
       ),
     );
   }
@@ -24747,6 +25116,128 @@ class _MapScreenState extends State<MapScreen> {
   String? _lastLoggedAggKey;
   var _isRegionSheetOpen = false;
   Timer? _moveEndDebounce;
+
+  Future<void> openCommunitiesSheetFromAppBar() async {
+    if (!mounted) return;
+    final repo = RepoScope.of(context);
+    final session = SessionScope.of(context).value;
+    await _openCommunitiesSheet(context, repo: repo, session: session);
+  }
+
+  Future<void> openMapOptionsSheetFromAppBar() async {
+    if (!mounted) return;
+    final repo = RepoScope.of(context);
+    final session = SessionScope.of(context).value;
+    await _openMapOptionsSheet(context, repo: repo, session: session);
+  }
+
+  Future<void> createMomentFromAppBar() async {
+    if (!mounted) return;
+    final repo = RepoScope.of(context);
+    final session = SessionScope.of(context).value;
+    await _handleCreateStory(context, repo: repo, session: session);
+  }
+
+  Future<void> _openMapOptionsSheet(
+    BuildContext context, {
+    required DemoRepository repo,
+    required SessionState session,
+  }) async {
+    await showAtalaiaBottomSheet<void>(
+      context,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (sheetContext, setSheetState) {
+            return SafeArea(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(height: 10),
+                  Container(
+                    width: 44,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Theme.of(sheetContext).colorScheme.outlineVariant,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text('Opções do mapa', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SwitchListTile(
+                    value: _showPrayerHeatmap,
+                    onChanged: (v) {
+                      repo.trackEvent('map_heatmap_toggle', <String, Object?>{'enabled': v});
+                      setState(() => _showPrayerHeatmap = v);
+                      setSheetState(() {});
+                      if (v) _scheduleEngineRun(immediate: true);
+                    },
+                    secondary: Icon(_showPrayerHeatmap ? Icons.layers : Icons.layers_outlined),
+                    title: const Text('Heatmap de oração'),
+                  ),
+                  if (_selectedLocation != null)
+                    ListTile(
+                      leading: const Icon(Icons.place_outlined),
+                      title: const Text('Abrir detalhes da região'),
+                      subtitle: Text(_selectedLocation!.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () {
+                        final location = _selectedLocation;
+                        if (location == null) return;
+                        Navigator.of(sheetContext).pop();
+                        Future<void>.delayed(const Duration(milliseconds: 1)).then((_) {
+                          if (!mounted) return;
+                          unawaited(
+                            _openRegionSheet(
+                              context,
+                              repo: repo,
+                              session: session,
+                              location: location,
+                              agg: null,
+                              communityId: _activeCommunityId,
+                            ),
+                          );
+                        });
+                      },
+                    ),
+                  ListTile(
+                    leading: const Icon(Icons.groups_outlined),
+                    title: const Text('Comunidades'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      Future<void>.delayed(const Duration(milliseconds: 1)).then((_) {
+                        if (!mounted) return;
+                        unawaited(_openCommunitiesSheet(context, repo: repo, session: session));
+                      });
+                    },
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.photo_camera_outlined),
+                    title: const Text('Criar momento'),
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      Future<void>.delayed(const Duration(milliseconds: 1)).then((_) {
+                        if (!mounted) return;
+                        unawaited(_handleCreateStory(context, repo: repo, session: session));
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
   int _engineToken = 0;
   var _enginePrimed = false;
   static const double _disableCityClusteringAtZoom = 11.0;
@@ -24891,6 +25382,91 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
+  Widget _buildMapVitalsPill(
+    BuildContext context, {
+    required int postsCount,
+    required int alertsCount,
+    required int newsCount,
+    required int momentsCount,
+  }) {
+    if (postsCount <= 0 && alertsCount <= 0 && newsCount <= 0 && momentsCount <= 0) {
+      return const SizedBox.shrink();
+    }
+    final cs = Theme.of(context).colorScheme;
+
+    Widget pill({
+      required IconData icon,
+      required String label,
+      Color? fg,
+      Color? bg,
+    }) {
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          color: bg ?? cs.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: cs.outlineVariant),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 15, color: fg ?? cs.onSurfaceVariant),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  color: fg ?? cs.onSurfaceVariant,
+                  fontWeight: FontWeight.w800,
+                  height: 1.0,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final items = <Widget>[];
+    if (momentsCount > 0) {
+      items.add(pill(icon: Icons.auto_awesome_outlined, label: '$momentsCount momentos'));
+    }
+    if (postsCount > 0) {
+      items.add(pill(icon: Icons.volunteer_activism_outlined, label: '$postsCount pedidos'));
+    }
+    if (alertsCount > 0) {
+      items.add(
+        pill(
+          icon: Icons.warning_amber_outlined,
+          label: '$alertsCount alertas',
+          fg: cs.onErrorContainer,
+          bg: cs.errorContainer,
+        ),
+      );
+    }
+    if (newsCount > 0) {
+      items.add(pill(icon: Icons.bolt_outlined, label: '$newsCount novidades'));
+    }
+
+    return Material(
+      color: cs.surface,
+      elevation: 1,
+      borderRadius: BorderRadius.circular(16),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Atalaia ativa', style: TextStyle(fontWeight: FontWeight.w900)),
+            const SizedBox(height: 8),
+            Wrap(spacing: 8, runSpacing: 8, children: items),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildCommunityContextPanel(
     BuildContext context, {
     required DemoRepository repo,
@@ -25005,7 +25581,7 @@ class _MapScreenState extends State<MapScreen> {
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 320),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 6, 10),
+          padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -25019,13 +25595,49 @@ class _MapScreenState extends State<MapScreen> {
                       c?.name ?? 'Comunidade',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontWeight: FontWeight.w900),
+                      style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15),
                     ),
                   ),
-                  IconButton(
-                    tooltip: 'Trocar comunidade',
-                    onPressed: () => unawaited(_openCommunitiesSheet(context, repo: repo, session: session)),
-                    icon: const Icon(Icons.expand_more, size: 20),
+                  PopupMenuButton<String>(
+                    tooltip: 'Mais',
+                    icon: const Icon(Icons.more_horiz, size: 20),
+                    onSelected: (v) {
+                      switch (v) {
+                        case 'summary':
+                          openSummary();
+                        case 'switch':
+                          unawaited(_openCommunitiesSheet(context, repo: repo, session: session));
+                        case 'scales':
+                          if (isMember) openScales();
+                        case 'reports':
+                          if (isMember && canModerate) openReports();
+                        case 'chat':
+                          if (isMember) openChat();
+                        default:
+                          break;
+                      }
+                    },
+                    itemBuilder: (_) => <PopupMenuEntry<String>>[
+                      const PopupMenuItem(value: 'summary', child: Text('Resumo')),
+                      const PopupMenuItem(value: 'switch', child: Text('Trocar comunidade')),
+                      const PopupMenuDivider(),
+                      PopupMenuItem(
+                        value: 'scales',
+                        enabled: isMember,
+                        child: const Text('Escalas'),
+                      ),
+                      if (canModerate)
+                        PopupMenuItem(
+                          value: 'reports',
+                          enabled: isMember,
+                          child: const Text('Relatórios'),
+                        ),
+                      PopupMenuItem(
+                        value: 'chat',
+                        enabled: isMember,
+                        child: const Text('Chat'),
+                      ),
+                    ],
                   ),
                   IconButton(
                     tooltip: 'Limpar filtro',
@@ -25034,7 +25646,7 @@ class _MapScreenState extends State<MapScreen> {
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 10),
               if (c == null)
                 Row(
                   mainAxisSize: MainAxisSize.min,
@@ -25050,30 +25662,25 @@ class _MapScreenState extends State<MapScreen> {
                 )
               else
                 Wrap(
-                  spacing: 2,
-                  runSpacing: 2,
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    AtalaiaIconButton(
-                      icon: Icons.info_outline,
-                      label: 'Resumo',
-                      onPressed: openSummary,
-                    ),
-                    AtalaiaIconButton(
-                      icon: Icons.volunteer_activism_outlined,
-                      label: 'Oração',
+                    FilledButton.tonalIcon(
                       onPressed: () => unawaited(startPrayer()),
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size(AtalaiaTapTarget.min, AtalaiaTapTarget.min),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AtalaiaRadius.lg)),
+                      ),
+                      icon: const Icon(Icons.volunteer_activism_outlined, size: 18),
+                      label: const Text('Oração'),
                     ),
                     AtalaiaIconButton(
                       icon: Icons.event_available_outlined,
                       label: 'Escalas',
                       onPressed: isMember ? openScales : null,
                     ),
-                    if (canModerate)
-                      AtalaiaIconButton(
-                        icon: Icons.insights_outlined,
-                        label: 'Relatórios',
-                        onPressed: isMember ? openReports : null,
-                      ),
                     AtalaiaIconButton(
                       icon: Icons.chat_bubble_outline,
                       label: 'Chat',
@@ -26340,6 +26947,10 @@ class _MapScreenState extends State<MapScreen> {
         builder: (context, snapshot) {
           final items = snapshot.data ?? const <_MapLocationAgg>[];
           final showEmptyRemoteFallback = snapshot.connectionState == ConnectionState.done && items.isEmpty;
+            final totalPostsCount = items.fold<int>(0, (sum, a) => sum + a.postsCount);
+            final totalAlertsCount = items.fold<int>(0, (sum, a) => sum + a.alertsCount);
+            final totalNewsCount = items.fold<int>(0, (sum, a) => sum + a.newsEventsCount);
+            final momentsCount = _currentLevel == 'city' ? _cityIdsWithStories.length : 0;
           if (_currentLevel == 'city') {
             final ids = <String>{};
             for (final a in items) {
@@ -26755,6 +27366,10 @@ class _MapScreenState extends State<MapScreen> {
                 repo: repo,
                 session: session,
                 markers: markers,
+                postsCount: totalPostsCount,
+                alertsCount: totalAlertsCount,
+                newsCount: totalNewsCount,
+                momentsCount: momentsCount,
               ),
               if (showEmptyRemoteFallback)
                 Positioned(
@@ -26804,13 +27419,15 @@ class _MapScreenState extends State<MapScreen> {
     }
 
     final markers = <Marker>[];
+    var postsCount = 0;
     for (final r in visibleRegions) {
       final filterCommunityId = _activeCommunityId;
-      final anyRequest = (filterCommunityId == null
-              ? repo.postsForRegion(session, r.path)
-              : repo.postsForRegionInCommunity(session, r.path, filterCommunityId))
-          .any((p) => p.kind == PostKind.request);
-      if (!anyRequest) continue;
+      final regionPosts = filterCommunityId == null
+          ? repo.postsForRegion(session, r.path)
+          : repo.postsForRegionInCommunity(session, r.path, filterCommunityId);
+      final requestCount = regionPosts.where((p) => p.kind == PostKind.request).length;
+      if (requestCount <= 0) continue;
+      postsCount += requestCount;
       markers.add(
         Marker(
           point: r.center,
@@ -26893,11 +27510,14 @@ class _MapScreenState extends State<MapScreen> {
       }
     }
 
+    final momentsCount = _currentLevel == 'city' ? _cityIdsWithStories.length : 0;
     return _buildMapSurface(
       context,
       repo: repo,
       session: session,
       markers: markers,
+      postsCount: postsCount,
+      momentsCount: momentsCount,
     );
   }
 
@@ -26906,6 +27526,10 @@ class _MapScreenState extends State<MapScreen> {
     required DemoRepository repo,
     required SessionState session,
     required List<Marker> markers,
+    int postsCount = 0,
+    int alertsCount = 0,
+    int newsCount = 0,
+    int momentsCount = 0,
   }) {
     final heatMarkers = <Marker>[];
     if (_showPrayerHeatmap) {
@@ -26944,6 +27568,20 @@ class _MapScreenState extends State<MapScreen> {
 
     return Stack(
       children: [
+        Positioned(
+          left: 12,
+          top: 12,
+          child: SafeArea(
+            minimum: const EdgeInsets.only(top: 8),
+            child: _buildMapVitalsPill(
+              context,
+              postsCount: postsCount,
+              alertsCount: alertsCount,
+              newsCount: newsCount,
+              momentsCount: momentsCount,
+            ),
+          ),
+        ),
         FlutterMap(
           mapController: _mapController,
           options: MapOptions(
@@ -26993,17 +27631,6 @@ class _MapScreenState extends State<MapScreen> {
             MarkerLayer(markers: markers),
           ],
         ),
-        Positioned(
-          right: 12,
-          bottom: 12,
-          child: SafeArea(
-            minimum: const EdgeInsets.only(bottom: 10),
-            child: FloatingActionButton(
-              onPressed: () => unawaited(_handleCreateStory(context, repo: repo, session: session)),
-              child: const Icon(Icons.photo_camera_outlined),
-            ),
-          ),
-        ),
         if (_activeCommunityId != null)
           Positioned(
             right: 12,
@@ -27013,36 +27640,6 @@ class _MapScreenState extends State<MapScreen> {
               child: _buildCommunityContextPanel(context, repo: repo, session: session),
             ),
           ),
-        Positioned(
-          left: 12,
-          bottom: 12,
-          child: SafeArea(
-            minimum: const EdgeInsets.only(bottom: 10),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                FloatingActionButton.small(
-                  heroTag: 'map_heatmap',
-                  onPressed: () {
-                    final next = !_showPrayerHeatmap;
-                    repo.trackEvent('map_heatmap_toggle', <String, Object?>{'enabled': next});
-                    setState(() => _showPrayerHeatmap = next);
-                    if (next) {
-                      _scheduleEngineRun(immediate: true);
-                    }
-                  },
-                  child: Icon(_showPrayerHeatmap ? Icons.layers : Icons.layers_outlined),
-                ),
-                const SizedBox(height: 10),
-                FloatingActionButton.small(
-                  heroTag: 'map_communities',
-                  onPressed: () => unawaited(_openCommunitiesSheet(context, repo: repo, session: session)),
-                  child: const Icon(Icons.groups_outlined),
-                ),
-              ],
-            ),
-          ),
-        ),
         if (_selectedLocation != null)
           Positioned(
             left: 12,
@@ -28183,7 +28780,13 @@ class _StatPill extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: TextStyle(color: cs.outline)),
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            softWrap: false,
+            style: TextStyle(color: cs.outline),
+          ),
           const SizedBox(height: 2),
           Text(value, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
         ],
@@ -28434,20 +29037,24 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
             : (_onlyRequests ? all.where((p) => p.kind == PostKind.request).toList() : all);
 
         return Scaffold(
-          appBar: AppBar(title: Text(c.name)),
-          floatingActionButton: FloatingActionButton(
-            onPressed: () {
-              if (repo.isOffline) {
-                showInfoSnackBar(context, 'Modo offline');
-                return;
-              }
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => PostComposerScreen(draft: ComposerDraft(initialCommunityId: c.id)),
+          appBar: AppBar(
+            title: Text(c.name),
+            actions: [
+              if (c.viewerStatus == CommunityViewerStatus.approved)
+                IconButton(
+                  tooltip: 'Criar post',
+                  icon: const Icon(Icons.edit_outlined),
+                  onPressed: repo.isOffline
+                      ? null
+                      : () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => PostComposerScreen(draft: ComposerDraft(initialCommunityId: c.id)),
+                            ),
+                          );
+                        },
                 ),
-              );
-            },
-            child: const Icon(Icons.add),
+            ],
           ),
           body: Column(
             children: [
@@ -28689,16 +29296,18 @@ class _CommunityMembersScreenState extends State<CommunityMembersScreen> {
                         separatorBuilder: (_, __) => const Divider(height: 1),
                         itemBuilder: (context, index) {
                           final p = members[index];
+                          final displayName = _displayNameForProfile(p);
+                          final displayUsername = _usernameForProfile(p, userId: p.userId);
                           final isAdmin = repo.isCommunityAdmin(c.id, p.userId);
                           final isMod = repo.isCommunityModerator(c.id, p.userId);
                           final badge = isAdmin ? 'Admin' : (isMod ? 'Mod' : null);
                           return ListTile(
-                            leading: Avatar(name: p.name, size: AvatarSize.s44),
+                            leading: Avatar(name: displayName, imageUrl: p.avatarUrl, size: AvatarSize.s44),
                             title: Row(
                               children: [
                                 Flexible(
                                   child: Text(
-                                    p.name,
+                                    displayName,
                                     style: const TextStyle(fontWeight: FontWeight.w800),
                                     overflow: TextOverflow.ellipsis,
                                   ),
@@ -28713,7 +29322,7 @@ class _CommunityMembersScreenState extends State<CommunityMembersScreen> {
                                 ],
                               ],
                             ),
-                            subtitle: Text('@${p.username}'),
+                            subtitle: Text('@$displayUsername'),
                             trailing: (!canManageRoles || p.userId == c.ownerId)
                                 ? null
                                 : PopupMenuButton<String>(
@@ -28800,10 +29409,12 @@ class _CommunityMembersScreenState extends State<CommunityMembersScreen> {
                           separatorBuilder: (_, __) => const Divider(height: 1),
                           itemBuilder: (context, index) {
                             final p = requests[index];
+                            final displayName = _displayNameForProfile(p);
+                            final displayUsername = _usernameForProfile(p, userId: p.userId);
                             return ListTile(
-                              leading: Avatar(name: p.name, size: AvatarSize.s44),
-                              title: Text(p.name, style: const TextStyle(fontWeight: FontWeight.w800)),
-                              subtitle: Text('@${p.username}'),
+                              leading: Avatar(name: displayName, imageUrl: p.avatarUrl, size: AvatarSize.s44),
+                              title: Text(displayName, style: const TextStyle(fontWeight: FontWeight.w800)),
+                              subtitle: Text('@$displayUsername'),
                               trailing: Wrap(
                                 spacing: 8,
                                 children: [
@@ -29064,7 +29675,7 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
                 Row(
                   children: [
                     Avatar(
-                      name: assigned?.username.trim().isNotEmpty == true ? assigned!.username.trim() : displayName,
+                      name: assigned == null ? displayName : _normalizeDisplayUsername(assigned.username, fallback: assigned.userId),
                       imageUrl: assigned?.avatarUrl,
                       size: AvatarSize.s44,
                     ),
@@ -30051,8 +30662,10 @@ class _PrayerRunSocialCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final displayName = assigned == null ? 'Usuário' : _profileDisplayLabel(assigned!);
-    final avatarName = assigned?.username.trim().isNotEmpty == true ? assigned!.username.trim() : displayName;
+    final assignedProfile = assigned;
+    final displayName = assignedProfile == null ? 'Usuário' : _profileDisplayLabel(assignedProfile);
+    final avatarName =
+        assignedProfile == null ? displayName : _normalizeDisplayUsername(assignedProfile.username, fallback: assignedProfile.userId);
     final durationMins = run.endsAt.difference(run.startsAt).inMinutes.clamp(1, 24 * 60);
     final isMine = (run.assignedUserId ?? '') == viewerUserId;
     final now = DateTime.now();
@@ -30868,32 +31481,44 @@ class CommunityDetailScreen extends StatelessWidget {
                               ],
                             ),
                             const SizedBox(height: 12),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: _StatPill(
-                                    label: 'Membros',
-                                    value: c.memberCount.toString(),
-                                    cs: cs,
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: _StatPill(
-                                    label: 'Pedidos',
-                                    value: requestCount.toString(),
-                                    cs: cs,
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: _StatPill(
-                                    label: 'Orações',
-                                    value: prayerSum.toString(),
-                                    cs: cs,
-                                  ),
-                                ),
-                              ],
+                            LayoutBuilder(
+                              builder: (context, constraints) {
+                                const gap = 10.0;
+                                final maxWidth = constraints.maxWidth;
+                                final threeColWidth = (maxWidth - (gap * 2)) / 3;
+                                final useTwoColumns = threeColWidth < 110;
+                                final itemWidth = useTwoColumns ? (maxWidth - gap) / 2 : threeColWidth;
+                                return Wrap(
+                                  spacing: gap,
+                                  runSpacing: gap,
+                                  children: [
+                                    SizedBox(
+                                      width: itemWidth,
+                                      child: _StatPill(
+                                        label: 'Membros',
+                                        value: c.memberCount.toString(),
+                                        cs: cs,
+                                      ),
+                                    ),
+                                    SizedBox(
+                                      width: itemWidth,
+                                      child: _StatPill(
+                                        label: 'Pedidos',
+                                        value: requestCount.toString(),
+                                        cs: cs,
+                                      ),
+                                    ),
+                                    SizedBox(
+                                      width: itemWidth,
+                                      child: _StatPill(
+                                        label: 'Orações',
+                                        value: prayerSum.toString(),
+                                        cs: cs,
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              },
                             ),
                           ],
                         ),
@@ -30905,12 +31530,20 @@ class CommunityDetailScreen extends StatelessWidget {
               const SizedBox(height: 12),
               if (c.description.trim().isNotEmpty) ...[
                 Card(
+                  elevation: 0,
+                  color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
                   child: Padding(
                     padding: const EdgeInsets.all(14),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Descrição', style: TextStyle(fontWeight: FontWeight.w900)),
+                        const Row(
+                          children: [
+                            Icon(Icons.info_outline, size: 18),
+                            SizedBox(width: 8),
+                            Text('Descrição', style: TextStyle(fontWeight: FontWeight.w800)),
+                          ],
+                        ),
                         const SizedBox(height: 10),
                         _ExpandableText(text: c.description, maxLines: 4),
                       ],
@@ -30920,12 +31553,20 @@ class CommunityDetailScreen extends StatelessWidget {
                 const SizedBox(height: 12),
               ],
               Card(
+                elevation: 0,
+                color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
                 child: Padding(
                   padding: const EdgeInsets.all(14),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Regras', style: TextStyle(fontWeight: FontWeight.w900)),
+                      const Row(
+                        children: [
+                          Icon(Icons.rule_outlined, size: 18),
+                          SizedBox(width: 8),
+                          Text('Regras', style: TextStyle(fontWeight: FontWeight.w800)),
+                        ],
+                      ),
                       const SizedBox(height: 10),
                       if (c.rules.isEmpty)
                         Text('Sem regras por enquanto.', style: TextStyle(color: cs.outline))
@@ -30983,61 +31624,120 @@ class CommunityDetailScreen extends StatelessWidget {
               ),
               if (c.viewerStatus == CommunityViewerStatus.approved) ...[
                 const SizedBox(height: 10),
-                SecondaryButton(
-                  label: 'Abrir feed',
-                  onPressed: () {
-                    Navigator.of(context).pushNamed(
-                      Routes.communityFeed,
-                      arguments: CommunityFeedArgs(communityId: c.id),
-                    );
-                  },
-                ),
-                const SizedBox(height: 10),
-                SecondaryButton(
-                  label: 'Escalas de oração',
-                  onPressed: () {
-                    Navigator.of(context).pushNamed(
-                      Routes.communityPrayerScales,
-                      arguments: CommunityArgs(communityId: c.id),
-                    );
-                  },
-                ),
-                const SizedBox(height: 10),
-                SecondaryButton(
-                  label: 'Eventos',
-                  onPressed: () {
-                    Navigator.of(context).pushNamed(
-                      Routes.communityEvents,
-                      arguments: CommunityArgs(communityId: c.id),
-                    );
-                  },
-                ),
-                const SizedBox(height: 10),
-                SecondaryButton(
-                  label: 'Membros',
-                  onPressed: () {
-                    Navigator.of(context).pushNamed(
-                      Routes.communityMembers,
-                      arguments: CommunityMembersArgs(communityId: c.id),
-                    );
-                  },
-                ),
-                const SizedBox(height: 10),
-                SecondaryButton(
-                  label: 'Abrir chat',
-                  onPressed: () {
-                    final t = RepoScope.of(context).openOrCreateCommunityThread(c.id);
-                    Navigator.of(context).pushNamed(
-                      Routes.chat,
-                      arguments: ChatArgs(
-                        threadId: t.id,
-                        peerName: c.name,
-                        peerUsername: 'grupo',
-                        peerIsVerified: false,
-                        communityId: c.id,
-                      ),
-                    );
-                  },
+                Align(
+                  alignment: Alignment.center,
+                  child: AtalaiaTextButton(
+                    label: 'Mais opções',
+                    onPressed: () {
+                      unawaited(
+                        showAtalaiaBottomSheet<void>(
+                          context,
+                          builder: (sheetContext) {
+                            return SafeArea(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const SizedBox(height: 6),
+                                  Container(
+                                    width: 44,
+                                    height: 4,
+                                    decoration: BoxDecoration(
+                                      color: Theme.of(context).colorScheme.outlineVariant,
+                                      borderRadius: BorderRadius.circular(999),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  ListTile(
+                                    leading: const Icon(Icons.rss_feed_outlined),
+                                    title: const Text('Abrir feed'),
+                                    trailing: const Icon(Icons.chevron_right),
+                                    onTap: () {
+                                      Navigator.of(sheetContext).pop();
+                                      Future<void>.delayed(const Duration(milliseconds: 1)).then((_) {
+                                        if (!context.mounted) return;
+                                        Navigator.of(context).pushNamed(
+                                          Routes.communityFeed,
+                                          arguments: CommunityFeedArgs(communityId: c.id),
+                                        );
+                                      });
+                                    },
+                                  ),
+                                  ListTile(
+                                    leading: const Icon(Icons.schedule_outlined),
+                                    title: const Text('Escalas de oração'),
+                                    trailing: const Icon(Icons.chevron_right),
+                                    onTap: () {
+                                      Navigator.of(sheetContext).pop();
+                                      Future<void>.delayed(const Duration(milliseconds: 1)).then((_) {
+                                        if (!context.mounted) return;
+                                        Navigator.of(context).pushNamed(
+                                          Routes.communityPrayerScales,
+                                          arguments: CommunityArgs(communityId: c.id),
+                                        );
+                                      });
+                                    },
+                                  ),
+                                  ListTile(
+                                    leading: const Icon(Icons.event_outlined),
+                                    title: const Text('Eventos'),
+                                    trailing: const Icon(Icons.chevron_right),
+                                    onTap: () {
+                                      Navigator.of(sheetContext).pop();
+                                      Future<void>.delayed(const Duration(milliseconds: 1)).then((_) {
+                                        if (!context.mounted) return;
+                                        Navigator.of(context).pushNamed(
+                                          Routes.communityEvents,
+                                          arguments: CommunityArgs(communityId: c.id),
+                                        );
+                                      });
+                                    },
+                                  ),
+                                  ListTile(
+                                    leading: const Icon(Icons.people_outline),
+                                    title: const Text('Membros'),
+                                    trailing: const Icon(Icons.chevron_right),
+                                    onTap: () {
+                                      Navigator.of(sheetContext).pop();
+                                      Future<void>.delayed(const Duration(milliseconds: 1)).then((_) {
+                                        if (!context.mounted) return;
+                                        Navigator.of(context).pushNamed(
+                                          Routes.communityMembers,
+                                          arguments: CommunityMembersArgs(communityId: c.id),
+                                        );
+                                      });
+                                    },
+                                  ),
+                                  ListTile(
+                                    leading: const Icon(Icons.forum_outlined),
+                                    title: const Text('Abrir chat'),
+                                    trailing: const Icon(Icons.chevron_right),
+                                    onTap: () {
+                                      Navigator.of(sheetContext).pop();
+                                      Future<void>.delayed(const Duration(milliseconds: 1)).then((_) {
+                                        if (!context.mounted) return;
+                                        final t = RepoScope.of(context).openOrCreateCommunityThread(c.id);
+                                        Navigator.of(context).pushNamed(
+                                          Routes.chat,
+                                          arguments: ChatArgs(
+                                            threadId: t.id,
+                                            peerName: c.name,
+                                            peerUsername: 'grupo',
+                                            peerIsVerified: false,
+                                            communityId: c.id,
+                                          ),
+                                        );
+                                      });
+                                    },
+                                  ),
+                                  const SizedBox(height: 10),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      );
+                    },
+                  ),
                 ),
               ] else if (c.viewerStatus == CommunityViewerStatus.pending) ...[
                 const SizedBox(height: 10),
@@ -31087,8 +31787,6 @@ class CommunityDetailScreen extends StatelessWidget {
   }
 }
 
-enum _CommunityMapTab { map, requests }
-
 class CommunityMapScreen extends StatefulWidget {
   const CommunityMapScreen({required this.args, super.key});
 
@@ -31098,8 +31796,140 @@ class CommunityMapScreen extends StatefulWidget {
   State<CommunityMapScreen> createState() => _CommunityMapScreenState();
 }
 
+enum _CommunityRequestTriageFilter { all, reported, hidden }
+
+enum _CommunityRequestTriageSort { newest, leastPrayed, mostPrayed, mostCommented }
+
 class _CommunityMapScreenState extends State<CommunityMapScreen> {
-  var _tab = _CommunityMapTab.map;
+  final TextEditingController _triageSearch = TextEditingController();
+  var _triageFilter = _CommunityRequestTriageFilter.all;
+  var _triageSort = _CommunityRequestTriageSort.newest;
+
+  @override
+  void dispose() {
+    _triageSearch.dispose();
+    super.dispose();
+  }
+
+  Future<void> _openTriageActionsSheet(
+    BuildContext context, {
+    required DemoRepository repo,
+    required PostModel post,
+    required int reportCount,
+    required List<ReportModel> reportsForPost,
+  }) async {
+    final isHidden = repo.isPostHidden(post.id);
+    final choice = await showAtalaiaBottomSheet<String>(
+      context,
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.open_in_new),
+                title: const Text('Abrir pedido'),
+                onTap: () => Navigator.of(ctx).pop('open'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.volunteer_activism_outlined),
+                title: const Text('Orar'),
+                onTap: () => Navigator.of(ctx).pop('pray'),
+              ),
+              ListTile(
+                leading: Icon(isHidden ? Icons.visibility_outlined : Icons.visibility_off_outlined),
+                title: Text(isHidden ? 'Reexibir' : 'Ocultar'),
+                onTap: () => Navigator.of(ctx).pop(isHidden ? 'unhide' : 'hide'),
+              ),
+              if (reportCount > 0)
+                ListTile(
+                  leading: const Icon(Icons.flag_outlined),
+                  title: Text('Ver denúncias ($reportCount)'),
+                  onTap: () => Navigator.of(ctx).pop('reports'),
+                ),
+              const Divider(height: 18),
+              ListTile(
+                leading: const Icon(Icons.copy_all_outlined),
+                title: const Text('Copiar ID do pedido'),
+                onTap: () => Navigator.of(ctx).pop('copy'),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (!context.mounted) return;
+
+    switch (choice) {
+      case 'open':
+        Navigator.of(context).pushNamed(
+          Routes.postDetail,
+          arguments: PostDetailArgs(postId: post.id),
+        );
+      case 'pray':
+        repo.togglePrayer(post.id, isAuthenticated: true);
+        showInfoSnackBar(context, 'Oração registrada');
+      case 'hide':
+        repo.hidePost(post.id);
+        showAtalaiaSnackBar(
+          context,
+          'Post ocultado',
+          actionLabel: 'Desfazer',
+          onAction: () => repo.unhidePost(post.id),
+        );
+      case 'unhide':
+        repo.unhidePost(post.id);
+        showInfoSnackBar(context, 'Post reexibido');
+      case 'reports':
+        if (reportsForPost.isEmpty) return;
+        unawaited(
+          showAtalaiaBottomSheet<void>(
+            context,
+            builder: (ctx) {
+              return SafeArea(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const ListTile(
+                      title: Text('Denúncias', style: TextStyle(fontWeight: FontWeight.w900)),
+                    ),
+                    ...reportsForPost.map(
+                      (r) {
+                        final statusLabel = switch (r.status) {
+                          ReportStatus.open => 'aberta',
+                          ReportStatus.reviewing => 'em análise',
+                          ReportStatus.resolved => 'resolvida',
+                          ReportStatus.dismissed => 'dispensada',
+                        };
+                        final desc = (r.description ?? '').trim();
+                        return ListTile(
+                          leading: const Icon(Icons.flag_outlined),
+                          title: Text(r.reason.isEmpty ? 'Sem motivo' : r.reason),
+                          subtitle: Text(
+                            'Status: $statusLabel${desc.isEmpty ? '' : '\n$desc'}',
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                  ],
+                ),
+              );
+            },
+          ),
+        );
+      case 'copy':
+        await Clipboard.setData(ClipboardData(text: post.id));
+        if (!context.mounted) return;
+        showInfoSnackBar(context, 'ID copiado');
+      default:
+        return;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -31125,77 +31955,311 @@ class _CommunityMapScreenState extends State<CommunityMapScreen> {
         final posts = repo.postsForCommunity(s, c.id);
         final requestPosts = posts.where((p) => p.kind == PostKind.request).toList(growable: false);
         final map = MapScreen(key: ValueKey('community_map:${c.id}'), initialCommunityId: c.id);
+        final canModerate = repo.canModerateCommunity(c.id, s.userId);
 
-        return Scaffold(
-          appBar: AppBar(title: Text(c.name)),
-          body: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-                child: SegmentedButton<_CommunityMapTab>(
-                  segments: const [
-                    ButtonSegment(value: _CommunityMapTab.map, label: Text('Mapa')),
-                    ButtonSegment(value: _CommunityMapTab.requests, label: Text('Pedidos')),
-                  ],
-                  selected: {_tab},
-                  onSelectionChanged: (s) => setState(() => _tab = s.first),
+        return DefaultTabController(
+          length: canModerate ? 3 : 2,
+          child: Scaffold(
+            appBar: AppBar(
+              title: Text(c.name),
+              actions: [
+                Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: IconButton(
+                    tooltip: 'Novo pedido',
+                    icon: const Icon(Icons.add),
+                    onPressed: repo.isOffline
+                        ? null
+                        : () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => PostComposerScreen(draft: ComposerDraft(initialCommunityId: c.id)),
+                              ),
+                            );
+                          },
+                  ),
                 ),
+              ],
+              bottom: TabBar(
+                tabs: [
+                  const Tab(text: 'Mapa'),
+                  Tab(text: requestPosts.isEmpty ? 'Pedidos' : 'Pedidos (${requestPosts.length})'),
+                  if (canModerate) const Tab(text: 'Triagem'),
+                ],
               ),
-              Expanded(
-                child: IndexedStack(
-                  index: _tab == _CommunityMapTab.map ? 0 : 1,
-                  children: [
-                    map,
-                    requestPosts.isEmpty
-                        ? Center(
-                            child: Text(
-                              'Nenhum pedido nesta comunidade ainda.',
-                              style: TextStyle(color: Theme.of(context).colorScheme.outline),
-                            ),
-                          )
-                        : ListView.builder(
-                            padding: const EdgeInsets.only(top: 8, bottom: 8),
-                            itemCount: requestPosts.length,
-                            itemBuilder: (context, index) {
-                              final post = requestPosts[index];
-                              return PostCard(
-                                post: post,
-                                isAuthenticated: true,
-                                onOpenPost: () {
-                                  Navigator.of(context).pushNamed(
-                                    Routes.postDetail,
-                                    arguments: PostDetailArgs(postId: post.id),
-                                  );
-                                },
-                                onLike: () => repo.toggleLike(post.id, isAuthenticated: true),
-                                onPray: () {
-                                  repo.togglePrayer(post.id, isAuthenticated: true);
-                                  showInfoSnackBar(context, 'Oração registrada');
-                                },
-                                onComment: () {
-                                  Navigator.of(context).pushNamed(
-                                    Routes.postDetail,
-                                    arguments: PostDetailArgs(postId: post.id),
-                                  );
-                                },
-                                onShare: () async {
-                                  await showShareSheet(context, post: post, isAuthenticated: true);
-                                },
-                                onSave: () {
-                                  final willSave = !post.viewerHasSaved;
-                                  repo.toggleSave(post.id, isAuthenticated: true);
-                                  if (willSave) showInfoSnackBar(context, 'Salvo');
-                                },
+            ),
+            body: TabBarView(
+              children: [
+                map,
+                requestPosts.isEmpty
+                    ? Center(
+                        child: Text(
+                          'Nenhum pedido nesta comunidade ainda.',
+                          style: TextStyle(color: Theme.of(context).colorScheme.outline),
+                        ),
+                      )
+                    : ListView.builder(
+                        padding: const EdgeInsets.only(top: 8, bottom: 8),
+                        itemCount: requestPosts.length,
+                        itemBuilder: (context, index) {
+                          final post = requestPosts[index];
+                          return PostCard(
+                            post: post,
+                            isAuthenticated: true,
+                            onOpenPost: () {
+                              Navigator.of(context).pushNamed(
+                                Routes.postDetail,
+                                arguments: PostDetailArgs(postId: post.id),
                               );
                             },
+                            onLike: () => repo.toggleLike(post.id, isAuthenticated: true),
+                            onPray: () {
+                              repo.togglePrayer(post.id, isAuthenticated: true);
+                              showInfoSnackBar(context, 'Oração registrada');
+                            },
+                            onComment: () {
+                              Navigator.of(context).pushNamed(
+                                Routes.postDetail,
+                                arguments: PostDetailArgs(postId: post.id),
+                              );
+                            },
+                            onShare: () async {
+                              await showShareSheet(context, post: post, isAuthenticated: true);
+                            },
+                            onSave: () {
+                              final willSave = !post.viewerHasSaved;
+                              repo.toggleSave(post.id, isAuthenticated: true);
+                              if (willSave) showInfoSnackBar(context, 'Salvo');
+                            },
+                          );
+                        },
+                      ),
+                if (canModerate)
+                  Builder(
+                    builder: (context) {
+                      final activeReports = repo
+                          .reportsForModeration()
+                          .where((r) => r.entityType == ReportEntityType.post)
+                          .where((r) => r.status == ReportStatus.open || r.status == ReportStatus.reviewing)
+                          .toList(growable: false);
+                      final reportCountByPostId = <String, int>{};
+                      for (final r in activeReports) {
+                        reportCountByPostId.update(r.entityId, (v) => v + 1, ifAbsent: () => 1);
+                      }
+
+                      final q = _triageSearch.text.trim().toLowerCase();
+                      final filtered = requestPosts.where((p) {
+                        if (_triageFilter == _CommunityRequestTriageFilter.reported) {
+                          if ((reportCountByPostId[p.id] ?? 0) <= 0) return false;
+                        } else if (_triageFilter == _CommunityRequestTriageFilter.hidden) {
+                          if (!repo.isPostHidden(p.id)) return false;
+                        }
+                        if (q.isEmpty) return true;
+                        final body = p.body.toLowerCase();
+                        final user = p.username.toLowerCase();
+                        return body.contains(q) || user.contains(q);
+                      }).toList(growable: true);
+
+                      filtered.sort((a, b) {
+                        int byNum(int a, int b) => a.compareTo(b);
+                        int byDate(DateTime a, DateTime b) => b.compareTo(a);
+                        return switch (_triageSort) {
+                          _CommunityRequestTriageSort.newest => byDate(a.createdAt, b.createdAt),
+                          _CommunityRequestTriageSort.leastPrayed =>
+                            byNum(a.prayerCount, b.prayerCount) != 0 ? byNum(a.prayerCount, b.prayerCount) : byDate(a.createdAt, b.createdAt),
+                          _CommunityRequestTriageSort.mostPrayed =>
+                            byNum(b.prayerCount, a.prayerCount) != 0 ? byNum(b.prayerCount, a.prayerCount) : byDate(a.createdAt, b.createdAt),
+                          _CommunityRequestTriageSort.mostCommented =>
+                            byNum(b.commentCount, a.commentCount) != 0 ? byNum(b.commentCount, a.commentCount) : byDate(a.createdAt, b.createdAt),
+                        };
+                      });
+
+                      String labelForSort(_CommunityRequestTriageSort s) {
+                        return switch (s) {
+                          _CommunityRequestTriageSort.newest => 'Mais recentes',
+                          _CommunityRequestTriageSort.leastPrayed => 'Menos orações',
+                          _CommunityRequestTriageSort.mostPrayed => 'Mais orações',
+                          _CommunityRequestTriageSort.mostCommented => 'Mais comentários',
+                        };
+                      }
+
+                      return Column(
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+                            child: SearchField(
+                              controller: _triageSearch,
+                              hintText: 'Buscar pedidos',
+                              onChanged: (_) => setState(() {}),
+                            ),
                           ),
-                  ],
-                ),
-              ),
-            ],
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: SegmentedButton<_CommunityRequestTriageFilter>(
+                                    segments: const [
+                                      ButtonSegment(value: _CommunityRequestTriageFilter.all, label: Text('Todos')),
+                                      ButtonSegment(value: _CommunityRequestTriageFilter.reported, label: Text('Denúncias')),
+                                      ButtonSegment(value: _CommunityRequestTriageFilter.hidden, label: Text('Ocultos')),
+                                    ],
+                                    selected: {_triageFilter},
+                                    onSelectionChanged: (s) => setState(() => _triageFilter = s.first),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                PopupMenuButton<_CommunityRequestTriageSort>(
+                                  tooltip: 'Ordenar',
+                                  icon: const Icon(Icons.sort),
+                                  initialValue: _triageSort,
+                                  onSelected: (v) => setState(() => _triageSort = v),
+                                  itemBuilder: (_) => [
+                                    for (final v in _CommunityRequestTriageSort.values)
+                                      PopupMenuItem(value: v, child: Text(labelForSort(v))),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                          Expanded(
+                            child: filtered.isEmpty
+                                ? Center(
+                                    child: Text(
+                                      _triageFilter == _CommunityRequestTriageFilter.reported
+                                          ? 'Nenhuma denúncia em pedidos.'
+                                          : _triageFilter == _CommunityRequestTriageFilter.hidden
+                                              ? 'Nenhum pedido oculto.'
+                                              : 'Nenhum pedido nesta comunidade ainda.',
+                                      style: TextStyle(color: Theme.of(context).colorScheme.outline),
+                                    ),
+                                  )
+                                : ListView.separated(
+                                    padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+                                    itemCount: filtered.length,
+                                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                                    itemBuilder: (context, index) {
+                                      final post = filtered[index];
+                                      final firstLine = post.body.trim().split('\n').first.trim();
+                                      final title = firstLine.isEmpty ? 'Pedido de oração' : firstLine;
+                                      final shortTitle = title.length > 120 ? '${title.substring(0, 120)}…' : title;
+                                      final when = _formatRelativeTimeForUser(context, post.createdAt);
+                                      final reportCount = reportCountByPostId[post.id] ?? 0;
+                                      final isHidden = repo.isPostHidden(post.id);
+                                      final reportsForPost = activeReports.where((r) => r.entityId == post.id).toList(growable: false);
+                                      final cs = Theme.of(context).colorScheme;
+                                      final p = repo.profileForUserId(post.userId);
+                                      final displayUsername = _usernameForProfile(p, userId: post.userId);
+
+                                      return Card(
+                                        child: ListTile(
+                                          title: Text(shortTitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+                                          subtitle: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              const SizedBox(height: 4),
+                                              Text(
+                                                '@$displayUsername • $when',
+                                                style: TextStyle(color: cs.onSurfaceVariant),
+                                              ),
+                                              const SizedBox(height: 8),
+                                              Wrap(
+                                                spacing: 6,
+                                                runSpacing: 6,
+                                                children: [
+                                                  _TriageMetricChip(
+                                                    icon: Icons.volunteer_activism_outlined,
+                                                    label: '${post.prayerCount}',
+                                                  ),
+                                                  _TriageMetricChip(
+                                                    icon: Icons.mode_comment_outlined,
+                                                    label: '${post.commentCount}',
+                                                  ),
+                                                  if (reportCount > 0)
+                                                    _TriageMetricChip(
+                                                      icon: Icons.flag_outlined,
+                                                      label: '$reportCount',
+                                                      fg: cs.onErrorContainer,
+                                                      bg: cs.errorContainer,
+                                                    ),
+                                                  if (isHidden)
+                                                    _TriageMetricChip(
+                                                      icon: Icons.visibility_off_outlined,
+                                                      label: 'Oculto',
+                                                      fg: cs.onSurfaceVariant,
+                                                      bg: cs.surfaceContainerHighest,
+                                                    ),
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                          isThreeLine: true,
+                                          onTap: () {
+                                            Navigator.of(context).pushNamed(
+                                              Routes.postDetail,
+                                              arguments: PostDetailArgs(postId: post.id),
+                                            );
+                                          },
+                                          trailing: IconButton(
+                                            icon: const Icon(Icons.more_horiz),
+                                            onPressed: () => unawaited(
+                                              _openTriageActionsSheet(
+                                                context,
+                                                repo: repo,
+                                                post: post,
+                                                reportCount: reportCount,
+                                                reportsForPost: reportsForPost,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+              ],
+            ),
           ),
         );
       },
+    );
+  }
+}
+
+class _TriageMetricChip extends StatelessWidget {
+  const _TriageMetricChip({required this.icon, required this.label, this.fg, this.bg});
+
+  final IconData icon;
+  final String label;
+  final Color? fg;
+  final Color? bg;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final background = bg ?? cs.surfaceContainerHighest;
+    final foreground = fg ?? cs.onSurface;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: cs.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 16, color: foreground),
+            const SizedBox(width: 6),
+            Text(label, style: TextStyle(color: foreground, fontWeight: FontWeight.w800)),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -31453,7 +32517,13 @@ class UserProfileScreen extends StatelessWidget {
               const SizedBox(height: 12),
               TabBar(
                 labelColor: cs.onSurface,
-                indicatorColor: cs.onSurface,
+                unselectedLabelColor: cs.onSurfaceVariant,
+                dividerColor: Colors.transparent,
+                indicator: BoxDecoration(
+                  color: cs.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                indicatorPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
                 tabs: const [
                   Tab(icon: Icon(Icons.view_agenda_outlined)),
                   Tab(icon: Icon(Icons.grid_on_outlined)),
@@ -31478,33 +32548,7 @@ class UserProfileScreen extends StatelessWidget {
           ),
         );
 
-        if (embedded) {
-          return Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(AtalaiaSpacing.md, AtalaiaSpacing.md, 8, 0),
-                child: Row(
-                  children: [
-                    Text('@${profile.username}', style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 20)),
-                    const Spacer(),
-                    if (isMe)
-                      AtalaiaIconButton(
-                        icon: Icons.add,
-                        label: 'Criar post',
-                        onPressed: () => Navigator.of(context).pushNamed(Routes.createPost),
-                      ),
-                    PopupMenuButton<String>(
-                      icon: const Icon(Icons.more_horiz),
-                      onSelected: (v) => unawaited(onMenuSelected(v)),
-                      itemBuilder: (_) => menuItems(),
-                    ),
-                  ],
-                ),
-              ),
-              Expanded(child: profileBody),
-            ],
-          );
-        }
+        if (embedded) return profileBody;
 
         return Scaffold(
           appBar: AppBar(
@@ -31515,7 +32559,10 @@ class UserProfileScreen extends StatelessWidget {
                     onPressed: () => Navigator.of(context).maybePop(),
                   )
                 : null,
-            title: Text('@${profile.username}', style: const TextStyle(fontWeight: FontWeight.w800)),
+            title: Text(
+              '@${_usernameForProfile(profile, userId: profile.userId)}',
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
             actions: [
               if (isMe)
                 AtalaiaIconButton(
@@ -31559,16 +32606,30 @@ class _ProfileHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final displayName = _displayNameForProfile(profile);
+    final displayUsername = _usernameForProfile(profile, userId: profile.userId);
     return Card(
+      elevation: 0,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Avatar(name: profile.username, imageUrl: profile.avatarUrl, size: AvatarSize.s96),
+                Container(
+                  width: 104,
+                  height: 104,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: cs.outlineVariant, width: 1.2),
+                  ),
+                  alignment: Alignment.center,
+                  child: Avatar(name: displayName, imageUrl: profile.avatarUrl, size: AvatarSize.s96),
+                ),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Column(
@@ -31578,8 +32639,8 @@ class _ProfileHeader extends StatelessWidget {
                         children: [
                           Expanded(
                             child: Text(
-                              profile.name,
-                              style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18),
+                              displayName,
+                              style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 19, letterSpacing: 0.1),
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
@@ -31590,39 +32651,29 @@ class _ProfileHeader extends StatelessWidget {
                         ],
                       ),
                       const SizedBox(height: 2),
-                      Text('@${profile.username}', style: TextStyle(color: cs.outline)),
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          AtalaiaTagChip(
-                            label: 'Reputação: ${profile.reputationScore}',
-                            icon: Icons.star_border,
-                          ),
-                          AtalaiaTagChip(
-                            label: 'Nível: ${_reputationLevelLabel(profile.reputationLevel)}',
-                            icon: Icons.shield_outlined,
-                          ),
-                          if (profile.verificationType != VerificationType.none)
-                            AtalaiaTagChip(
-                              label: _verificationTypeLabel(profile.verificationType),
-                              icon: Icons.verified_outlined,
-                              color: context.brand.verifiedBlue,
-                            ),
-                        ],
+                      Text(
+                        '@$displayUsername',
+                        style: AtalaiaText.meta(context).copyWith(fontWeight: FontWeight.w700),
                       ),
+                      if (profile.verificationType != VerificationType.none) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          _verificationTypeLabel(profile.verificationType),
+                          style: TextStyle(color: cs.onSurfaceVariant, fontWeight: FontWeight.w800),
+                        ),
+                      ],
                       if (profile.bio.trim().isNotEmpty) ...[
                         const SizedBox(height: 10),
                         Text(
                           profile.bio,
                           maxLines: 3,
                           overflow: TextOverflow.ellipsis,
+                          style: AtalaiaText.sub(context),
                         ),
                       ],
                       if ((profile.churchName ?? '').trim().isNotEmpty) ...[
                         const SizedBox(height: 8),
-                        Text(profile.churchName!, style: TextStyle(color: cs.outline)),
+                        Text(profile.churchName!, style: AtalaiaText.meta(context).copyWith(fontWeight: FontWeight.w700)),
                       ],
                     ],
                   ),
@@ -31639,14 +32690,13 @@ class _ProfileHeader extends StatelessWidget {
               Row(
                 children: [
                   Expanded(
-                    child: SecondaryButton(
-                      label: isFollowing ? 'Seguindo' : 'Seguir',
-                      onPressed: onToggleFollow,
-                    ),
+                    child: isFollowing
+                        ? SecondaryButton(label: 'Seguindo', onPressed: onToggleFollow)
+                        : PrimaryButton(label: 'Seguir', onPressed: onToggleFollow),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: PrimaryButton(label: 'Mensagem', onPressed: onMessage),
+                    child: SecondaryButton(label: 'Mensagem', onPressed: onMessage),
                   ),
                 ],
               ),
@@ -31676,10 +32726,12 @@ class _ProfileStatsRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     return Card(
+      elevation: 0,
+      surfaceTintColor: Colors.transparent,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
         child: Row(
           children: [
             Expanded(child: _ProfileStat(label: 'Posts', value: postsCount.toString(), onTap: () {})),
@@ -31692,7 +32744,6 @@ class _ProfileStatsRow extends StatelessWidget {
                 onTap: () => showInfoSnackBar(context, 'Orações recebidas'),
               ),
             ),
-            Container(width: 1, height: 38, color: cs.outlineVariant),
           ],
         ),
       ),
@@ -31717,9 +32768,17 @@ class _ProfileStat extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Column(
           children: [
-            Text(value, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
-            const SizedBox(height: 2),
-            Text(label, style: TextStyle(color: cs.outline, fontWeight: FontWeight.w600)),
+            Text(value, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 17, height: 1.05)),
+            const SizedBox(height: 1),
+            Text(
+              label,
+              style: TextStyle(
+                color: cs.onSurfaceVariant,
+                fontWeight: FontWeight.w600,
+                fontSize: 11,
+                height: 1.1,
+              ),
+            ),
           ],
         ),
       ),
@@ -31791,6 +32850,8 @@ class _ProfilePostsListState extends State<_ProfilePostsList> {
                     return PostCard(
                       post: post,
                       isAuthenticated: widget.isAuthenticated,
+                      margin: const EdgeInsets.fromLTRB(0, 0, 0, 12),
+                      compact: true,
                       onOpenPost: () {
                         Navigator.of(context).pushNamed(
                           Routes.postDetail,
@@ -31848,14 +32909,16 @@ class _ProfileMediaGrid extends StatelessWidget {
       padding: EdgeInsets.zero,
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
-        crossAxisSpacing: 6,
-        mainAxisSpacing: 6,
+        crossAxisSpacing: 3,
+        mainAxisSpacing: 3,
       ),
       itemCount: posts.length,
       itemBuilder: (context, i) {
         final post = posts[i];
+        final url = (post.mediaUrl ?? '').trim();
+        final hasNetwork = url.isNotEmpty && (url.startsWith('https://') || url.startsWith('http://'));
         return ClipRRect(
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(12),
           child: Material(
             color: cs.surfaceContainerHighest,
             child: InkWell(
@@ -31867,13 +32930,28 @@ class _ProfileMediaGrid extends StatelessWidget {
               },
               child: Stack(
                 children: [
-                  Center(child: Icon(Icons.image_outlined, color: cs.outline)),
+                  Positioned.fill(
+                    child: hasNetwork
+                        ? Image.network(
+                            url,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => Center(child: Icon(Icons.image_outlined, color: cs.outline)),
+                          )
+                        : Center(child: Icon(Icons.image_outlined, color: cs.outline)),
+                  ),
                   if (post.mediaKind == 'video')
                     Align(
                       alignment: Alignment.topRight,
                       child: Padding(
                         padding: const EdgeInsets.all(6),
-                        child: Icon(Icons.videocam, size: 16, color: cs.onSurface),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: cs.surface.withValues(alpha: 0.82),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Icon(Icons.videocam, size: 16, color: cs.onSurface),
+                        ),
                       ),
                     ),
                 ],
@@ -31927,7 +33005,9 @@ class _FollowersFollowingScreenState extends State<FollowersFollowingScreen> wit
       builder: (context, _) {
         final isAuthenticated = session.value.isAuthenticated;
         final profile = repo.profileForUserId(widget.args.userId);
-        final title = profile == null ? 'Seguidores' : '@${profile.username}';
+        final title = profile == null
+            ? 'Seguidores'
+            : '@${_usernameForProfile(profile, userId: profile.userId)}';
 
         final followers = repo.followersForUser(widget.args.userId, query: _query);
         final following = repo.followingForUser(widget.args.userId, query: _query);
@@ -32045,7 +33125,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   final _name = TextEditingController();
   final _bio = TextEditingController();
   final _church = TextEditingController();
-  final _username = TextEditingController();
 
   var _saving = false;
   double? _savingProgress;
@@ -32056,7 +33135,6 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     _name.dispose();
     _bio.dispose();
     _church.dispose();
-    _username.dispose();
     super.dispose();
   }
 
@@ -32108,12 +33186,13 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           _name.text = profile.name;
           _bio.text = profile.bio;
           _church.text = profile.churchName ?? '';
-          _username.text = '@${profile.username}';
           _loaded = true;
         }
 
         final canSave = _isValid() && !_saving;
         final cs = Theme.of(context).colorScheme;
+        final displayName = _displayNameForProfile(profile);
+        final displayUsername = _usernameForProfile(profile, userId: profile.userId);
 
         Future<void> onSave() async {
           if (!canSave) return;
@@ -32167,14 +33246,14 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   padding: const EdgeInsets.all(12),
                   child: Row(
                     children: [
-                      Avatar(name: profile.username, imageUrl: profile.avatarUrl, size: AvatarSize.s72),
+                      Avatar(name: displayName, imageUrl: profile.avatarUrl, size: AvatarSize.s72),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(profile.name, style: const TextStyle(fontWeight: FontWeight.w900)),
-                            Text('@${profile.username}', style: TextStyle(color: cs.outline)),
+                            Text(displayName, style: const TextStyle(fontWeight: FontWeight.w900)),
+                            Text('@$displayUsername', style: TextStyle(color: cs.outline)),
                           ],
                         ),
                       ),
@@ -32194,26 +33273,27 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               const SizedBox(height: 12),
               AtalaiaTextField(
                 controller: _name,
-                hintText: 'Nome',
+                labelText: 'Nome',
+                hintText: 'Seu nome',
                 textInputAction: TextInputAction.next,
                 onChanged: (_) => setState(() {}),
               ),
               const SizedBox(height: 12),
               AtalaiaTextField(
-                controller: _username,
-                hintText: '@username',
-                enabled: false,
-              ),
-              const SizedBox(height: 12),
-              MultiLineComposer(
                 controller: _bio,
-                hintText: 'Bio',
+                labelText: 'Bio',
+                hintText: 'Conte um pouco sobre você…',
                 errorText: null,
+                minLines: 3,
+                maxLines: 6,
+                textInputAction: TextInputAction.newline,
+                keyboardType: TextInputType.multiline,
               ),
               const SizedBox(height: 12),
               AtalaiaTextField(
                 controller: _church,
-                hintText: 'Igreja (opcional)',
+                labelText: 'Igreja (opcional)',
+                hintText: 'Ex.: Assembleia de Deus',
                 textInputAction: TextInputAction.done,
                 onChanged: (_) => setState(() {}),
               ),
@@ -33288,6 +34368,8 @@ class PeopleResultRow extends StatelessWidget {
     final repo = RepoScope.of(context);
     final cs = Theme.of(context).colorScheme;
     final following = repo.isFollowingUser(profile.userId);
+    final displayName = _displayNameForProfile(profile);
+    final displayUsername = _usernameForProfile(profile, userId: profile.userId);
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
@@ -33301,7 +34383,7 @@ class PeopleResultRow extends StatelessWidget {
         },
         child: Row(
           children: [
-            Avatar(name: profile.username, size: AvatarSize.s44),
+            Avatar(name: displayName, imageUrl: profile.avatarUrl, size: AvatarSize.s44),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -33311,7 +34393,7 @@ class PeopleResultRow extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Text(
-                          profile.name,
+                          displayName,
                           style: const TextStyle(fontWeight: FontWeight.w900),
                           overflow: TextOverflow.ellipsis,
                         ),
@@ -33325,8 +34407,8 @@ class PeopleResultRow extends StatelessWidget {
                   const SizedBox(height: 2),
                   Text(
                     profile.churchName == null
-                        ? '@${profile.username}'
-                        : '@${profile.username} • ${profile.churchName}',
+                        ? '@$displayUsername'
+                        : '@$displayUsername • ${profile.churchName}',
                     style: TextStyle(color: cs.outline),
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -33365,7 +34447,7 @@ class PostResultRow extends StatelessWidget {
     final repo = RepoScope.of(context);
     final cs = Theme.of(context).colorScheme;
     final hasMedia = post.mediaKind != null;
-    final isVerified = repo.profileForUserId(post.userId)?.isVerified ?? post.isVerified;
+    final identity = _identityForUserId(repo, post.userId, legacyVerified: post.isVerified);
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
@@ -33387,11 +34469,11 @@ class PostResultRow extends StatelessWidget {
                   Row(
                     children: [
                       Text(
-                        post.username,
+                        identity.displayName,
                         style: const TextStyle(fontWeight: FontWeight.w900),
                         overflow: TextOverflow.ellipsis,
                       ),
-                      if (isVerified) ...[
+                      if (identity.isVerified) ...[
                         const SizedBox(width: 6),
                         Icon(Icons.verified, size: 16, color: context.brand.verifiedBlue),
                       ],
@@ -33406,10 +34488,37 @@ class PostResultRow extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                   ),
                   const SizedBox(height: 6),
-                  Text(
-                    '${post.prayerCount} orações  •  ${post.likeCount} curtidas',
-                    style: TextStyle(color: cs.outline, fontWeight: FontWeight.w600),
-                  ),
+                  if (post.prayerCount > 0 || post.likeCount > 0 || post.commentCount > 0)
+                    Row(
+                      children: [
+                        if (post.prayerCount > 0) ...[
+                          Icon(Icons.volunteer_activism_outlined, size: 16, color: const Color(0xFF2E7D32)),
+                          const SizedBox(width: 6),
+                          Text(
+                            '${post.prayerCount}',
+                            style: TextStyle(color: cs.outline, fontWeight: FontWeight.w700),
+                          ),
+                        ],
+                        if (post.prayerCount > 0 && (post.likeCount > 0 || post.commentCount > 0)) const SizedBox(width: 12),
+                        if (post.likeCount > 0) ...[
+                          Icon(Icons.favorite, size: 16, color: cs.error),
+                          const SizedBox(width: 6),
+                          Text(
+                            '${post.likeCount}',
+                            style: TextStyle(color: cs.outline, fontWeight: FontWeight.w700),
+                          ),
+                        ],
+                        if (post.likeCount > 0 && post.commentCount > 0) const SizedBox(width: 12),
+                        if (post.commentCount > 0) ...[
+                          Icon(Icons.chat_bubble_outline, size: 16, color: cs.outline),
+                          const SizedBox(width: 6),
+                          Text(
+                            '${post.commentCount}',
+                            style: TextStyle(color: cs.outline, fontWeight: FontWeight.w700),
+                          ),
+                        ],
+                      ],
+                    ),
                 ],
               ),
             ),
@@ -33673,8 +34782,18 @@ class NotificationsScreen extends StatefulWidget {
   State<NotificationsScreen> createState() => _NotificationsScreenState();
 }
 
+enum _NotificationsFilter { all, unread, social, prayer, alerts, scales }
+
+final class _NotificationGroup {
+  _NotificationGroup(this.latest, this.items);
+
+  NotificationModel latest;
+  final List<NotificationModel> items;
+}
+
 class _NotificationsScreenState extends State<NotificationsScreen> {
   var _loading = true;
+  var _filter = _NotificationsFilter.all;
 
   @override
   void initState() {
@@ -33725,6 +34844,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         final isAuthenticated = viewerId != null;
 
         final notifs = viewerId == null ? const <NotificationModel>[] : repo.notificationsFor(viewerId);
+        final filteredNotifs = _applyNotificationsFilter(notifs, filter: _filter);
         final cs = Theme.of(context).colorScheme;
 
         return Scaffold(
@@ -33770,6 +34890,46 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           body: Column(
             children: [
               if (repo.isOffline) OfflineBanner(onRetry: () => repo.setOffline(false)),
+              if (isAuthenticated)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      AtalaiaFilterChip(
+                        selected: _filter == _NotificationsFilter.all,
+                        label: 'Todas',
+                        onSelected: (_) => setState(() => _filter = _NotificationsFilter.all),
+                      ),
+                      AtalaiaFilterChip(
+                        selected: _filter == _NotificationsFilter.unread,
+                        label: 'Não lidas',
+                        onSelected: (_) => setState(() => _filter = _NotificationsFilter.unread),
+                      ),
+                      AtalaiaFilterChip(
+                        selected: _filter == _NotificationsFilter.social,
+                        label: 'Social',
+                        onSelected: (_) => setState(() => _filter = _NotificationsFilter.social),
+                      ),
+                      AtalaiaFilterChip(
+                        selected: _filter == _NotificationsFilter.prayer,
+                        label: 'Oração',
+                        onSelected: (_) => setState(() => _filter = _NotificationsFilter.prayer),
+                      ),
+                      AtalaiaFilterChip(
+                        selected: _filter == _NotificationsFilter.alerts,
+                        label: 'Alertas',
+                        onSelected: (_) => setState(() => _filter = _NotificationsFilter.alerts),
+                      ),
+                      AtalaiaFilterChip(
+                        selected: _filter == _NotificationsFilter.scales,
+                        label: 'Escalas',
+                        onSelected: (_) => setState(() => _filter = _NotificationsFilter.scales),
+                      ),
+                    ],
+                  ),
+                ),
               Expanded(
                 child: !isAuthenticated
                     ? Center(
@@ -33788,14 +34948,18 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                 separatorBuilder: (_, __) => const SizedBox(height: 10),
                                 itemBuilder: (context, index) => const _NotificationRowSkeleton(),
                               )
-                            : notifs.isEmpty
+                            : filteredNotifs.isEmpty
                                 ? ListView(
                                     physics: const AlwaysScrollableScrollPhysics(),
                                     children: [
                                       SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
-                                      const EmptyState(
+                                      EmptyState(
                                         icon: Icons.volunteer_activism_outlined,
-                                        title: 'Você ainda não tem notificações.',
+                                        title: _filter == _NotificationsFilter.unread
+                                            ? 'Você não tem notificações não lidas.'
+                                            : 'Você ainda não tem notificações.',
+                                        ctaLabel: _filter == _NotificationsFilter.all ? null : 'Ver todas',
+                                        onCta: _filter == _NotificationsFilter.all ? null : () => setState(() => _filter = _NotificationsFilter.all),
                                       ),
                                     ],
                                   )
@@ -33806,7 +34970,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                       context,
                                       repo: repo,
                                       viewerId: viewerId,
-                                      notifications: notifs,
+                                      notifications: filteredNotifs,
                                       cs: cs,
                                     ),
                                   ),
@@ -33819,6 +34983,35 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     );
   }
 
+  List<NotificationModel> _applyNotificationsFilter(
+    List<NotificationModel> notifications, {
+    required _NotificationsFilter filter,
+  }) {
+    bool matches(NotificationModel n) {
+      if (filter == _NotificationsFilter.unread) return !n.isRead;
+      if (filter == _NotificationsFilter.all) return true;
+      if (filter == _NotificationsFilter.alerts) return n.type == NotificationType.alertNew;
+      if (filter == _NotificationsFilter.scales) {
+        return n.type == NotificationType.scaleReminder24h ||
+            n.type == NotificationType.scaleReminder1h ||
+            (n.entityType == 'community_prayer_run');
+      }
+      if (filter == _NotificationsFilter.prayer) {
+        return n.type == NotificationType.prayed || n.type == NotificationType.prayerRequest;
+      }
+      if (filter == _NotificationsFilter.social) {
+        return n.type == NotificationType.follow ||
+            n.type == NotificationType.reaction ||
+            n.type == NotificationType.comment ||
+            n.type == NotificationType.postNew ||
+            n.type == NotificationType.storyNew;
+      }
+      return true;
+    }
+
+    return notifications.where(matches).toList(growable: false);
+  }
+
   List<Widget> _buildNotificationSections(
     BuildContext context, {
     required DemoRepository repo,
@@ -33827,93 +35020,154 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     required ColorScheme cs,
   }) {
     final out = <Widget>[];
-    String? lastHeader;
+
+    final buckets = <String, Map<String, Map<String, _NotificationGroup>>>{};
     for (final n in notifications) {
       final header = _notificationBucketLabel(n.createdAt);
-      if (header != lastHeader) {
-        out.add(
-          Padding(
-            padding: EdgeInsets.only(top: out.isEmpty ? 0 : 12, bottom: 8),
-            child: Text(header, style: const TextStyle(fontWeight: FontWeight.w900)),
-          ),
-        );
-        lastHeader = header;
+      final category = _notificationCategoryLabel(n);
+      final byCategory = buckets.putIfAbsent(header, () => <String, Map<String, _NotificationGroup>>{});
+      final groups = byCategory.putIfAbsent(category, () => <String, _NotificationGroup>{});
+      final key = _notificationGroupKey(n);
+      final existing = groups[key];
+      if (existing == null) {
+        groups[key] = _NotificationGroup(n, [n]);
+      } else {
+        existing.items.add(n);
+        if (n.createdAt.isAfter(existing.latest.createdAt)) {
+          existing.latest = n;
+        }
       }
+    }
 
-      final actorId = n.actorId;
-      final actor = actorId == null ? null : repo.profileForUserId(actorId);
-      final postId = (n.entityType == 'post') ? n.entityId : null;
-      final post = postId == null ? null : repo.findPost(postId);
+    for (final bucketEntry in buckets.entries) {
       out.add(
         Padding(
-          padding: const EdgeInsets.only(bottom: 10),
-          child: NotificationRow(
-            notification: n,
-            actor: actor,
-            post: post,
-            isFollowingActor: actorId == null ? false : repo.isFollowingUser(actorId),
-            onTap: () {
-              repo.markNotificationRead(n.id, viewerId: viewerId);
-              if (actorId != null && n.type == NotificationType.follow) {
-                Navigator.of(context).pushNamed(
-                  Routes.userProfile,
-                  arguments: UserProfileArgs(userId: actorId),
-                );
-                return;
-              }
-              if (n.entityType == 'community_prayer_run' && n.entityId != null) {
-                unawaited(_openCommunityPrayerRunFromNotification(context, repo, n.entityId!));
-                return;
-              }
-              if (n.entityType == 'story' && n.locationId != null) {
-                unawaited(_openStoryFromNotification(context, repo, cityId: n.locationId!));
-                return;
-              }
-              final entityAlertId = (n.entityType == 'alert') ? n.entityId : null;
-              if (entityAlertId != null) {
-                unawaited(_openAlertFromNotification(context, repo, entityAlertId));
-                return;
-              }
-              final entityPostId = (n.entityType == 'post') ? n.entityId : null;
-              if (entityPostId != null) {
-                unawaited(_openPostFromNotification(context, repo, entityPostId));
-              }
-            },
-            onFollowBack: () {
-              if (actorId == null) return;
-              if (repo.isOffline) {
-                showErrorSnackBar(
-                  context,
-                  onRetry: () {
-                    repo.toggleFollowUser(actorId, isAuthenticated: true);
-                    showInfoSnackBar(context, 'Seguindo');
-                  },
-                );
-                return;
-              }
-              repo.toggleFollowUser(actorId, isAuthenticated: true);
-              showInfoSnackBar(context, 'Seguindo');
-            },
-            onHide: () {
-              if (repo.isOffline) {
-                showErrorSnackBar(
-                  context,
-                  onRetry: () {
-                    repo.hideNotification(n.id, viewerId: viewerId);
-                    showInfoSnackBar(context, 'Notificação ocultada');
-                  },
-                );
-                return;
-              }
-              repo.hideNotification(n.id, viewerId: viewerId);
-              showInfoSnackBar(context, 'Notificação ocultada');
-            },
-          ),
+          padding: EdgeInsets.only(top: out.isEmpty ? 0 : 12, bottom: 8),
+          child: Text(bucketEntry.key, style: const TextStyle(fontWeight: FontWeight.w900)),
         ),
       );
+
+      final showCategoryHeaders = bucketEntry.value.length > 1;
+      for (final catEntry in bucketEntry.value.entries) {
+        if (showCategoryHeaders) {
+          out.add(
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                catEntry.key,
+                style: TextStyle(color: cs.outline, fontWeight: FontWeight.w900),
+              ),
+            ),
+          );
+        }
+
+        for (final g in catEntry.value.values) {
+          final n = g.latest;
+          final actorId = n.actorId;
+          final actor = actorId == null ? null : repo.profileForUserId(actorId);
+          final postId = (n.entityType == 'post') ? n.entityId : null;
+          final post = postId == null ? null : repo.findPost(postId);
+          final count = g.items.length;
+
+          out.add(
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: NotificationRow(
+                notification: n,
+                actor: actor,
+                post: post,
+                groupCount: count,
+                isFollowingActor: actorId == null ? false : repo.isFollowingUser(actorId),
+                onTap: () {
+                  for (final it in g.items) {
+                    repo.markNotificationRead(it.id, viewerId: viewerId);
+                  }
+                  if (actorId != null && n.type == NotificationType.follow) {
+                    Navigator.of(context).pushNamed(
+                      Routes.userProfile,
+                      arguments: UserProfileArgs(userId: actorId),
+                    );
+                    return;
+                  }
+                  if (n.entityType == 'community_prayer_run' && n.entityId != null) {
+                    unawaited(_openCommunityPrayerRunFromNotification(context, repo, n.entityId!));
+                    return;
+                  }
+                  if (n.entityType == 'story' && n.locationId != null) {
+                    unawaited(_openStoryFromNotification(context, repo, cityId: n.locationId!));
+                    return;
+                  }
+                  final entityAlertId = (n.entityType == 'alert') ? n.entityId : null;
+                  if (entityAlertId != null) {
+                    unawaited(_openAlertFromNotification(context, repo, entityAlertId));
+                    return;
+                  }
+                  final entityPostId = (n.entityType == 'post') ? n.entityId : null;
+                  if (entityPostId != null) {
+                    unawaited(_openPostFromNotification(context, repo, entityPostId));
+                  }
+                },
+                onFollowBack: () {
+                  if (actorId == null) return;
+                  if (repo.isOffline) {
+                    showErrorSnackBar(
+                      context,
+                      onRetry: () {
+                        repo.toggleFollowUser(actorId, isAuthenticated: true);
+                        showInfoSnackBar(context, 'Seguindo');
+                      },
+                    );
+                    return;
+                  }
+                  repo.toggleFollowUser(actorId, isAuthenticated: true);
+                  showInfoSnackBar(context, 'Seguindo');
+                },
+                onHide: () {
+                  if (repo.isOffline) {
+                    showErrorSnackBar(
+                      context,
+                      onRetry: () {
+                        repo.hideNotification(n.id, viewerId: viewerId);
+                        showInfoSnackBar(context, 'Notificação ocultada');
+                      },
+                    );
+                    return;
+                  }
+                  repo.hideNotification(n.id, viewerId: viewerId);
+                  showInfoSnackBar(context, 'Notificação ocultada');
+                },
+              ),
+            ),
+          );
+        }
+      }
     }
     return out;
   }
+}
+
+String _notificationCategoryLabel(NotificationModel n) {
+  if (n.entityType == 'community_prayer_run') return 'Escalas';
+  return switch (n.type) {
+    NotificationType.follow || NotificationType.reaction || NotificationType.comment || NotificationType.postNew || NotificationType.storyNew => 'Social',
+    NotificationType.prayed || NotificationType.prayerRequest => 'Oração',
+    NotificationType.alertNew => 'Alertas',
+    NotificationType.scaleReminder24h || NotificationType.scaleReminder1h => 'Escalas',
+  };
+}
+
+String _notificationGroupKey(NotificationModel n) {
+  final entity = '${n.entityType ?? ''}:${n.entityId ?? ''}:${n.locationId ?? ''}';
+  if (n.type == NotificationType.follow) {
+    return 'follow:${n.actorId ?? ''}';
+  }
+  if (n.type == NotificationType.reaction || n.type == NotificationType.comment || n.type == NotificationType.prayed) {
+    return '${n.type.name}:$entity';
+  }
+  if (n.type == NotificationType.scaleReminder24h || n.type == NotificationType.scaleReminder1h || n.entityType == 'community_prayer_run') {
+    return 'scale:$entity';
+  }
+  return '${n.type.name}:${n.actorId ?? ''}:$entity';
 }
 
 String _notificationBucketLabel(DateTime dt) {
@@ -33933,6 +35187,7 @@ class NotificationRow extends StatelessWidget {
     required this.onTap,
     required this.onFollowBack,
     required this.onHide,
+    this.groupCount = 1,
     super.key,
   });
 
@@ -33943,13 +35198,15 @@ class NotificationRow extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback onFollowBack;
   final VoidCallback onHide;
+  final int groupCount;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final actorUsername = actor?.username ?? (notification.actorId ?? 'user');
-    final actorName = '@$actorUsername';
-    final text = _notificationText(notification, post);
+    final actorId = notification.actorId ?? 'user';
+    final actorUsername = _normalizeDisplayUsername(actor?.username ?? actorId, fallback: actorId);
+    final actorName = groupCount <= 1 ? '@$actorUsername' : '@$actorUsername e mais ${groupCount - 1}';
+    final text = _notificationText(notification, post, groupCount: groupCount);
     final time = _relativeTime(notification.createdAt);
     final isUnread = !notification.isRead;
 
@@ -33961,10 +35218,12 @@ class NotificationRow extends StatelessWidget {
             onPressed: isFollowingActor ? null : onFollowBack,
           ),
         ),
-      _ => _PostThumb(
-          entityType: notification.entityType ?? '',
-          hasPost: (notification.entityType == 'post') && post != null,
-          onTap: onTap,
+      _ => SizedBox(
+          height: 34,
+          child: SecondaryButton(
+            label: _notificationCtaLabel(notification),
+            onPressed: _notificationCanOpen(notification, post) ? onTap : null,
+          ),
         ),
     };
 
@@ -34012,13 +35271,35 @@ class NotificationRow extends StatelessWidget {
   }
 }
 
-String _notificationText(NotificationModel n, PostModel? post) {
+bool _notificationCanOpen(NotificationModel n, PostModel? post) {
+  if (n.type == NotificationType.follow) return (n.actorId ?? '').trim().isNotEmpty;
+  if (n.entityType == 'community_prayer_run') return (n.entityId ?? '').trim().isNotEmpty;
+  if (n.entityType == 'story') return (n.locationId ?? '').trim().isNotEmpty;
+  if (n.entityType == 'alert') return (n.entityId ?? '').trim().isNotEmpty;
+  if (n.entityType == 'post') return (n.entityId ?? '').trim().isNotEmpty;
+  return false;
+}
+
+String _notificationCtaLabel(NotificationModel n) {
+  if (n.type == NotificationType.comment) return 'Responder';
+  if (n.type == NotificationType.follow) return 'Ver';
+  if (n.type == NotificationType.scaleReminder24h || n.type == NotificationType.scaleReminder1h || n.entityType == 'community_prayer_run') {
+    return 'Abrir';
+  }
+  return 'Ver';
+}
+
+String _notificationText(NotificationModel n, PostModel? post, {int groupCount = 1}) {
   final body = (n.body ?? '').trim();
+  final isMany = groupCount > 1;
   return switch (n.type) {
-    NotificationType.follow => 'começou a seguir você',
-    NotificationType.reaction => 'reagiu ao seu post',
-    NotificationType.comment => body.isEmpty ? 'comentou no seu post' : 'comentou: “$body”',
-    NotificationType.prayed => (post?.kind == PostKind.request) ? 'orou pelo seu pedido' : 'orou pelo seu post',
+    NotificationType.follow => isMany ? 'começaram a seguir você' : 'começou a seguir você',
+    NotificationType.reaction => isMany ? 'reagiram ao seu post' : 'reagiu ao seu post',
+    NotificationType.comment => isMany ? 'comentaram no seu post' : (body.isEmpty ? 'comentou no seu post' : 'comentou: “$body”'),
+    NotificationType.prayed =>
+      (post?.kind == PostKind.request)
+          ? (isMany ? 'oraram pelo seu pedido' : 'orou pelo seu pedido')
+          : (isMany ? 'oraram pelo seu post' : 'orou pelo seu post'),
     NotificationType.postNew => body.isEmpty ? 'publicou um novo post' : 'publicou um novo post: “$body”',
     NotificationType.storyNew => 'publicou um novo story',
     NotificationType.alertNew => body.isEmpty ? 'enviou um alerta' : 'enviou um alerta: “$body”',
@@ -34026,46 +35307,6 @@ String _notificationText(NotificationModel n, PostModel? post) {
     NotificationType.scaleReminder24h => body.isEmpty ? 'tem uma escala em 24h' : 'lembrete de escala (24h): “$body”',
     NotificationType.scaleReminder1h => body.isEmpty ? 'tem uma escala em 1h' : 'lembrete de escala (1h): “$body”',
   };
-}
-
-class _PostThumb extends StatelessWidget {
-  const _PostThumb({required this.entityType, required this.hasPost, required this.onTap});
-
-  final String entityType;
-  final bool hasPost;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final icon = switch (entityType) {
-      'alert' => Icons.notification_important_outlined,
-      'story' => Icons.auto_stories_outlined,
-      'community_prayer_run' => Icons.event_available_outlined,
-      _ => Icons.image_outlined,
-    };
-    final canOpen = switch (entityType) {
-      'post' => hasPost,
-      'alert' => true,
-      'story' => true,
-      'community_prayer_run' => true,
-      _ => false,
-    };
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(10),
-      child: InkWell(
-        onTap: canOpen ? onTap : null,
-        child: Container(
-          width: 44,
-          height: 44,
-          color: cs.surfaceContainerHighest,
-          child: Center(
-            child: Icon(icon, size: 18, color: cs.outline),
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 class _NotificationRowSkeleton extends StatelessWidget {
