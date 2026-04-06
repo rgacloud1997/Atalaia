@@ -2887,6 +2887,8 @@ class DemoRepository extends ChangeNotifier {
   bool _directIsLoading = false;
   String? _lastStoryCreateError;
   bool? _storiesHasCommunityIdColumn;
+  Timer? _directPersistDebounce;
+  String _directCacheLoadedForSessionKey = '';
 
   bool get isOffline => _isOffline;
   bool get directIsLoading => _directIsLoading;
@@ -3050,17 +3052,180 @@ class DemoRepository extends ChangeNotifier {
       _communityJoinRequestsLoadedFor.clear();
       _communityEventsLoadedFor.clear();
       _communityMessagesLoadedFor.clear();
+      _directCacheLoadedForSessionKey = '';
       for (final ch in _communityChatChannelsById.values) {
         unawaited(ch.unsubscribe());
       }
       _communityChatChannelsById.clear();
       unawaited(refreshFeedForCurrentSession());
       unawaited(refreshCommunitiesForViewer(force: true));
+      unawaited(_loadDirectCacheIfNeeded());
       if (session is AuthSession) {
         unawaited(_refreshViewerFollowing(session.userId));
       }
     }
     if (sessionChanged || viewerChanged) notifyListeners();
+  }
+
+  void _schedulePersistDirect() {
+    if (supabase == null) return;
+    if (_viewerSessionKey == 'anon') return;
+    _directPersistDebounce?.cancel();
+    _directPersistDebounce = Timer(const Duration(milliseconds: 300), () {
+      unawaited(_saveDirectCache());
+    });
+  }
+
+  Future<void> _loadDirectCacheIfNeeded() async {
+    if (supabase == null) return;
+    if (_viewerSessionKey == 'anon') return;
+    if (_directCacheLoadedForSessionKey == _viewerSessionKey) return;
+    _directCacheLoadedForSessionKey = _viewerSessionKey;
+    try {
+      final sp = await SharedPreferences.getInstance();
+      final raw = sp.getString('direct_cache_v1:$_viewerSessionKey');
+      if (raw == null || raw.trim().isEmpty) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return;
+
+      final threadsRaw = decoded['threads'];
+      final messagesRaw = decoded['messagesByThread'];
+
+      final nextThreads = <ThreadModel>[];
+      if (threadsRaw is List) {
+        for (final item in threadsRaw) {
+          final t = _threadFromJson(item);
+          if (t != null) nextThreads.add(t);
+        }
+      }
+      final nextMessages = <String, List<MessageModel>>{};
+      if (messagesRaw is Map) {
+        for (final entry in messagesRaw.entries) {
+          final threadId = entry.key?.toString();
+          if (threadId == null || threadId.isEmpty) continue;
+          final listRaw = entry.value;
+          if (listRaw is! List) continue;
+          final list = <MessageModel>[];
+          for (final item in listRaw) {
+            final m = _messageFromJson(item);
+            if (m != null) list.add(m);
+          }
+          nextMessages[threadId] = List.unmodifiable(list);
+        }
+      }
+
+      if (nextThreads.isNotEmpty) {
+        final byId = <String, ThreadModel>{for (final t in _threads) t.id: t};
+        for (final t in nextThreads) {
+          byId.putIfAbsent(t.id, () => t);
+        }
+        final list = byId.values.toList(growable: false)..sort((a, b) => b.lastAt.compareTo(a.lastAt));
+        _threads = List.unmodifiable(list);
+      }
+      if (nextMessages.isNotEmpty) {
+        for (final entry in nextMessages.entries) {
+          _messagesByThread.putIfAbsent(entry.key, () => entry.value);
+        }
+      }
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> _saveDirectCache() async {
+    if (supabase == null) return;
+    if (_viewerSessionKey == 'anon') return;
+    try {
+      final sp = await SharedPreferences.getInstance();
+      final data = <String, Object?>{
+        'threads': _threads.map(_threadToJson).toList(growable: false),
+        'messagesByThread': <String, Object?>{
+          for (final entry in _messagesByThread.entries)
+            entry.key: entry.value.map(_messageToJson).toList(growable: false),
+        },
+      };
+      await sp.setString('direct_cache_v1:$_viewerSessionKey', jsonEncode(data));
+    } catch (_) {}
+  }
+
+  Map<String, Object?> _threadToJson(ThreadModel t) {
+    return <String, Object?>{
+      'id': t.id,
+      'peerUserId': t.peerUserId,
+      'peerName': t.peerName,
+      'peerUsername': t.peerUsername,
+      'peerIsVerified': t.peerIsVerified,
+      'lastMessage': t.lastMessage,
+      'lastAt': t.lastAt.toIso8601String(),
+      'isGroup': t.isGroup,
+      'communityId': t.communityId,
+      'unreadCount': t.unreadCount,
+      'isMuted': t.isMuted,
+    };
+  }
+
+  ThreadModel? _threadFromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final id = raw['id']?.toString() ?? '';
+    final peerUserId = raw['peerUserId']?.toString() ?? '';
+    final peerName = raw['peerName']?.toString() ?? '';
+    final peerUsername = raw['peerUsername']?.toString() ?? '';
+    final lastMessage = raw['lastMessage']?.toString() ?? '';
+    final lastAt = DateTime.tryParse(raw['lastAt']?.toString() ?? '')?.toLocal();
+    if (id.isEmpty || peerUserId.isEmpty || peerName.isEmpty || peerUsername.isEmpty || lastAt == null) return null;
+    return ThreadModel(
+      id: id,
+      peerUserId: peerUserId,
+      peerName: peerName,
+      peerUsername: peerUsername,
+      peerIsVerified: raw['peerIsVerified'] == true,
+      lastMessage: lastMessage,
+      lastAt: lastAt,
+      isGroup: raw['isGroup'] == true,
+      communityId: raw['communityId']?.toString(),
+      unreadCount: int.tryParse(raw['unreadCount']?.toString() ?? '') ?? 0,
+      isMuted: raw['isMuted'] == true,
+    );
+  }
+
+  Map<String, Object?> _messageToJson(MessageModel m) {
+    return <String, Object?>{
+      'id': m.id,
+      'threadId': m.threadId,
+      'senderId': m.senderId,
+      'kind': m.kind.name,
+      'sentAt': m.sentAt.toIso8601String(),
+      'sendStatus': m.sendStatus.name,
+      'text': m.text,
+      'imageToken': m.imageToken,
+      'postId': m.post?.id,
+    };
+  }
+
+  MessageModel? _messageFromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final id = raw['id']?.toString() ?? '';
+    final threadId = raw['threadId']?.toString() ?? '';
+    final senderId = raw['senderId']?.toString() ?? '';
+    final kindRaw = raw['kind']?.toString() ?? '';
+    final statusRaw = raw['sendStatus']?.toString() ?? '';
+    final sentAt = DateTime.tryParse(raw['sentAt']?.toString() ?? '')?.toLocal();
+    if (id.isEmpty || threadId.isEmpty || senderId.isEmpty || sentAt == null) return null;
+    final kind = MessageKind.values.firstWhere((k) => k.name == kindRaw, orElse: () => MessageKind.text);
+    final status =
+        MessageSendStatus.values.firstWhere((s) => s.name == statusRaw, orElse: () => MessageSendStatus.sent);
+    final postId = raw['postId']?.toString();
+    final post = postId == null || postId.isEmpty ? null : findPost(postId);
+    return MessageModel(
+      id: id,
+      threadId: threadId,
+      senderId: senderId,
+      kind: kind,
+      sentAt: sentAt,
+      sendStatus: status,
+      text: raw['text']?.toString(),
+      imageToken: raw['imageToken']?.toString(),
+      post: post,
+    );
   }
 
   Future<AuthSession?> sessionFromSupabaseAuth() async {
@@ -4410,6 +4575,50 @@ class DemoRepository extends ChangeNotifier {
     }
   }
 
+  Future<List<RegionPrayerEntry>> fetchRegionPrayersByLocationId(
+    String locationId, {
+    DateTime? cursorCreatedAt,
+    int limit = 20,
+  }) async {
+    final sb = supabase;
+    if (sb == null) return const [];
+    if (isOffline) return const [];
+    if (!_looksLikeUuid(locationId)) return const [];
+    try {
+      var q = sb.from('region_prayers').select('id,user_id,message,created_at').eq('location_id', locationId);
+      if (cursorCreatedAt != null) {
+        q = q.lt('created_at', cursorCreatedAt.toUtc().toIso8601String());
+      }
+      final rows = await q.order('created_at', ascending: false).limit(limit);
+      final list = (rows as List<dynamic>).cast<Map<String, dynamic>>();
+      final out = <RegionPrayerEntry>[];
+      for (final r in list) {
+        final id = r['id']?.toString();
+        final userId = r['user_id']?.toString();
+        if (id == null || id.isEmpty) continue;
+        if (userId == null || userId.isEmpty) continue;
+        final createdAt = DateTime.tryParse(r['created_at']?.toString() ?? '');
+        if (createdAt == null) continue;
+        out.add(
+          RegionPrayerEntry(
+            id: id,
+            userId: userId,
+            createdAt: createdAt,
+            message: (r['message'] as String?)?.trim().isEmpty ?? true ? null : (r['message'] as String).trim(),
+          ),
+        );
+      }
+      return List.unmodifiable(out);
+    } on PostgrestException catch (e) {
+      if (e.code == 'PGRST205' || e.message.contains("Could not find the table 'public.region_prayers'")) {
+        return const [];
+      }
+      rethrow;
+    } catch (_) {
+      return const [];
+    }
+  }
+
   Future<List<AlertModel>> fetchRegionAlertsByLocationId(
     String locationId, {
     String? communityId,
@@ -5419,12 +5628,16 @@ class DemoRepository extends ChangeNotifier {
           return true;
         }());
         final raw = e.message.trim();
+        final lower = raw.toLowerCase();
+        if (lower.contains('rate limit')) {
+          _lastAuthError = 'Limite de envio de email atingido. Aguarde alguns minutos e tente novamente.';
+          return null;
+        }
         if (debugMode && raw.isNotEmpty) {
           _lastAuthError = raw;
           return null;
         }
-        final msg = raw.toLowerCase();
-        _lastAuthError = msg.contains('already') ? 'Email já cadastrado' : 'Falha ao criar conta';
+        _lastAuthError = lower.contains('already') ? 'Email já cadastrado' : 'Falha ao criar conta';
         return null;
       } on PostgrestException catch (e) {
         assert(() {
@@ -9475,8 +9688,8 @@ class DemoRepository extends ChangeNotifier {
       final communityId = t.communityId;
       if (communityId == null) return false;
       final c = findCommunity(communityId);
-      if (c == null) return false;
-      return c.viewerStatus == CommunityViewerStatus.approved;
+      if (c == null) return true;
+      return c.viewerStatus != CommunityViewerStatus.none;
     });
     final filtered = q.isEmpty
         ? visible.toList(growable: false)
@@ -9536,6 +9749,7 @@ class DemoRepository extends ChangeNotifier {
     _threads = [thread, ..._threads];
     _messagesByThread[thread.id] = [];
     notifyListeners();
+    _schedulePersistDirect();
     return thread;
   }
 
@@ -9559,6 +9773,7 @@ class DemoRepository extends ChangeNotifier {
     _threads = [thread, ..._threads];
     _messagesByThread[thread.id] = [];
     notifyListeners();
+    _schedulePersistDirect();
     if (supabase != null) {
       unawaited(refreshCommunityMessages(communityId, force: true));
       unawaited(_ensureCommunityChatSubscribed(communityId));
@@ -9573,6 +9788,7 @@ class DemoRepository extends ChangeNotifier {
     if (t.unreadCount == 0) return;
     _threads[i] = t.copyWith(unreadCount: 0);
     notifyListeners();
+    _schedulePersistDirect();
   }
 
   void toggleMuteThread(String threadId) {
@@ -9581,12 +9797,14 @@ class DemoRepository extends ChangeNotifier {
     final t = _threads[i];
     _threads[i] = t.copyWith(isMuted: !t.isMuted);
     notifyListeners();
+    _schedulePersistDirect();
   }
 
   void deleteThread(String threadId) {
     _threads = _threads.where((t) => t.id != threadId).toList(growable: false);
     _messagesByThread.remove(threadId);
     notifyListeners();
+    _schedulePersistDirect();
   }
 
   Future<void> sendTextMessage(String threadId, String senderId, String text) async {
@@ -9610,6 +9828,7 @@ class DemoRepository extends ChangeNotifier {
     _messagesByThread[threadId] = list;
     _bumpThread(threadId, preview: text, at: now);
     notifyListeners();
+    _schedulePersistDirect();
 
     await _resolveSend(threadId, next.id);
   }
@@ -9636,6 +9855,7 @@ class DemoRepository extends ChangeNotifier {
     _messagesByThread[threadId] = list;
     _bumpThread(threadId, preview: caption?.trim().isNotEmpty == true ? caption! : 'Imagem', at: now);
     notifyListeners();
+    _schedulePersistDirect();
 
     await _resolveSend(threadId, next.id);
   }
@@ -9660,6 +9880,7 @@ class DemoRepository extends ChangeNotifier {
     _messagesByThread[threadId] = list;
     _bumpThread(threadId, preview: 'Post compartilhado', at: now);
     notifyListeners();
+    _schedulePersistDirect();
 
     await _resolveSend(threadId, next.id);
   }
@@ -9675,6 +9896,7 @@ class DemoRepository extends ChangeNotifier {
     list[i] = m.copyWith(sendStatus: MessageSendStatus.sending);
     _messagesByThread[threadId] = list;
     notifyListeners();
+    _schedulePersistDirect();
     await _resolveSend(threadId, messageId);
   }
 
@@ -9689,6 +9911,7 @@ class DemoRepository extends ChangeNotifier {
     list.removeAt(i);
     _messagesByThread[threadId] = list;
     notifyListeners();
+    _schedulePersistDirect();
   }
 
   void _bumpThread(String threadId, {required String preview, required DateTime at}) {
@@ -9700,6 +9923,7 @@ class DemoRepository extends ChangeNotifier {
       _threads[i],
       ..._threads.where((x) => x.id != threadId),
     ];
+    _schedulePersistDirect();
   }
 
   Future<void> _resolveSend(String threadId, String messageId) async {
@@ -9712,6 +9936,7 @@ class DemoRepository extends ChangeNotifier {
     list[i] = m.copyWith(sendStatus: _isOffline ? MessageSendStatus.failed : MessageSendStatus.sent);
     _messagesByThread[threadId] = list;
     notifyListeners();
+    _schedulePersistDirect();
   }
 
   List<CommunityModel> communitiesFor(SessionState session, {String query = ''}) {
@@ -10537,6 +10762,8 @@ class DemoRepository extends ChangeNotifier {
 
   @override
   void dispose() {
+    _directPersistDebounce?.cancel();
+    _directPersistDebounce = null;
     _storyExpiryTimer?.cancel();
     _storyExpiryTimer = null;
     super.dispose();
@@ -11105,6 +11332,12 @@ class _AtalaiaAppState extends State<AtalaiaApp> {
                 case Routes.regionNews:
                   final args = settings.arguments as RegionNewsArgs;
                   return MaterialPageRoute(builder: (_) => RegionNewsScreen(args: args));
+                case Routes.regionDetail:
+                  final args = settings.arguments as RegionDetailArgs;
+                  return MaterialPageRoute(builder: (_) => RegionDetailScreen(args: args));
+                case Routes.regionPrayerHistory:
+                  final args = settings.arguments as RegionPrayerHistoryArgs;
+                  return MaterialPageRoute(builder: (_) => RegionPrayerHistoryScreen(args: args));
                 case Routes.regionPrayer:
                   final args = settings.arguments as RegionPrayerArgs;
                   return MaterialPageRoute(builder: (_) => PrayerSessionScreen(args: args));
@@ -11180,6 +11413,8 @@ abstract final class Routes {
   static const regionPosts = '/map/region/posts';
   static const regionAlerts = '/map/region/alerts';
   static const regionNews = '/map/region/news';
+  static const regionDetail = '/map/region/detail';
+  static const regionPrayerHistory = '/map/region/prayers';
   static const regionPrayer = '/map/region/pray';
   static const shofarIconPreview = '/icons/shofar';
 }
@@ -11325,9 +11560,51 @@ final class RegionNewsArgs {
   final String? contextBreadcrumb;
 }
 
+final class RegionDetailArgs {
+  const RegionDetailArgs({
+    required this.location,
+    required this.breadcrumb,
+    required this.requestCount,
+    required this.prayerCount,
+    this.communityId,
+  });
+
+  final LocationRef location;
+  final String breadcrumb;
+  final int requestCount;
+  final int prayerCount;
+  final String? communityId;
+}
+
+final class RegionPrayerHistoryArgs {
+  const RegionPrayerHistoryArgs({
+    required this.location,
+    required this.breadcrumb,
+    this.communityId,
+  });
+
+  final LocationRef location;
+  final String breadcrumb;
+  final String? communityId;
+}
+
 final class NewsEventDetailArgs {
   const NewsEventDetailArgs({required this.eventId});
   final String eventId;
+}
+
+final class RegionPrayerEntry {
+  const RegionPrayerEntry({
+    required this.id,
+    required this.userId,
+    required this.createdAt,
+    this.message,
+  });
+
+  final String id;
+  final String userId;
+  final DateTime createdAt;
+  final String? message;
 }
 
 enum PrayerSessionOutcome { finished, cancelled }
@@ -12136,6 +12413,8 @@ class _SignupScreenState extends State<SignupScreen> {
 
   var _accepted = false;
   var _loading = false;
+  Timer? _cooldownTicker;
+  DateTime? _cooldownUntil;
 
   String? _nameError;
   String? _usernameError;
@@ -12144,11 +12423,39 @@ class _SignupScreenState extends State<SignupScreen> {
 
   @override
   void dispose() {
+    _cooldownTicker?.cancel();
     _name.dispose();
     _username.dispose();
     _email.dispose();
     _password.dispose();
     super.dispose();
+  }
+
+  Duration? get _cooldownRemaining {
+    final until = _cooldownUntil;
+    if (until == null) return null;
+    final now = DateTime.now();
+    if (!until.isAfter(now)) return Duration.zero;
+    return until.difference(now);
+  }
+
+  bool get _isInCooldown {
+    final r = _cooldownRemaining;
+    return r != null && r > Duration.zero;
+  }
+
+  void _startCooldown(Duration d) {
+    _cooldownUntil = DateTime.now().add(d);
+    _cooldownTicker?.cancel();
+    _cooldownTicker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      if (!_isInCooldown) {
+        _cooldownTicker?.cancel();
+        _cooldownTicker = null;
+        _cooldownUntil = null;
+      }
+      setState(() {});
+    });
   }
 
   String? _validateUsername(DemoRepository repo, String value) {
@@ -12178,11 +12485,13 @@ class _SignupScreenState extends State<SignupScreen> {
         _validateUsername(repo, _username.text) == null &&
         _email.text.trim().contains('@') &&
         _password.text.length >= 8 &&
-        _accepted;
+        _accepted &&
+        !_isInCooldown;
   }
 
   Future<void> _submit() async {
     if (_loading) return;
+    if (_isInCooldown) return;
     _revalidate();
     if (!_isValid()) return;
 
@@ -12212,6 +12521,9 @@ class _SignupScreenState extends State<SignupScreen> {
       final msg = repo.lastAuthError;
       if (msg != null && msg.trim().isNotEmpty) {
         final lower = msg.toLowerCase();
+        if (lower.contains('limite de envio de email') || lower.contains('rate limit')) {
+          _startCooldown(const Duration(minutes: 2));
+        }
         if (lower.contains('username')) {
           _usernameError = msg;
         } else if (lower.contains('email')) {
@@ -12258,6 +12570,9 @@ class _SignupScreenState extends State<SignupScreen> {
   Widget build(BuildContext context) {
     final repo = RepoScope.of(context);
     final canSubmit = _isValid() && !_loading;
+    final cooldown = _cooldownRemaining;
+    final submitLabel =
+        (cooldown != null && cooldown > Duration.zero) ? 'Aguarde ${cooldown.inSeconds}s' : 'Criar conta';
 
     return AnimatedBuilder(
       animation: repo,
@@ -12321,7 +12636,7 @@ class _SignupScreenState extends State<SignupScreen> {
                     SizedBox(
                       width: double.infinity,
                       child: PrimaryButton(
-                        label: 'Criar conta',
+                        label: submitLabel,
                         loading: _loading,
                         onPressed: canSubmit ? _submit : null,
                       ),
@@ -15079,6 +15394,11 @@ class _ShellScreenState extends State<ShellScreen> {
   int _index = 0;
   final GlobalKey<_MapScreenState> _mapKey = GlobalKey<_MapScreenState>();
 
+  void _onMapContextChanged() {
+    if (!mounted) return;
+    setState(() {});
+  }
+
   @override
   void dispose() {
     super.dispose();
@@ -15099,26 +15419,37 @@ class _ShellScreenState extends State<ShellScreen> {
         final viewerUsername = value is AuthSession ? _usernameForProfile(viewerProfile, userId: value.userId) : null;
         final viewerName = viewerProfile == null ? '' : _displayNameForProfile(viewerProfile).trim();
         final viewerAvatarUrl = viewerProfile?.avatarUrl;
-        final title = switch (_index) {
+        final mapState = _index == 1 ? _mapKey.currentState : null;
+        final activeMapCommunityId = _index == 1 ? mapState?.activeCommunityId : null;
+        final activeMapCommunity = activeMapCommunityId == null ? null : repo.findCommunity(activeMapCommunityId);
+        final title = (_index == 1 && activeMapCommunityId != null)
+            ? (activeMapCommunity?.name ?? 'Comunidade')
+            : switch (_index) {
           0 => 'Atalaia',
           1 => 'Mapa',
           2 => 'Mensagens',
           3 => viewerName.isNotEmpty ? viewerName : 'Perfil',
           _ => 'Atalaia',
         };
-        final leadingLabel = switch (_index) {
+        final leadingLabel = (_index == 1 && activeMapCommunityId != null)
+            ? 'Feed'
+            : switch (_index) {
           2 => 'Nova mensagem',
           1 => 'Momento',
           _ => 'Criar',
         };
-        final leadingIcon = switch (_index) {
+        final leadingIcon = (_index == 1 && activeMapCommunityId != null)
+            ? Icons.rss_feed_outlined
+            : switch (_index) {
           2 => Icons.edit_outlined,
           1 => Icons.photo_camera_outlined,
           _ => Icons.add_box_outlined,
         };
         final VoidCallback leadingAction = () {
           if (_index == 1) {
-            final future = _mapKey.currentState?.createMomentFromAppBar();
+            final future = activeMapCommunityId != null
+                ? _mapKey.currentState?.openActiveCommunityFeedFromAppBar()
+                : _mapKey.currentState?.createMomentFromAppBar();
             if (future == null) return;
             unawaited(future);
             return;
@@ -15134,14 +15465,18 @@ class _ShellScreenState extends State<ShellScreen> {
           Navigator.of(context).pushNamed(Routes.createPost);
         };
 
-        final actionLabel = switch (_index) {
+        final actionLabel = (_index == 1 && activeMapCommunityId != null)
+            ? 'Chat'
+            : switch (_index) {
           0 => 'Notificações',
           1 => 'Comunidades',
           2 => 'Solicitações',
           3 => 'Menu',
           _ => 'Notificações',
         };
-        final actionIcon = switch (_index) {
+        final actionIcon = (_index == 1 && activeMapCommunityId != null)
+            ? Icons.chat_bubble_outline
+            : switch (_index) {
           0 => null,
           1 => Icons.groups_outlined,
           2 => Icons.inbox_outlined,
@@ -15152,7 +15487,9 @@ class _ShellScreenState extends State<ShellScreen> {
         final VoidCallback action = switch (_index) {
           0 => () => Navigator.of(context).pushNamed(Routes.notifications),
           1 => () {
-              final future = _mapKey.currentState?.openMapOptionsSheetFromAppBar();
+              final future = activeMapCommunityId != null
+                  ? _mapKey.currentState?.openActiveCommunityChatFromAppBar()
+                  : _mapKey.currentState?.openCommunitiesSheetFromAppBar();
               if (future == null) return;
               unawaited(future);
             },
@@ -15183,7 +15520,7 @@ class _ShellScreenState extends State<ShellScreen> {
             index: _index,
             children: [
               HomeFeedScreen(),
-              _MapTab(mapKey: _mapKey),
+              _MapTab(mapKey: _mapKey, onCommunityContextChanged: _onMapContextChanged),
               const DirectInboxScreen(args: null, embedded: true),
               const ProfileScreen(embedded: true),
             ],
@@ -15224,7 +15561,7 @@ class _ShellScreenState extends State<ShellScreen> {
                   label: 'Mapa',
                 ),
                 const NavigationDestination(
-                  icon: Icon(Icons.send_rounded),
+                  icon: Icon(Icons.send_outlined),
                   selectedIcon: Icon(Icons.send_rounded),
                   label: 'Direct',
                 ),
@@ -15253,13 +15590,14 @@ class _ShellScreenState extends State<ShellScreen> {
 }
 
 class _MapTab extends StatelessWidget {
-  const _MapTab({required this.mapKey});
+  const _MapTab({required this.mapKey, required this.onCommunityContextChanged});
 
   final GlobalKey<_MapScreenState> mapKey;
+  final VoidCallback onCommunityContextChanged;
 
   @override
   Widget build(BuildContext context) {
-    return MapScreen(key: mapKey);
+    return MapScreen(key: mapKey, onCommunityContextChanged: onCommunityContextChanged);
   }
 }
 
@@ -18646,11 +18984,12 @@ class _DirectInboxScreenState extends State<DirectInboxScreen> {
 
         if (!_seededCommunityThreads) {
           _seededCommunityThreads = true;
-          Future<void>.microtask(() {
+          Future<void>.microtask(() async {
             if (!mounted) return;
             final repo = RepoScope.of(context);
             final session = SessionScope.of(context).value;
             if (session is! AuthSession) return;
+            await repo.refreshCommunitiesForViewer();
             final approved = repo
                 .communitiesFor(session)
                 .where((c) => c.viewerStatus == CommunityViewerStatus.approved)
@@ -20525,6 +20864,801 @@ class _RegionNewsScreenState extends State<RegionNewsScreen> {
   }
 }
 
+sealed class _RegionFeedItem {
+  const _RegionFeedItem({required this.createdAt});
+  final DateTime createdAt;
+}
+
+final class _RegionFeedPostItem extends _RegionFeedItem {
+  const _RegionFeedPostItem({required super.createdAt, required this.post});
+  final PostModel post;
+}
+
+final class _RegionFeedPrayerItem extends _RegionFeedItem {
+  const _RegionFeedPrayerItem({required super.createdAt, required this.entry});
+  final RegionPrayerEntry entry;
+}
+
+class RegionDetailScreen extends StatefulWidget {
+  const RegionDetailScreen({required this.args, super.key});
+
+  final RegionDetailArgs args;
+
+  @override
+  State<RegionDetailScreen> createState() => _RegionDetailScreenState();
+}
+
+class _RegionDetailScreenState extends State<RegionDetailScreen> {
+  final _scrollController = ScrollController();
+  var _loading = true;
+  var _loadingMore = false;
+  var _hasMore = true;
+  String? _error;
+  String? _resolvedLocationId;
+  DateTime? _cursorPostCreatedAt;
+  DateTime? _cursorPrayerCreatedAt;
+  List<PostModel> _requestsPreview = const [];
+  List<PostModel> _testimonies = const [];
+  List<RegionPrayerEntry> _prayers = const [];
+  List<_RegionFeedItem> _items = const [];
+
+  int get _requestCountEstimate => _requestsPreview.length > widget.args.requestCount ? _requestsPreview.length : widget.args.requestCount;
+  int get _prayerCountEstimate => _prayers.length > widget.args.prayerCount ? _prayers.length : widget.args.prayerCount;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_maybeLoadMore);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_loadInitial());
+    });
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _maybeLoadMore() {
+    if (!_hasMore || _loading || _loadingMore) return;
+    if (!_scrollController.hasClients) return;
+    final pos = _scrollController.position;
+    if (pos.maxScrollExtent <= 0) return;
+    if (pos.pixels < pos.maxScrollExtent - 420) return;
+    unawaited(_loadMore());
+  }
+
+  Future<String?> _ensureLocationId(DemoRepository repo) async {
+    final id = widget.args.location.id;
+    if (_looksLikeUuid(id)) return id;
+    return repo.locationIdByPath(widget.args.location.path);
+  }
+
+  List<_RegionFeedItem> _mergeItems({
+    required List<PostModel> testimonies,
+    required List<RegionPrayerEntry> prayers,
+  }) {
+    final out = <_RegionFeedItem>[
+      ...testimonies.map((p) => _RegionFeedPostItem(createdAt: p.createdAt, post: p)),
+      ...prayers.map((e) => _RegionFeedPrayerItem(createdAt: e.createdAt, entry: e)),
+    ];
+    out.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return List.unmodifiable(out);
+  }
+
+  Future<void> _loadInitial() async {
+    if (!mounted) return;
+    setState(() {
+      _loading = true;
+      _loadingMore = false;
+      _hasMore = true;
+      _error = null;
+      _resolvedLocationId = null;
+      _cursorPostCreatedAt = null;
+      _cursorPrayerCreatedAt = null;
+      _requestsPreview = const [];
+      _testimonies = const [];
+      _prayers = const [];
+      _items = const [];
+    });
+
+    final repo = RepoScope.of(context);
+    final session = SessionScope.of(context).value;
+    final useRemote = repo.supabase != null && !repo.isOffline;
+
+    if (!useRemote) {
+      final all = widget.args.communityId == null
+          ? repo.postsForRegion(session, widget.args.location.path)
+          : repo.postsForRegionInCommunity(session, widget.args.location.path, widget.args.communityId!);
+      final requests = all.where((p) => p.kind == PostKind.request).toList(growable: false)..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      final requestsPreview = requests.take(4).toList(growable: false);
+      final testimonies = all.where((p) => p.kind == PostKind.testimony).toList(growable: false)
+        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _hasMore = false;
+        _requestsPreview = requestsPreview;
+        _testimonies = testimonies;
+        _items = _mergeItems(testimonies: testimonies, prayers: const []);
+      });
+      return;
+    }
+
+    final locationId = await _ensureLocationId(repo);
+    if (!mounted) return;
+    if (locationId == null) {
+      setState(() {
+        _loading = false;
+        _error = 'Não foi possível identificar a região.';
+      });
+      return;
+    }
+    _resolvedLocationId = locationId;
+
+    final testimoniesFuture = repo.fetchRegionPostsByLocationId(
+      locationId,
+      communityId: widget.args.communityId,
+      limit: 20,
+      kind: PostKind.testimony,
+    );
+    final prayersFuture = repo.fetchRegionPrayersByLocationId(locationId, limit: 20);
+    final requestsPreviewFuture = repo.fetchRegionPostsByLocationId(
+      locationId,
+      communityId: widget.args.communityId,
+      limit: 4,
+      kind: PostKind.request,
+    );
+    final results = await Future.wait<dynamic>([testimoniesFuture, prayersFuture, requestsPreviewFuture]);
+    final testimonies = (results[0] as List<PostModel>);
+    final prayers = (results[1] as List<RegionPrayerEntry>);
+    final requestsPreview = (results[2] as List<PostModel>);
+    if (!mounted) return;
+
+    setState(() {
+      _loading = false;
+      _requestsPreview = requestsPreview;
+      _testimonies = testimonies;
+      _prayers = prayers;
+      _cursorPostCreatedAt = testimonies.isEmpty ? null : testimonies.last.createdAt;
+      _cursorPrayerCreatedAt = prayers.isEmpty ? null : prayers.last.createdAt;
+      _hasMore = testimonies.length >= 20 || prayers.length >= 20;
+      _items = _mergeItems(testimonies: testimonies, prayers: prayers);
+    });
+  }
+
+  Future<void> _loadMore() async {
+    final repo = RepoScope.of(context);
+    if (repo.supabase == null || repo.isOffline) return;
+    final locationId = _resolvedLocationId;
+    if (locationId == null) {
+      setState(() => _hasMore = false);
+      return;
+    }
+
+    setState(() => _loadingMore = true);
+    final morePostsFuture = repo.fetchRegionPostsByLocationId(
+      locationId,
+      communityId: widget.args.communityId,
+      cursorCreatedAt: _cursorPostCreatedAt,
+      limit: 20,
+      kind: PostKind.testimony,
+    );
+    final morePrayersFuture = repo.fetchRegionPrayersByLocationId(
+      locationId,
+      cursorCreatedAt: _cursorPrayerCreatedAt,
+      limit: 20,
+    );
+
+    final results = await Future.wait<dynamic>([morePostsFuture, morePrayersFuture]);
+    if (!mounted) return;
+    final morePosts = (results[0] as List<PostModel>);
+    final morePrayers = (results[1] as List<RegionPrayerEntry>);
+
+    final existingPostIds = _testimonies.map((p) => p.id).toSet();
+    final existingPrayerIds = _prayers.map((p) => p.id).toSet();
+    final nextPosts = [..._testimonies, ...morePosts.where((p) => !existingPostIds.contains(p.id))];
+    final nextPrayers = [..._prayers, ...morePrayers.where((p) => !existingPrayerIds.contains(p.id))];
+
+    setState(() {
+      _loadingMore = false;
+      _testimonies = List.unmodifiable(nextPosts);
+      _prayers = List.unmodifiable(nextPrayers);
+      if (morePosts.isNotEmpty) _cursorPostCreatedAt = morePosts.last.createdAt;
+      if (morePrayers.isNotEmpty) _cursorPrayerCreatedAt = morePrayers.last.createdAt;
+      _hasMore = morePosts.length >= 20 || morePrayers.length >= 20;
+      _items = _mergeItems(testimonies: _testimonies, prayers: _prayers);
+    });
+  }
+
+  void _replacePost(PostModel next) {
+    final idx = _testimonies.indexWhere((p) => p.id == next.id);
+    if (idx < 0) return;
+    final list = _testimonies.toList(growable: true);
+    list[idx] = next;
+    setState(() {
+      _testimonies = List.unmodifiable(list);
+      _items = _mergeItems(testimonies: _testimonies, prayers: _prayers);
+    });
+  }
+
+  Future<void> _startPrayerSession() async {
+    final repo = RepoScope.of(context);
+    final session = SessionScope.of(context).value;
+    if (!session.isAuthenticated) {
+      await showAuthGate(context);
+      return;
+    }
+
+    var locationId = widget.args.location.id;
+    if (!_looksLikeUuid(locationId)) {
+      final resolved = await repo.locationIdByPath(widget.args.location.path);
+      if (!mounted) return;
+      if (resolved == null) {
+        showErrorSnackBar(context, onRetry: () => unawaited(_startPrayerSession()));
+        return;
+      }
+      locationId = resolved;
+    }
+    if (!mounted) return;
+
+    Navigator.of(context).pushNamed(
+      Routes.regionPrayer,
+      arguments: RegionPrayerArgs(
+        locationId: locationId,
+        locationName: widget.args.location.name,
+        locationLevel: widget.args.location.level,
+        locationPath: widget.args.location.path,
+        contextBreadcrumb: widget.args.breadcrumb,
+        communityId: widget.args.communityId,
+      ),
+    );
+  }
+
+  void _openRequests() {
+    Navigator.of(context).pushNamed(
+      Routes.regionPosts,
+      arguments: RegionPostsArgs(
+        location: widget.args.location,
+        contextBreadcrumb: widget.args.breadcrumb,
+        communityId: widget.args.communityId,
+      ),
+    );
+  }
+
+  Widget _requestsCard(ColorScheme cs) {
+    final preview = _requestsPreview;
+    final items = preview.take(4).toList(growable: false);
+    return Card(
+      elevation: 0,
+      color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
+      child: InkWell(
+        onTap: _openRequests,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.format_list_numbered, size: 18),
+                  const SizedBox(width: 8),
+                  const Text('Pedidos', style: TextStyle(fontWeight: FontWeight.w800)),
+                  const Spacer(),
+                  Text(_requestCountEstimate.toString(), style: TextStyle(color: cs.outline, fontWeight: FontWeight.w800)),
+                  const SizedBox(width: 6),
+                  const Icon(Icons.chevron_right),
+                ],
+              ),
+              const SizedBox(height: 10),
+              if (_loading && items.isEmpty)
+                Text('Carregando pedidos…', style: TextStyle(color: cs.outline, fontWeight: FontWeight.w600))
+              else if (items.isEmpty)
+                Text('Sem pedidos por enquanto.', style: TextStyle(color: cs.outline, fontWeight: FontWeight.w600))
+              else
+                ...items.indexed.map((e) {
+                  final i = e.$1 + 1;
+                  final body = e.$2.body.trim();
+                  final text = body.isEmpty ? '(sem texto)' : body;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text(
+                      '$i. $text',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  );
+                }),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final repo = RepoScope.of(context);
+    final session = SessionScope.of(context).value;
+    final isAuthenticated = session.isAuthenticated;
+    final cs = Theme.of(context).colorScheme;
+
+    return AnimatedBuilder(
+      animation: repo,
+      builder: (context, _) {
+        return Scaffold(
+          appBar: AppBar(
+            title: Text(widget.args.location.name, style: const TextStyle(fontWeight: FontWeight.w800)),
+          ),
+          body: Column(
+            children: [
+              if (repo.isOffline) OfflineBanner(onRetry: () => repo.setOffline(false)),
+              Expanded(
+                child: _error != null
+                    ? ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        children: [
+                          SizedBox(height: MediaQuery.sizeOf(context).height * 0.16),
+                          EmptyState(icon: Icons.error_outline, title: _error!),
+                          const SizedBox(height: 14),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: PrimaryButton(label: 'Tentar novamente', onPressed: () => unawaited(_loadInitial())),
+                          ),
+                        ],
+                      )
+                    : CustomScrollView(
+                        controller: _scrollController,
+                        slivers: [
+                          SliverToBoxAdapter(
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  _RegionHeroHeader(location: widget.args.location),
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    widget.args.location.name,
+                                    style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 22),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    widget.args.breadcrumb,
+                                    style: TextStyle(color: cs.outline, fontWeight: FontWeight.w700),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  _StatPill(
+                                    label: 'Orações',
+                                    value: _prayerCountEstimate.toString(),
+                                    cs: cs,
+                                  ),
+                                  const SizedBox(height: 10),
+                                  _requestsCard(cs),
+                                  const SizedBox(height: 12),
+                                  PrimaryButton(
+                                    label: 'Orar por esta região',
+                                    onPressed: isAuthenticated ? () => unawaited(_startPrayerSession()) : () => unawaited(showAuthGate(context)),
+                                  ),
+                                  const SizedBox(height: 18),
+                                  const Text('Atividade', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                                ],
+                              ),
+                            ),
+                          ),
+                          if (_loading && _items.isEmpty)
+                            const SliverToBoxAdapter(
+                              child: Padding(
+                                padding: EdgeInsets.all(18),
+                                child: Center(child: CircularProgressIndicator()),
+                              ),
+                            )
+                          else if (_items.isEmpty)
+                            const SliverToBoxAdapter(
+                              child: Padding(
+                                padding: EdgeInsets.fromLTRB(12, 24, 12, 18),
+                                child: EmptyState(icon: Icons.public, title: 'Ainda não há atividade nesta região.'),
+                              ),
+                            )
+                          else
+                            SliverList(
+                              delegate: SliverChildBuilderDelegate(
+                                (context, index) {
+                                  if (index >= _items.length) {
+                                    return _loadingMore
+                                        ? const Padding(
+                                            padding: EdgeInsets.all(16),
+                                            child: Center(
+                                              child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)),
+                                            ),
+                                          )
+                                        : const SizedBox.shrink();
+                                  }
+                                  final it = _items[index];
+                                  return Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                    child: switch (it) {
+                                      _RegionFeedPostItem() => PostCard(
+                                          post: it.post,
+                                          isAuthenticated: isAuthenticated,
+                                          onOpenPost: () {
+                                            Navigator.of(context).pushNamed(
+                                              Routes.postDetail,
+                                              arguments: PostDetailArgs(postId: it.post.id),
+                                            );
+                                          },
+                                          onLike: () {
+                                            if (!isAuthenticated) return showCtaSnackBar(context);
+                                            if (repo.supabase == null || repo.isOffline) {
+                                              repo.toggleLike(it.post.id, isAuthenticated: true);
+                                              return;
+                                            }
+                                            final nextLiked = !it.post.viewerHasLiked;
+                                            final updated = it.post.copyWith(
+                                              viewerHasLiked: nextLiked,
+                                              likeCount: nextLiked ? it.post.likeCount + 1 : (it.post.likeCount - 1).clamp(0, 1 << 30),
+                                            );
+                                            _replacePost(updated);
+                                            unawaited(repo.setLikeOnPostSupabase(postId: it.post.id, shouldLike: nextLiked));
+                                          },
+                                          onPray: () {
+                                            if (!isAuthenticated) return showCtaSnackBar(context);
+                                            if (it.post.viewerHasPrayed) return;
+                                            if (repo.supabase == null || repo.isOffline) {
+                                              repo.togglePrayer(it.post.id, isAuthenticated: true);
+                                              return;
+                                            }
+                                            final updated = it.post.copyWith(viewerHasPrayed: true, prayerCount: it.post.prayerCount + 1);
+                                            _replacePost(updated);
+                                            unawaited(repo.addPrayerOnPostSupabase(postId: it.post.id));
+                                          },
+                                          onComment: () {
+                                            if (!isAuthenticated) return showCtaSnackBar(context);
+                                            Navigator.of(context).pushNamed(
+                                              Routes.postComments,
+                                              arguments: CommentsArgs(postId: it.post.id),
+                                            );
+                                          },
+                                          onShare: () async {
+                                            await showShareSheet(context, post: it.post, isAuthenticated: isAuthenticated);
+                                          },
+                                          onSave: () {
+                                            if (!isAuthenticated) return showCtaSnackBar(context);
+                                            final willSave = !it.post.viewerHasSaved;
+                                            repo.toggleSave(it.post.id, isAuthenticated: true);
+                                            if (willSave) showInfoSnackBar(context, 'Salvo');
+                                          },
+                                        ),
+                                      _RegionFeedPrayerItem() => _RegionPrayerCard(entry: it.entry),
+                                    },
+                                  );
+                                },
+                                childCount: _items.length + (_loadingMore ? 1 : 0),
+                              ),
+                            ),
+                        ],
+                      ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class RegionPrayerHistoryScreen extends StatefulWidget {
+  const RegionPrayerHistoryScreen({required this.args, super.key});
+
+  final RegionPrayerHistoryArgs args;
+
+  @override
+  State<RegionPrayerHistoryScreen> createState() => _RegionPrayerHistoryScreenState();
+}
+
+class _RegionPrayerHistoryScreenState extends State<RegionPrayerHistoryScreen> {
+  final _scrollController = ScrollController();
+  var _loading = true;
+  var _loadingMore = false;
+  var _hasMore = true;
+  String? _error;
+  String? _resolvedLocationId;
+  DateTime? _cursorCreatedAt;
+  List<RegionPrayerEntry> _items = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_maybeLoadMore);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_loadInitial());
+    });
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _maybeLoadMore() {
+    if (!_hasMore || _loading || _loadingMore) return;
+    if (!_scrollController.hasClients) return;
+    final pos = _scrollController.position;
+    if (pos.maxScrollExtent <= 0) return;
+    if (pos.pixels < pos.maxScrollExtent - 320) return;
+    unawaited(_loadMore());
+  }
+
+  Future<String?> _ensureLocationId(DemoRepository repo) async {
+    final id = widget.args.location.id;
+    if (_looksLikeUuid(id)) return id;
+    return repo.locationIdByPath(widget.args.location.path);
+  }
+
+  Future<void> _loadInitial() async {
+    if (!mounted) return;
+    setState(() {
+      _loading = true;
+      _loadingMore = false;
+      _hasMore = true;
+      _error = null;
+      _resolvedLocationId = null;
+      _cursorCreatedAt = null;
+      _items = const [];
+    });
+
+    final repo = RepoScope.of(context);
+    if (repo.supabase == null || repo.isOffline) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _hasMore = false;
+        _items = const [];
+      });
+      return;
+    }
+
+    final locationId = await _ensureLocationId(repo);
+    if (!mounted) return;
+    if (locationId == null) {
+      setState(() {
+        _loading = false;
+        _error = 'Não foi possível identificar a região.';
+      });
+      return;
+    }
+    _resolvedLocationId = locationId;
+
+    final items = await repo.fetchRegionPrayersByLocationId(locationId, limit: 20);
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      _items = items;
+      _cursorCreatedAt = items.isEmpty ? null : items.last.createdAt;
+      _hasMore = items.length >= 20;
+    });
+  }
+
+  Future<void> _loadMore() async {
+    final repo = RepoScope.of(context);
+    if (repo.supabase == null || repo.isOffline) return;
+    final locationId = _resolvedLocationId;
+    final cursor = _cursorCreatedAt;
+    if (locationId == null || cursor == null) {
+      setState(() => _hasMore = false);
+      return;
+    }
+
+    setState(() => _loadingMore = true);
+    final items = await repo.fetchRegionPrayersByLocationId(locationId, cursorCreatedAt: cursor, limit: 20);
+    if (!mounted) return;
+
+    final existingIds = _items.map((e) => e.id).toSet();
+    final next = [..._items, ...items.where((e) => !existingIds.contains(e.id))];
+    setState(() {
+      _loadingMore = false;
+      _items = next;
+      _cursorCreatedAt = items.isEmpty ? _cursorCreatedAt : items.last.createdAt;
+      _hasMore = items.length >= 20;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final repo = RepoScope.of(context);
+    final cs = Theme.of(context).colorScheme;
+    final title = 'Orações • ${widget.args.location.name}';
+    final subtitle = widget.args.breadcrumb;
+    return AnimatedBuilder(
+      animation: repo,
+      builder: (context, _) {
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('Orações', style: TextStyle(fontWeight: FontWeight.w800)),
+          ),
+          body: Column(
+            children: [
+              if (repo.isOffline) OfflineBanner(onRetry: () => repo.setOffline(false)),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+                          const SizedBox(height: 2),
+                          Text(subtitle, style: TextStyle(color: cs.outline, fontWeight: FontWeight.w600)),
+                        ],
+                      ),
+                    ),
+                    AtalaiaIconButton(
+                      icon: Icons.refresh,
+                      label: 'Atualizar',
+                      onPressed: () {
+                        if (repo.supabase == null || repo.isOffline) return;
+                        unawaited(_loadInitial());
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: _loading && _items.isEmpty
+                    ? const Center(child: CircularProgressIndicator())
+                    : _error != null
+                        ? ListView(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            children: [
+                              SizedBox(height: MediaQuery.sizeOf(context).height * 0.16),
+                              EmptyState(icon: Icons.error_outline, title: _error!),
+                              const SizedBox(height: 14),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 16),
+                                child: PrimaryButton(label: 'Tentar novamente', onPressed: () => unawaited(_loadInitial())),
+                              ),
+                            ],
+                          )
+                        : _items.isEmpty
+                            ? ListView(
+                                physics: const AlwaysScrollableScrollPhysics(),
+                                children: const [
+                                  SizedBox(height: 120),
+                                  EmptyState(icon: Icons.volunteer_activism_outlined, title: 'Ainda não há orações registradas aqui.'),
+                                ],
+                              )
+                            : ListView.builder(
+                                controller: _scrollController,
+                                padding: const EdgeInsets.only(top: 6, bottom: 10),
+                                itemCount: _items.length + (_loadingMore ? 1 : 0),
+                                itemBuilder: (context, index) {
+                                  if (index >= _items.length) {
+                                    return const Padding(
+                                      padding: EdgeInsets.all(16),
+                                      child: Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2))),
+                                    );
+                                  }
+                                  return Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                    child: _RegionPrayerCard(entry: _items[index]),
+                                  );
+                                },
+                              ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _RegionPrayerCard extends StatelessWidget {
+  const _RegionPrayerCard({required this.entry});
+
+  final RegionPrayerEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final repo = RepoScope.of(context);
+    final cs = Theme.of(context).colorScheme;
+    final p = repo.findProfile(entry.userId);
+    final displayName = p == null ? entry.userId : _displayNameForProfile(p);
+    final displayUsername = p == null ? entry.userId : _usernameForProfile(p, userId: p.userId);
+    final when = _formatRelativeTimeForUser(context, entry.createdAt);
+    final text = (entry.message ?? '').trim();
+    return Card(
+      elevation: 0,
+      color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Avatar(name: displayName, imageUrl: p?.avatarUrl, size: AvatarSize.s44),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              displayName,
+                              style: const TextStyle(fontWeight: FontWeight.w900),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (p?.isVerified ?? false) ...[
+                            const SizedBox(width: 6),
+                            Icon(Icons.verified, size: 18, color: context.brand.verifiedBlue),
+                          ],
+                        ],
+                      ),
+                      Text('@$displayUsername • $when', style: TextStyle(color: cs.outline, fontWeight: FontWeight.w700)),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.volunteer_activism_outlined),
+              ],
+            ),
+            if (text.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Text(text, style: TextStyle(color: cs.onSurface.withValues(alpha: 0.90))),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RegionHeroHeader extends StatelessWidget {
+  const _RegionHeroHeader({required this.location});
+
+  final LocationRef location;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final icon = switch (location.level) {
+      'continent' => Icons.public,
+      'country' => Icons.flag_outlined,
+      'state' => Icons.map_outlined,
+      'city' => Icons.location_city_outlined,
+      _ => Icons.public,
+    };
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        height: 140,
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              cs.primary.withValues(alpha: 0.20),
+              cs.secondary.withValues(alpha: 0.18),
+              cs.tertiary.withValues(alpha: 0.14),
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+        ),
+        child: Center(
+          child: Icon(icon, size: 64, color: cs.onSurface.withValues(alpha: 0.70)),
+        ),
+      ),
+    );
+  }
+}
+
 class NewsEventDetailScreen extends StatefulWidget {
   const NewsEventDetailScreen({required this.args, super.key});
 
@@ -21197,6 +22331,9 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
       if (status == 'finished') {
         final recordText = (finishRecord?.text ?? '').trim();
         final communityId = widget.args.communityId;
+        if (_looksLikeUuid(widget.args.locationId)) {
+          unawaited(repo.createRegionPrayer(locationId: widget.args.locationId, message: recordText).catchError((_) {}));
+        }
         if (recordText.isNotEmpty && _looksLikeUuid(communityId) && _looksLikeUuid(widget.args.locationId)) {
           unawaited(
             () async {
@@ -24806,7 +25943,7 @@ class _HomeStoriesStrip extends StatelessWidget {
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(16),
                       child: Container(
-                        height: 132,
+                          height: 104,
                         decoration: BoxDecoration(
                           color: cs.surfaceContainerHighest,
                           image: imageProvider == null
@@ -25099,9 +26236,10 @@ class _HomeHighlightsRow extends StatelessWidget {
 }
 
 class MapScreen extends StatefulWidget {
-  const MapScreen({super.key, this.initialCommunityId});
+  const MapScreen({super.key, this.initialCommunityId, this.onCommunityContextChanged});
 
   final String? initialCommunityId;
+  final VoidCallback? onCommunityContextChanged;
 
   @override
   State<MapScreen> createState() => _MapScreenState();
@@ -25131,6 +26269,8 @@ class _MapScreenState extends State<MapScreen> {
   var _isRegionSheetOpen = false;
   Timer? _moveEndDebounce;
 
+  String? get activeCommunityId => _activeCommunityId;
+
   Future<void> openCommunitiesSheetFromAppBar() async {
     if (!mounted) return;
     final repo = RepoScope.of(context);
@@ -25138,11 +26278,10 @@ class _MapScreenState extends State<MapScreen> {
     await _openCommunitiesSheet(context, repo: repo, session: session);
   }
 
-  Future<void> openMapOptionsSheetFromAppBar() async {
-    if (!mounted) return;
+  void clearCommunityFilterFromAppBar() {
     final repo = RepoScope.of(context);
-    final session = SessionScope.of(context).value;
-    await _openMapOptionsSheet(context, repo: repo, session: session);
+    repo.trackEvent('map_community_filter_clear', const <String, Object?>{});
+    _setCommunityFilter(null);
   }
 
   Future<void> createMomentFromAppBar() async {
@@ -25152,105 +26291,92 @@ class _MapScreenState extends State<MapScreen> {
     await _handleCreateStory(context, repo: repo, session: session);
   }
 
-  Future<void> _openMapOptionsSheet(
-    BuildContext context, {
-    required DemoRepository repo,
-    required SessionState session,
-  }) async {
-    await showAtalaiaBottomSheet<void>(
-      context,
-      builder: (sheetContext) {
-        return StatefulBuilder(
-          builder: (sheetContext, setSheetState) {
-            return SafeArea(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const SizedBox(height: 10),
-                  Container(
-                    width: 44,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: Theme.of(sheetContext).colorScheme.outlineVariant,
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 16),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text('Opções do mapa', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  SwitchListTile(
-                    value: _showPrayerHeatmap,
-                    onChanged: (v) {
-                      repo.trackEvent('map_heatmap_toggle', <String, Object?>{'enabled': v});
-                      setState(() => _showPrayerHeatmap = v);
-                      setSheetState(() {});
-                      if (v) _scheduleEngineRun(immediate: true);
-                    },
-                    secondary: Icon(_showPrayerHeatmap ? Icons.layers : Icons.layers_outlined),
-                    title: const Text('Heatmap de oração'),
-                  ),
-                  if (_selectedLocation != null)
-                    ListTile(
-                      leading: const Icon(Icons.place_outlined),
-                      title: const Text('Abrir detalhes da região'),
-                      subtitle: Text(_selectedLocation!.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () {
-                        final location = _selectedLocation;
-                        if (location == null) return;
-                        Navigator.of(sheetContext).pop();
-                        Future<void>.delayed(const Duration(milliseconds: 1)).then((_) {
-                          if (!mounted) return;
-                          unawaited(
-                            _openRegionSheet(
-                              context,
-                              repo: repo,
-                              session: session,
-                              location: location,
-                              agg: null,
-                              communityId: _activeCommunityId,
-                            ),
-                          );
-                        });
-                      },
-                    ),
-                  ListTile(
-                    leading: const Icon(Icons.groups_outlined),
-                    title: const Text('Comunidades'),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () {
-                      Navigator.of(sheetContext).pop();
-                      Future<void>.delayed(const Duration(milliseconds: 1)).then((_) {
-                        if (!mounted) return;
-                        unawaited(_openCommunitiesSheet(context, repo: repo, session: session));
-                      });
-                    },
-                  ),
-                  ListTile(
-                    leading: const Icon(Icons.photo_camera_outlined),
-                    title: const Text('Criar momento'),
-                    onTap: () {
-                      Navigator.of(sheetContext).pop();
-                      Future<void>.delayed(const Duration(milliseconds: 1)).then((_) {
-                        if (!mounted) return;
-                        unawaited(_handleCreateStory(context, repo: repo, session: session));
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 10),
-                ],
-              ),
-            );
-          },
-        );
-      },
+  Future<void> openActiveCommunityFeedFromAppBar() async {
+    if (!mounted) return;
+    var communityId = _activeCommunityId;
+    while (mounted && communityId != null) {
+      final result = await Navigator.of(context).pushNamed(
+        Routes.communityDetail,
+        arguments: CommunityArgs(communityId: communityId),
+      );
+      if (!mounted) return;
+      if (result == true) {
+        clearCommunityFilterFromAppBar();
+        return;
+      }
+      if (result is String && _looksLikeUuid(result)) {
+        RepoScope.of(context).trackEvent('map_community_filter_set', <String, Object?>{'communityId': result});
+        _setCommunityFilter(result);
+        communityId = result;
+        continue;
+      }
+      return;
+    }
+  }
+
+  Future<void> openActiveCommunityChatFromAppBar() async {
+    if (!mounted) return;
+    final repo = RepoScope.of(context);
+    final session = SessionScope.of(context).value;
+    final communityId = _activeCommunityId;
+    if (communityId == null) return;
+    final c = repo.findCommunity(communityId);
+    if (c == null) return;
+    if (session is! AuthSession) {
+      showLoginSnackBar(context, message: 'Entre para abrir o chat');
+      return;
+    }
+    if (c.viewerStatus != CommunityViewerStatus.approved) {
+      showInfoSnackBar(context, 'Apenas membros podem abrir o chat');
+      return;
+    }
+    final t = repo.openOrCreateCommunityThread(c.id);
+    Navigator.of(context).pushNamed(
+      Routes.chat,
+      arguments: ChatArgs(
+        threadId: t.id,
+        peerName: c.name,
+        peerUsername: 'grupo',
+        peerIsVerified: false,
+        communityId: c.id,
+      ),
     );
+  }
+
+  Future<void> _openGlobalPrayer(BuildContext context, {required DemoRepository repo}) async {
+    if (repo.isOffline) {
+      showErrorSnackBar(context, onRetry: () {});
+      return;
+    }
+    var locationId = await repo.locationIdByPath('world');
+    if (!context.mounted) return;
+    if (locationId == null || locationId.trim().isEmpty) {
+      showInfoSnackBar(context, 'Local indisponível');
+      return;
+    }
+    final meta = await repo.locationMetaById(locationId);
+    if (!context.mounted) return;
+    final locationName = meta?['name'] ?? 'Mundo';
+    final locationLevel = meta?['level'] ?? 'world';
+    final locationPath = meta?['path'] ?? 'world';
+    Navigator.of(context).pushNamed(
+      Routes.regionPrayer,
+      arguments: RegionPrayerArgs(
+        locationId: locationId,
+        locationName: locationName,
+        locationLevel: locationLevel,
+        locationPath: locationPath,
+        contextBreadcrumb: 'Oração global',
+      ),
+    );
+  }
+
+  void _togglePrayerHeatmap() {
+    final repo = RepoScope.of(context);
+    final enabled = !_showPrayerHeatmap;
+    repo.trackEvent('map_heatmap_toggle', <String, Object?>{'enabled': enabled});
+    setState(() => _showPrayerHeatmap = enabled);
+    if (enabled) _scheduleEngineRun(immediate: true);
   }
   int _engineToken = 0;
   var _enginePrimed = false;
@@ -25281,6 +26407,11 @@ class _MapScreenState extends State<MapScreen> {
   void initState() {
     super.initState();
     _activeCommunityId = _looksLikeUuid(widget.initialCommunityId) ? widget.initialCommunityId : null;
+    if (_activeCommunityId != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        widget.onCommunityContextChanged?.call();
+      });
+    }
   }
 
   @override
@@ -25324,6 +26455,7 @@ class _MapScreenState extends State<MapScreen> {
       _cityIdsWithStories = const <String>{};
     });
     _scheduleEngineRun(immediate: true);
+    widget.onCommunityContextChanged?.call();
   }
 
   Widget _buildMarkerBubble(
@@ -25476,234 +26608,6 @@ class _MapScreenState extends State<MapScreen> {
             const SizedBox(height: 8),
             Wrap(spacing: 8, runSpacing: 8, children: items),
           ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCommunityContextPanel(
-    BuildContext context, {
-    required DemoRepository repo,
-    required SessionState session,
-  }) {
-    final communityId = _activeCommunityId;
-    if (communityId == null) return const SizedBox.shrink();
-    final cs = Theme.of(context).colorScheme;
-    final c = repo.findCommunity(communityId);
-    final auth = session is AuthSession ? session : null;
-    final viewerId = auth?.userId;
-    final isMember = c != null && auth != null && c.viewerStatus == CommunityViewerStatus.approved;
-    final canModerate = c != null && viewerId != null && repo.canModerateCommunity(c.id, viewerId);
-
-    void clearFilter() {
-      repo.trackEvent('map_community_filter_clear', const <String, Object?>{});
-      _setCommunityFilter(null);
-    }
-
-    void openSummary() {
-      if (c == null) return;
-      Navigator.of(context).pushNamed(
-        Routes.communityDetail,
-        arguments: CommunityArgs(communityId: c.id),
-      );
-    }
-
-    Future<void> startPrayer() async {
-      if (auth == null) {
-        unawaited(showAuthGate(context));
-        return;
-      }
-      if (c == null) return;
-      if (c.viewerStatus != CommunityViewerStatus.approved) {
-        showInfoSnackBar(context, 'Apenas membros podem iniciar uma oração na comunidade');
-        return;
-      }
-      if (repo.isOffline) {
-        showErrorSnackBar(context, onRetry: () {});
-        return;
-      }
-      var locationId = c.locationId;
-      if (locationId == null || locationId.trim().isEmpty) {
-        locationId = await repo.locationIdByPath('world');
-      }
-      if (!context.mounted) return;
-      if (locationId == null || locationId.trim().isEmpty) {
-        showInfoSnackBar(context, 'Local indisponível');
-        return;
-      }
-      final meta = await repo.locationMetaById(locationId);
-      if (!context.mounted) return;
-      final locationName = meta?['name'] ?? 'Mundo';
-      final locationLevel = meta?['level'] ?? 'world';
-      final locationPath = meta?['path'] ?? 'world';
-      Navigator.of(context).pushNamed(
-        Routes.regionPrayer,
-        arguments: RegionPrayerArgs(
-          locationId: locationId,
-          locationName: locationName,
-          locationLevel: locationLevel,
-          locationPath: locationPath,
-          contextBreadcrumb: '${c.name} • Oração',
-          communityId: c.id,
-        ),
-      );
-    }
-
-    void openScales() {
-      if (c == null) return;
-      Navigator.of(context).pushNamed(
-        Routes.communityPrayerScales,
-        arguments: CommunityArgs(communityId: c.id),
-      );
-    }
-
-    void openReports() {
-      if (c == null) return;
-      Navigator.of(context).pushNamed(
-        Routes.communityPrayerScales,
-        arguments: CommunityArgs(communityId: c.id),
-      );
-    }
-
-    void openChat() {
-      if (c == null) return;
-      if (auth == null) {
-        showLoginSnackBar(context, message: 'Entre para abrir o chat');
-        return;
-      }
-      if (c.viewerStatus != CommunityViewerStatus.approved) {
-        showInfoSnackBar(context, 'Apenas membros podem abrir o chat');
-        return;
-      }
-      final t = repo.openOrCreateCommunityThread(c.id);
-      Navigator.of(context).pushNamed(
-        Routes.chat,
-        arguments: ChatArgs(
-          threadId: t.id,
-          peerName: c.name,
-          peerUsername: 'grupo',
-          peerIsVerified: false,
-          communityId: c.id,
-        ),
-      );
-    }
-
-    return Material(
-      color: cs.surface,
-      elevation: 1,
-      borderRadius: BorderRadius.circular(16),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 320),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  const Icon(Icons.groups_outlined, size: 18),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      c?.name ?? 'Comunidade',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15),
-                    ),
-                  ),
-                  PopupMenuButton<String>(
-                    tooltip: 'Mais',
-                    icon: const Icon(Icons.more_horiz, size: 20),
-                    onSelected: (v) {
-                      switch (v) {
-                        case 'summary':
-                          openSummary();
-                        case 'switch':
-                          unawaited(_openCommunitiesSheet(context, repo: repo, session: session));
-                        case 'scales':
-                          if (isMember) openScales();
-                        case 'reports':
-                          if (isMember && canModerate) openReports();
-                        case 'chat':
-                          if (isMember) openChat();
-                        default:
-                          break;
-                      }
-                    },
-                    itemBuilder: (_) => <PopupMenuEntry<String>>[
-                      const PopupMenuItem(value: 'summary', child: Text('Resumo')),
-                      const PopupMenuItem(value: 'switch', child: Text('Trocar comunidade')),
-                      const PopupMenuDivider(),
-                      PopupMenuItem(
-                        value: 'scales',
-                        enabled: isMember,
-                        child: const Text('Escalas'),
-                      ),
-                      if (canModerate)
-                        PopupMenuItem(
-                          value: 'reports',
-                          enabled: isMember,
-                          child: const Text('Relatórios'),
-                        ),
-                      PopupMenuItem(
-                        value: 'chat',
-                        enabled: isMember,
-                        child: const Text('Chat'),
-                      ),
-                    ],
-                  ),
-                  IconButton(
-                    tooltip: 'Limpar filtro',
-                    onPressed: clearFilter,
-                    icon: const Icon(Icons.close, size: 20),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              if (c == null)
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                    const SizedBox(width: 10),
-                    Text('Carregando…', style: TextStyle(color: cs.outline)),
-                  ],
-                )
-              else
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    FilledButton.tonalIcon(
-                      onPressed: () => unawaited(startPrayer()),
-                      style: FilledButton.styleFrom(
-                        minimumSize: const Size(AtalaiaTapTarget.min, AtalaiaTapTarget.min),
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AtalaiaRadius.lg)),
-                      ),
-                      icon: const Icon(Icons.volunteer_activism_outlined, size: 18),
-                      label: const Text('Oração'),
-                    ),
-                    AtalaiaIconButton(
-                      icon: Icons.event_available_outlined,
-                      label: 'Escalas',
-                      onPressed: isMember ? openScales : null,
-                    ),
-                    AtalaiaIconButton(
-                      icon: Icons.chat_bubble_outline,
-                      label: 'Chat',
-                      onPressed: isMember ? openChat : null,
-                    ),
-                  ],
-                ),
-            ],
-          ),
         ),
       ),
     );
@@ -26648,31 +27552,12 @@ class _MapScreenState extends State<MapScreen> {
     _MapLocationAgg? agg,
     String? communityId,
   }) async {
-    if (repo.supabase != null && !repo.isOffline) {
-      unawaited(
-        repo.refreshCampaignsForCurrentFeed(
-          locationPath: location.path,
-          locationId: location.id,
-          communityId: communityId,
-        ),
-      );
-    }
     final posts =
         communityId == null ? repo.postsForRegion(session, location.path) : repo.postsForRegionInCommunity(session, location.path, communityId);
 
     final requestCount = posts.where((p) => p.kind == PostKind.request).length;
-    final testimonyCount = posts.where((p) => p.kind == PostKind.testimony).length;
     final prayerSum = posts.fold<int>(0, (sum, p) => sum + p.prayerCount);
     final prayersCount = prayerSum > location.prayersCount ? prayerSum : location.prayersCount;
-    final alertsCount = (agg?.alertsCount ??
-        (communityId == null
-            ? repo.alertsForRegion(session, location.path).length
-            : repo.alertsForRegionInCommunity(session, location.path, communityId).length));
-    final newsCount = agg?.newsEventsCount ?? 0;
-    final campaignsCount = repo
-        .campaignsForRegion(session, location.path, communityId: communityId)
-        .where((c) => c.status == CampaignStatus.active)
-        .length;
 
     final breadcrumb = switch (location.level) {
       'continent' => 'Mundo • Continente',
@@ -26682,159 +27567,24 @@ class _MapScreenState extends State<MapScreen> {
       _ => location.level,
     };
 
-    final stats = <_RegionStat>[
-      _RegionStat(label: 'Pedidos', value: requestCount.toString()),
-      _RegionStat(label: 'Testemunhos', value: testimonyCount.toString()),
-      _RegionStat(label: 'Orações', value: prayersCount.toString()),
-      _RegionStat(label: 'Alertas', value: alertsCount.toString()),
-      _RegionStat(label: 'Notícias', value: newsCount.toString()),
-      _RegionStat(label: 'Campanhas', value: campaignsCount.toString()),
-    ];
-
     setState(() => _isRegionSheetOpen = true);
-    final sheet = showAtalaiaBottomSheet<bool?>(
-      context,
-      isScrollControlled: true,
-      builder: (ctx) {
-        return _RegionDetailSheet(
-          title: location.name,
-          breadcrumb: breadcrumb,
-          stats: stats,
-          repo: repo,
-          locationId: location.id,
-          communityId: communityId,
-          onClose: () {
-            setState(() => _selectedLocation = null);
-            Navigator.of(ctx).pop(true);
-          },
-          onPray: () {
-            if (!session.isAuthenticated) {
-              unawaited(showAuthGate(context));
-              return;
-            }
-            setState(() => _selectedLocation = null);
-            Navigator.of(ctx).pop(true);
-            Future<void> startPrayerSession() async {
-              try {
-                var locationId = location.id;
-                if (!_looksLikeUuid(locationId)) {
-                  final resolved = await repo.locationIdByPath(location.path);
-                  if (resolved == null) {
-                    if (!context.mounted) return;
-                    showErrorSnackBar(context, onRetry: () => unawaited(startPrayerSession()));
-                    return;
-                  }
-                  locationId = resolved;
-                }
-                if (!context.mounted) return;
-                Navigator.of(context).pushNamed(
-                  Routes.regionPrayer,
-                  arguments: RegionPrayerArgs(
-                    locationId: locationId,
-                    locationName: location.name,
-                    locationLevel: location.level,
-                    locationPath: location.path,
-                    contextBreadcrumb: breadcrumb,
-                    communityId: communityId,
-                  ),
-                );
-              } catch (e, st) {
-                assert(() {
-                  debugPrint('[region_prayers] insert failed locationId=${location.id} path=${location.path}');
-                  if (e is PostgrestException) {
-                    debugPrint('[region_prayers] postgrest message=${e.message} code=${e.code} details=${e.details} hint=${e.hint}');
-                  } else {
-                    debugPrint('[region_prayers] error=$e');
-                  }
-                  debugPrintStack(stackTrace: st);
-                  return true;
-                }());
-                if (!context.mounted) return;
-                showErrorSnackBar(context, onRetry: () => unawaited(startPrayerSession()));
-              }
-            }
-
-            unawaited(startPrayerSession());
-          },
-          onOpenPosts: () {
-            setState(() => _selectedLocation = null);
-            Navigator.of(ctx).pop(true);
-            Navigator.of(context).pushNamed(
-              Routes.regionPosts,
-              arguments: RegionPostsArgs(
-                location: location,
-                contextBreadcrumb: breadcrumb,
-                communityId: communityId,
-              ),
-            );
-          },
-          onOpenAlerts: () {
-            setState(() => _selectedLocation = null);
-            Navigator.of(ctx).pop(true);
-            Navigator.of(context).pushNamed(
-              Routes.regionAlerts,
-              arguments: RegionAlertsArgs(
-                location: location,
-                contextBreadcrumb: breadcrumb,
-                communityId: communityId,
-              ),
-            );
-          },
-          onOpenNews: () {
-            setState(() => _selectedLocation = null);
-            Navigator.of(ctx).pop(true);
-            Navigator.of(context).pushNamed(
-              Routes.regionNews,
-              arguments: RegionNewsArgs(
-                location: location,
-                contextBreadcrumb: breadcrumb,
-              ),
-            );
-          },
-          onOpenCampaigns: () {
-            setState(() => _selectedLocation = null);
-            Navigator.of(ctx).pop(true);
-            Navigator.of(context).pushNamed(
-              Routes.campaignList,
-              arguments: CampaignListArgs(
-                locationPath: location.path,
-                locationLabel: location.name,
-                communityId: communityId,
-              ),
-            );
-          },
-          onOpenPrayerChallenges: () {
-            setState(() => _selectedLocation = null);
-            Navigator.of(ctx).pop(true);
-            Navigator.of(context).pushNamed(
-              Routes.prayerChallengeList,
-              arguments: PrayerChallengeListArgs(communityId: communityId),
-            );
-          },
-          onCreateCampaign: session is! AuthSession
-              ? null
-              : () {
-                  setState(() => _selectedLocation = null);
-                  Navigator.of(ctx).pop(true);
-                  Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => CreateCampaignScreen(
-                        initialLocationPath: location.path,
-                        initialLocationLabel: location.name,
-                        initialCommunityId: communityId,
-                      ),
-                    ),
-                  );
-                },
-        );
-      },
-    );
     unawaited(
-      sheet.then((result) {
+      Navigator.of(context)
+          .pushNamed(
+            Routes.regionDetail,
+            arguments: RegionDetailArgs(
+              location: location,
+              breadcrumb: breadcrumb,
+              requestCount: requestCount,
+              prayerCount: prayersCount,
+              communityId: communityId,
+            ),
+          )
+          .then((_) {
         if (!mounted) return;
         setState(() {
           _isRegionSheetOpen = false;
-          if (result != false) _selectedLocation = null;
+          _selectedLocation = null;
         });
       }),
     );
@@ -27645,15 +28395,6 @@ class _MapScreenState extends State<MapScreen> {
             MarkerLayer(markers: markers),
           ],
         ),
-        if (_activeCommunityId != null)
-          Positioned(
-            right: 12,
-            top: 12,
-            child: SafeArea(
-              minimum: const EdgeInsets.only(top: 8),
-              child: _buildCommunityContextPanel(context, repo: repo, session: session),
-            ),
-          ),
         if (_selectedLocation != null)
           Positioned(
             left: 12,
@@ -27668,6 +28409,31 @@ class _MapScreenState extends State<MapScreen> {
                   _selectedLocation!.name,
                   style: const TextStyle(fontWeight: FontWeight.w800),
                 ),
+              ),
+            ),
+          ),
+        Positioned(
+          left: 12,
+          bottom: 12,
+          child: SafeArea(
+            minimum: const EdgeInsets.only(bottom: 8),
+            child: FilledButton.tonalIcon(
+              onPressed: _togglePrayerHeatmap,
+              icon: Icon(_showPrayerHeatmap ? Icons.whatshot : Icons.whatshot_outlined, size: 18),
+              label: const Text('Heat map'),
+            ),
+          ),
+        ),
+        if (_activeCommunityId != null)
+          Positioned(
+            right: 12,
+            bottom: 12,
+            child: SafeArea(
+              minimum: const EdgeInsets.only(bottom: 8),
+              child: FilledButton.icon(
+                onPressed: () => unawaited(_openGlobalPrayer(context, repo: repo)),
+                icon: const Icon(Icons.public, size: 18),
+                label: const Text('Oração global'),
               ),
             ),
           ),
@@ -28621,170 +29387,22 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with TickerProvi
   }
 }
 
-class _RegionDetailSheet extends StatelessWidget {
-  const _RegionDetailSheet({
-    required this.title,
-    required this.breadcrumb,
-    required this.stats,
-    required this.onClose,
-    required this.onPray,
-    required this.onOpenPosts,
-    required this.repo,
-    required this.locationId,
-    required this.communityId,
-    this.onOpenAlerts,
-    this.onOpenNews,
-    this.onOpenCampaigns,
-    this.onOpenPrayerChallenges,
-    this.onCreateCampaign,
-  });
-
-  final String title;
-  final String breadcrumb;
-  final List<_RegionStat> stats;
-  final VoidCallback onClose;
-  final VoidCallback onPray;
-  final VoidCallback onOpenPosts;
-  final DemoRepository repo;
-  final String locationId;
-  final String? communityId;
-  final VoidCallback? onOpenAlerts;
-  final VoidCallback? onOpenNews;
-  final VoidCallback? onOpenCampaigns;
-  final VoidCallback? onOpenPrayerChallenges;
-  final VoidCallback? onCreateCampaign;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return SafeArea(
-      top: false,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.85),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
-                  ),
-                  IconButton(
-                    onPressed: onClose,
-                    icon: const Icon(Icons.close),
-                    tooltip: 'Fechar',
-                  ),
-                ],
-              ),
-              Text(breadcrumb, style: TextStyle(color: cs.outline, fontWeight: FontWeight.w700)),
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: [
-                  for (final s in stats)
-                    SizedBox(
-                      width: (MediaQuery.sizeOf(context).width - 16 * 2 - 10) / 2,
-                      child: _StatPill(label: s.label, value: s.value, cs: cs),
-                    ),
-                ],
-              ),
-              if (_looksLikeUuid(locationId)) ...[
-                const SizedBox(height: 14),
-                FutureBuilder<String?>(
-                  future: repo.fetchAiRegionSummary(locationId: locationId, communityId: communityId, windowHours: 48),
-                  builder: (context, snapshot) {
-                    final text = (snapshot.data ?? '').trim();
-                    if (text.isEmpty) return const SizedBox.shrink();
-                    return Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: cs.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text('IA — Resumo', style: TextStyle(fontWeight: FontWeight.w900)),
-                          const SizedBox(height: 6),
-                          Text(text, style: TextStyle(color: cs.onSurface.withValues(alpha: 0.90))),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-                const SizedBox(height: 10),
-                FutureBuilder<List<String>>(
-                  future: repo.fetchAiPrayerSuggestions(locationId: locationId, communityId: communityId, windowHours: 48),
-                  builder: (context, snapshot) {
-                    final list = snapshot.data ?? const <String>[];
-                    if (list.isEmpty) return const SizedBox.shrink();
-                    return Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: cs.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text('IA — Como orar', style: TextStyle(fontWeight: FontWeight.w900)),
-                          const SizedBox(height: 6),
-                          for (final s in list.take(4)) ...[
-                            Text('• $s', style: TextStyle(color: cs.onSurface.withValues(alpha: 0.90))),
-                            const SizedBox(height: 4),
-                          ],
-                        ],
-                      ),
-                    );
-                  },
-                ),
-              ],
-              const SizedBox(height: 14),
-              PrimaryButton(label: 'Orar por esta região', onPressed: onPray),
-              const SizedBox(height: 10),
-              SecondaryButton(label: 'Ver pedidos', onPressed: onOpenPosts),
-              if (onOpenAlerts != null) ...[
-                const SizedBox(height: 10),
-                SecondaryButton(label: 'Ver alertas', onPressed: onOpenAlerts),
-              ],
-              if (onOpenNews != null) ...[
-                const SizedBox(height: 10),
-                SecondaryButton(label: 'Ver notícias', onPressed: onOpenNews),
-              ],
-              if (onOpenCampaigns != null) ...[
-                const SizedBox(height: 10),
-                SecondaryButton(label: 'Ver campanhas', onPressed: onOpenCampaigns),
-              ],
-              if (onOpenPrayerChallenges != null) ...[
-                const SizedBox(height: 10),
-                SecondaryButton(label: 'Ver desafios', onPressed: onOpenPrayerChallenges),
-              ],
-              if (onCreateCampaign != null) ...[
-                const SizedBox(height: 10),
-                SecondaryButton(label: 'Criar campanha', onPressed: onCreateCampaign),
-              ],
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _StatPill extends StatelessWidget {
-  const _StatPill({required this.label, required this.value, required this.cs});
+  const _StatPill({
+    required this.label,
+    required this.value,
+    required this.cs,
+    this.onTap,
+  });
 
   final String label;
   final String value;
   final ColorScheme cs;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final content = Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
         color: cs.surfaceContainerHighest,
@@ -28806,14 +29424,18 @@ class _StatPill extends StatelessWidget {
         ],
       ),
     );
+
+    final onTap = this.onTap;
+    if (onTap == null) return content;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: content,
+      ),
+    );
   }
-}
-
-final class _RegionStat {
-  const _RegionStat({required this.label, required this.value});
-
-  final String label;
-  final String value;
 }
 
 class _Pill extends StatelessWidget {
@@ -31377,10 +31999,151 @@ class _CreateCommunityEventSheetState extends State<_CreateCommunityEventSheet> 
   }
 }
 
-class CommunityDetailScreen extends StatelessWidget {
+class CommunityDetailScreen extends StatefulWidget {
   const CommunityDetailScreen({required this.args, super.key});
 
   final CommunityArgs args;
+
+  @override
+  State<CommunityDetailScreen> createState() => _CommunityDetailScreenState();
+}
+
+class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
+  final _scrollController = ScrollController();
+  var _feedLoading = true;
+  var _feedLoadingMore = false;
+  var _feedHasMore = true;
+  DateTime? _feedCursorCreatedAt;
+  List<PostModel> _feedRemotePosts = const [];
+
+  Future<void> _openCommunitySwitcherSheet() async {
+    final repo = RepoScope.of(context);
+    final session = SessionScope.of(context).value;
+    if (repo.supabase != null && !repo.isOffline) {
+      unawaited(repo.refreshCommunitiesForViewer(force: true));
+    }
+
+    final search = TextEditingController();
+    try {
+      await showAtalaiaBottomSheet<void>(
+        context,
+        builder: (sheetContext) {
+          return _CommunitiesSheet(
+            search: search,
+            session: session,
+            repo: repo,
+            activeCommunityId: widget.args.communityId,
+            onOpenCommunity: (communityId) {
+              Navigator.of(sheetContext).pop();
+              Future<void>.delayed(const Duration(milliseconds: 1)).then((_) {
+                if (!mounted) return;
+                Navigator.of(context).pop(communityId);
+              });
+            },
+            onSelectFilter: (communityId) {
+              Navigator.of(sheetContext).pop();
+              Future<void>.delayed(const Duration(milliseconds: 1)).then((_) {
+                if (!mounted) return;
+                if (communityId == null) {
+                  Navigator.of(context).pop(true);
+                  return;
+                }
+                Navigator.of(context).pop(communityId);
+              });
+            },
+            onCreateCommunity: null,
+          );
+        },
+      );
+    } finally {
+      search.dispose();
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_maybeLoadMore);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_loadFeedInitial());
+    });
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _maybeLoadMore() {
+    if (!_feedHasMore || _feedLoading || _feedLoadingMore) return;
+    if (!_scrollController.hasClients) return;
+    final pos = _scrollController.position;
+    if (pos.maxScrollExtent <= 0) return;
+    if (pos.pixels < pos.maxScrollExtent - 320) return;
+    unawaited(_loadFeedMore());
+  }
+
+  Future<void> _loadFeedInitial() async {
+    if (!mounted) return;
+    setState(() {
+      _feedLoading = true;
+      _feedLoadingMore = false;
+      _feedHasMore = true;
+      _feedCursorCreatedAt = null;
+      _feedRemotePosts = const [];
+    });
+
+    final repo = RepoScope.of(context);
+    final useRemote = repo.supabase != null && !repo.isOffline;
+    if (!useRemote) {
+      if (!mounted) return;
+      setState(() => _feedLoading = false);
+      return;
+    }
+
+    final c = repo.findCommunity(widget.args.communityId);
+    if (c == null) {
+      if (!mounted) return;
+      setState(() => _feedLoading = false);
+      return;
+    }
+
+    final items = await repo.fetchCommunityFeedPosts(c.id, limit: 24);
+    if (!mounted) return;
+    setState(() {
+      _feedLoading = false;
+      _feedRemotePosts = items;
+      _feedCursorCreatedAt = items.isEmpty ? null : items.last.createdAt;
+      _feedHasMore = items.length >= 24;
+    });
+  }
+
+  Future<void> _loadFeedMore() async {
+    final repo = RepoScope.of(context);
+    final useRemote = repo.supabase != null && !repo.isOffline;
+    if (!useRemote) return;
+    final cursor = _feedCursorCreatedAt;
+    if (cursor == null) {
+      setState(() => _feedHasMore = false);
+      return;
+    }
+    setState(() => _feedLoadingMore = true);
+    final items = await repo.fetchCommunityFeedPosts(
+      widget.args.communityId,
+      cursorCreatedAt: cursor,
+      limit: 24,
+    );
+    if (!mounted) return;
+    final existingIds = _feedRemotePosts.map((p) => p.id).toSet();
+    final next = [..._feedRemotePosts, ...items.where((p) => !existingIds.contains(p.id))];
+    setState(() {
+      _feedLoadingMore = false;
+      _feedRemotePosts = List.unmodifiable(next);
+      _feedCursorCreatedAt = items.isEmpty ? _feedCursorCreatedAt : items.last.createdAt;
+      _feedHasMore = items.length >= 24;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -31390,7 +32153,7 @@ class CommunityDetailScreen extends StatelessWidget {
     return AnimatedBuilder(
       animation: Listenable.merge([repo, session]),
       builder: (context, _) {
-        final c = repo.findCommunity(args.communityId);
+        final c = repo.findCommunity(widget.args.communityId);
         if (c == null) {
           return Scaffold(
             appBar: AppBar(title: const Text('Comunidade')),
@@ -31400,7 +32163,6 @@ class CommunityDetailScreen extends StatelessWidget {
 
         final s = session.value;
         final isAuthenticated = s.isAuthenticated;
-        final canOpenMap = c.viewerStatus == CommunityViewerStatus.approved;
         final cs = Theme.of(context).colorScheme;
         final viewerId = s is AuthSession ? s.userId : null;
         if (viewerId != null && repo.supabase != null && !repo.isOffline) {
@@ -31410,379 +32172,448 @@ class CommunityDetailScreen extends StatelessWidget {
         final canEdit = viewerId != null && (c.ownerId == viewerId || role == 'admin' || role == 'moderator' || role == 'founder');
 
         final posts = repo.postsForCommunity(s, c.id);
-        final requestCount = posts.where((p) => p.kind == PostKind.request).length;
         final prayerSum = posts.fold<int>(0, (sum, p) => sum + p.prayerCount);
 
         final primaryLabel = switch (c.viewerStatus) {
           CommunityViewerStatus.none => c.isClosed ? 'Solicitar entrada' : 'Entrar',
           CommunityViewerStatus.pending => 'Solicitação enviada',
-          CommunityViewerStatus.approved => 'Abrir mapa',
+          CommunityViewerStatus.approved => null,
         };
 
         return Scaffold(
           appBar: AppBar(
-            title: const Text('Comunidade'),
+            title: Text(c.name),
             actions: [
-              if (canEdit)
-                AtalaiaTextButton(
-                  label: 'Editar',
+              if (c.viewerStatus == CommunityViewerStatus.approved && s is AuthSession && !repo.isOffline)
+                IconButton(
+                  icon: const Icon(Icons.add),
+                  tooltip: 'Criar post',
                   onPressed: () {
-                    Navigator.of(context).pushNamed(
-                      Routes.editCommunity,
-                      arguments: EditCommunityArgs(communityId: c.id),
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => PostComposerScreen(draft: ComposerDraft(initialCommunityId: c.id)),
+                      ),
                     );
                   },
                 ),
             ],
           ),
-          body: ListView(
-            padding: const EdgeInsets.all(12),
-            children: [
-              if (repo.isOffline)
-                OfflineBanner(onRetry: () => repo.setOffline(false)),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Avatar(name: c.name, imageUrl: c.imageUrl, size: AvatarSize.s96),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
+          body: RefreshIndicator(
+            onRefresh: _loadFeedInitial,
+            child: CustomScrollView(
+              controller: _scrollController,
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverPadding(
+                  padding: const EdgeInsets.all(12),
+                  sliver: SliverList(
+                    delegate: SliverChildListDelegate(
+                      [
+                        if (repo.isOffline) OfflineBanner(onRetry: () => repo.setOffline(false)),
+                        Card(
+                          child: Padding(
+                            padding: const EdgeInsets.all(14),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Flexible(
-                                  child: Text(
-                                    c.name,
-                                    style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                                if (c.isVerified) ...[
-                                  const SizedBox(width: 6),
-                                  Icon(Icons.verified, size: 18, color: context.brand.verifiedBlue),
-                                ],
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: [
-                                Chip(
-                                  label: Text(c.isClosed ? 'Fechada' : 'Aberta'),
-                                  visualDensity: VisualDensity.compact,
-                                ),
-                                Chip(
-                                  label: Text(c.theme),
-                                  visualDensity: VisualDensity.compact,
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            LayoutBuilder(
-                              builder: (context, constraints) {
-                                const gap = 10.0;
-                                final maxWidth = constraints.maxWidth;
-                                final threeColWidth = (maxWidth - (gap * 2)) / 3;
-                                final useTwoColumns = threeColWidth < 110;
-                                final itemWidth = useTwoColumns ? (maxWidth - gap) / 2 : threeColWidth;
-                                return Wrap(
-                                  spacing: gap,
-                                  runSpacing: gap,
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    SizedBox(
-                                      width: itemWidth,
-                                      child: _StatPill(
-                                        label: 'Membros',
-                                        value: c.memberCount.toString(),
-                                        cs: cs,
-                                      ),
-                                    ),
-                                    SizedBox(
-                                      width: itemWidth,
-                                      child: _StatPill(
-                                        label: 'Pedidos',
-                                        value: requestCount.toString(),
-                                        cs: cs,
-                                      ),
-                                    ),
-                                    SizedBox(
-                                      width: itemWidth,
-                                      child: _StatPill(
-                                        label: 'Orações',
-                                        value: prayerSum.toString(),
-                                        cs: cs,
+                                    Avatar(name: c.name, imageUrl: c.imageUrl, size: AvatarSize.s96),
+                                    const SizedBox(width: 14),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              Flexible(
+                                                child: Text(
+                                                  c.name,
+                                                  style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18),
+                                                  maxLines: 1,
+                                                  overflow: TextOverflow.ellipsis,
+                                                ),
+                                              ),
+                                              if (c.isVerified) ...[
+                                                const SizedBox(width: 6),
+                                                Icon(Icons.verified, size: 18, color: context.brand.verifiedBlue),
+                                              ],
+                                            ],
+                                          ),
+                                          const SizedBox(height: 10),
+                                          Row(
+                                            children: [
+                                              Expanded(
+                                                child: _StatPill(
+                                                  label: 'Membros',
+                                                  value: c.memberCount.toString(),
+                                                  cs: cs,
+                                                  onTap: () {
+                                                    Navigator.of(context).pushNamed(
+                                                      Routes.communityMembers,
+                                                      arguments: CommunityMembersArgs(communityId: c.id),
+                                                    );
+                                                  },
+                                                ),
+                                              ),
+                                              const SizedBox(width: 10),
+                                              Expanded(
+                                                child: _StatPill(
+                                                  label: 'Orações',
+                                                  value: prayerSum.toString(),
+                                                  cs: cs,
+                                                  onTap: () {
+                                                    Navigator.of(context).pushNamed(
+                                                      Routes.communityPrayerScales,
+                                                      arguments: CommunityArgs(communityId: c.id),
+                                                    );
+                                                  },
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ],
                                       ),
                                     ),
                                   ],
-                                );
-                              },
+                                ),
+                                if (canEdit) ...[
+                                  const SizedBox(height: 12),
+                                  SizedBox(
+                                    width: double.infinity,
+                                    child: SecondaryButton(
+                                      label: 'Editar comunidade',
+                                      onPressed: () {
+                                        Navigator.of(context).pushNamed(
+                                          Routes.editCommunity,
+                                          arguments: EditCommunityArgs(communityId: c.id),
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        if (c.description.trim().isNotEmpty) ...[
+                          Card(
+                            elevation: 0,
+                            color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
+                            child: Padding(
+                              padding: const EdgeInsets.all(14),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Row(
+                                    children: [
+                                      Icon(Icons.info_outline, size: 18),
+                                      SizedBox(width: 8),
+                                      Text('Descrição', style: TextStyle(fontWeight: FontWeight.w800)),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 10),
+                                  _ExpandableText(text: c.description, maxLines: 4),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                        ],
+                        Card(
+                          elevation: 0,
+                          color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
+                          child: Padding(
+                            padding: const EdgeInsets.all(14),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Row(
+                                  children: [
+                                    Icon(Icons.rule_outlined, size: 18),
+                                    SizedBox(width: 8),
+                                    Text('Regras', style: TextStyle(fontWeight: FontWeight.w800)),
+                                  ],
+                                ),
+                                const SizedBox(height: 10),
+                                if (c.rules.isEmpty)
+                                  Text('Sem regras por enquanto.', style: TextStyle(color: cs.outline))
+                                else
+                                  ...c.rules.map(
+                                    (r) => Padding(
+                                      padding: const EdgeInsets.only(bottom: 6),
+                                      child: Text('• $r'),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        if (primaryLabel != null) ...[
+                          const SizedBox(height: 12),
+                          PrimaryButton(
+                            label: primaryLabel,
+                            onPressed: c.viewerStatus == CommunityViewerStatus.pending
+                                ? null
+                                : () {
+                                    if (!isAuthenticated) {
+                                      showLoginSnackBar(context, message: 'Entre para continuar');
+                                      return;
+                                    }
+
+                                    if (repo.isOffline) {
+                                      showErrorSnackBar(
+                                        context,
+                                        onRetry: () {
+                                          if (RepoScope.of(context).isOffline) return;
+                                          RepoScope.of(context).requestCommunityJoin(c.id, isAuthenticated: true);
+                                          showInfoSnackBar(
+                                            context,
+                                            c.isClosed ? 'Solicitação enviada' : 'Você entrou na comunidade',
+                                          );
+                                        },
+                                      );
+                                      return;
+                                    }
+
+                                    RepoScope.of(context).requestCommunityJoin(c.id, isAuthenticated: true);
+                                    showInfoSnackBar(
+                                      context,
+                                      c.isClosed ? 'Solicitação enviada' : 'Você entrou na comunidade',
+                                    );
+                                  },
+                          ),
+                        ],
+                        if (c.viewerStatus == CommunityViewerStatus.pending) ...[
+                          const SizedBox(height: 10),
+                          SecondaryButton(
+                            label: 'Cancelar solicitação',
+                            onPressed: () {
+                              if (!isAuthenticated) {
+                                showLoginSnackBar(context, message: 'Entre para continuar');
+                                return;
+                              }
+                              RepoScope.of(context).cancelCommunityJoinRequest(c.id, isAuthenticated: true);
+                              showInfoSnackBar(context, 'Solicitação cancelada');
+                            },
+                          ),
+                        ] else if (c.viewerStatus == CommunityViewerStatus.none && c.isClosed) ...[
+                          const SizedBox(height: 10),
+                          SecondaryButton(
+                            label: 'Enviar mensagem ao admin',
+                            onPressed: () {
+                              if (!isAuthenticated) {
+                                showLoginSnackBar(context, message: 'Entre para enviar mensagem');
+                                return;
+                              }
+                              final admin = RepoScope.of(context).findProfile(c.ownerId);
+                              if (admin == null) {
+                                showInfoSnackBar(context, 'Admin indisponível (demo)');
+                                return;
+                              }
+                              final t = RepoScope.of(context).openOrCreateThreadWith(admin);
+                              Navigator.of(context).pushNamed(
+                                Routes.chat,
+                                arguments: ChatArgs(
+                                  threadId: t.id,
+                                  peerName: t.peerName,
+                                  peerUsername: t.peerUsername,
+                                  peerIsVerified: t.peerIsVerified,
+                                ),
+                              );
+                            },
+                          ),
+                        ],
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: SecondaryButton(
+                                label: 'Trocar comunidade',
+                                onPressed: _openCommunitySwitcherSheet,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: SecondaryButton(
+                                label: 'Sair da comunidade',
+                                onPressed: () => Navigator.of(context).pop(true),
+                              ),
                             ),
                           ],
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              if (c.description.trim().isNotEmpty) ...[
-                Card(
-                  elevation: 0,
-                  color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
-                  child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Row(
-                          children: [
-                            Icon(Icons.info_outline, size: 18),
-                            SizedBox(width: 8),
-                            Text('Descrição', style: TextStyle(fontWeight: FontWeight.w800)),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        _ExpandableText(text: c.description, maxLines: 4),
+                        const SizedBox(height: 14),
+                        const Text('Feed', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                        const SizedBox(height: 8),
                       ],
                     ),
                   ),
                 ),
-                const SizedBox(height: 12),
-              ],
-              Card(
-                elevation: 0,
-                color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Row(
-                        children: [
-                          Icon(Icons.rule_outlined, size: 18),
-                          SizedBox(width: 8),
-                          Text('Regras', style: TextStyle(fontWeight: FontWeight.w800)),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      if (c.rules.isEmpty)
-                        Text('Sem regras por enquanto.', style: TextStyle(color: cs.outline))
-                      else
-                        ...c.rules.map(
-                          (r) => Padding(
-                            padding: const EdgeInsets.only(bottom: 6),
-                            child: Text('• $r'),
+                Builder(
+                  builder: (context) {
+                    if (s is! AuthSession) {
+                      return SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 18),
+                          child: Center(
+                            child: PrimaryButton(
+                              label: 'Entrar para ver o feed',
+                              onPressed: () => showLoginSnackBar(context, message: 'Entre para ver o feed'),
+                            ),
                           ),
                         ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              PrimaryButton(
-                label: primaryLabel,
-                onPressed: c.viewerStatus == CommunityViewerStatus.pending
-                    ? null
-                    : () {
-                        if (!isAuthenticated) {
-                          showLoginSnackBar(context, message: 'Entre para continuar');
-                          return;
-                        }
+                      );
+                    }
 
-                        if (canOpenMap) {
-                          Navigator.of(context).pushNamed(
-                            Routes.communityMap,
-                            arguments: CommunityArgs(communityId: c.id),
-                          );
-                          return;
-                        }
-
-                        if (repo.isOffline) {
-                          showErrorSnackBar(
-                            context,
-                            onRetry: () {
-                              if (RepoScope.of(context).isOffline) return;
-                              RepoScope.of(context).requestCommunityJoin(c.id, isAuthenticated: true);
-                              showInfoSnackBar(
-                                context,
-                                c.isClosed ? 'Solicitação enviada' : 'Você entrou na comunidade',
-                              );
-                            },
-                          );
-                          return;
-                        }
-
-                        RepoScope.of(context).requestCommunityJoin(c.id, isAuthenticated: true);
-                        showInfoSnackBar(
-                          context,
-                          c.isClosed ? 'Solicitação enviada' : 'Você entrou na comunidade',
-                        );
-                      },
-              ),
-              if (c.viewerStatus == CommunityViewerStatus.approved) ...[
-                const SizedBox(height: 10),
-                Align(
-                  alignment: Alignment.center,
-                  child: AtalaiaTextButton(
-                    label: 'Mais opções',
-                    onPressed: () {
-                      unawaited(
-                        showAtalaiaBottomSheet<void>(
-                          context,
-                          builder: (sheetContext) {
-                            return SafeArea(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const SizedBox(height: 6),
-                                  Container(
-                                    width: 44,
-                                    height: 4,
-                                    decoration: BoxDecoration(
-                                      color: Theme.of(context).colorScheme.outlineVariant,
-                                      borderRadius: BorderRadius.circular(999),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  ListTile(
-                                    leading: const Icon(Icons.rss_feed_outlined),
-                                    title: const Text('Abrir feed'),
-                                    trailing: const Icon(Icons.chevron_right),
-                                    onTap: () {
-                                      Navigator.of(sheetContext).pop();
-                                      Future<void>.delayed(const Duration(milliseconds: 1)).then((_) {
-                                        if (!context.mounted) return;
-                                        Navigator.of(context).pushNamed(
-                                          Routes.communityFeed,
-                                          arguments: CommunityFeedArgs(communityId: c.id),
-                                        );
-                                      });
-                                    },
-                                  ),
-                                  ListTile(
-                                    leading: const Icon(Icons.schedule_outlined),
-                                    title: const Text('Escalas de oração'),
-                                    trailing: const Icon(Icons.chevron_right),
-                                    onTap: () {
-                                      Navigator.of(sheetContext).pop();
-                                      Future<void>.delayed(const Duration(milliseconds: 1)).then((_) {
-                                        if (!context.mounted) return;
-                                        Navigator.of(context).pushNamed(
-                                          Routes.communityPrayerScales,
-                                          arguments: CommunityArgs(communityId: c.id),
-                                        );
-                                      });
-                                    },
-                                  ),
-                                  ListTile(
-                                    leading: const Icon(Icons.event_outlined),
-                                    title: const Text('Eventos'),
-                                    trailing: const Icon(Icons.chevron_right),
-                                    onTap: () {
-                                      Navigator.of(sheetContext).pop();
-                                      Future<void>.delayed(const Duration(milliseconds: 1)).then((_) {
-                                        if (!context.mounted) return;
-                                        Navigator.of(context).pushNamed(
-                                          Routes.communityEvents,
-                                          arguments: CommunityArgs(communityId: c.id),
-                                        );
-                                      });
-                                    },
-                                  ),
-                                  ListTile(
-                                    leading: const Icon(Icons.people_outline),
-                                    title: const Text('Membros'),
-                                    trailing: const Icon(Icons.chevron_right),
-                                    onTap: () {
-                                      Navigator.of(sheetContext).pop();
-                                      Future<void>.delayed(const Duration(milliseconds: 1)).then((_) {
-                                        if (!context.mounted) return;
-                                        Navigator.of(context).pushNamed(
-                                          Routes.communityMembers,
-                                          arguments: CommunityMembersArgs(communityId: c.id),
-                                        );
-                                      });
-                                    },
-                                  ),
-                                  ListTile(
-                                    leading: const Icon(Icons.forum_outlined),
-                                    title: const Text('Abrir chat'),
-                                    trailing: const Icon(Icons.chevron_right),
-                                    onTap: () {
-                                      Navigator.of(sheetContext).pop();
-                                      Future<void>.delayed(const Duration(milliseconds: 1)).then((_) {
-                                        if (!context.mounted) return;
-                                        final t = RepoScope.of(context).openOrCreateCommunityThread(c.id);
-                                        Navigator.of(context).pushNamed(
-                                          Routes.chat,
-                                          arguments: ChatArgs(
-                                            threadId: t.id,
-                                            peerName: c.name,
-                                            peerUsername: 'grupo',
-                                            peerIsVerified: false,
-                                            communityId: c.id,
-                                          ),
-                                        );
-                                      });
-                                    },
-                                  ),
-                                  const SizedBox(height: 10),
-                                ],
+                    if (c.isClosed && c.viewerStatus != CommunityViewerStatus.approved) {
+                      return SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 18),
+                          child: Column(
+                            children: [
+                              SizedBox(height: MediaQuery.sizeOf(context).height * 0.04),
+                              const EmptyState(
+                                icon: Icons.lock_outline,
+                                title: 'Apenas membros veem este feed',
                               ),
-                            );
-                          },
+                            ],
+                          ),
                         ),
                       );
-                    },
-                  ),
-                ),
-              ] else if (c.viewerStatus == CommunityViewerStatus.pending) ...[
-                const SizedBox(height: 10),
-                SecondaryButton(
-                  label: 'Cancelar solicitação',
-                  onPressed: () {
-                    if (!isAuthenticated) {
-                      showLoginSnackBar(context, message: 'Entre para continuar');
-                      return;
                     }
-                    RepoScope.of(context).cancelCommunityJoinRequest(c.id, isAuthenticated: true);
-                    showInfoSnackBar(context, 'Solicitação cancelada');
-                  },
-                ),
-              ] else if (c.viewerStatus == CommunityViewerStatus.none && c.isClosed) ...[
-                const SizedBox(height: 10),
-                SecondaryButton(
-                  label: 'Enviar mensagem ao admin',
-                  onPressed: () {
-                    if (!isAuthenticated) {
-                      showLoginSnackBar(context, message: 'Entre para enviar mensagem');
-                      return;
+
+                    final useRemote = repo.supabase != null && !repo.isOffline;
+                    final posts = useRemote ? _feedRemotePosts : repo.postsForCommunity(s, c.id);
+
+                    if (_feedLoading) {
+                      return SliverList(
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            return PostCardSkeleton(
+                              hasMedia: index.isEven,
+                              margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            );
+                          },
+                          childCount: 6,
+                        ),
+                      );
                     }
-                    final admin = RepoScope.of(context).findProfile(c.ownerId);
-                    if (admin == null) {
-                      showInfoSnackBar(context, 'Admin indisponível (demo)');
-                      return;
+
+                    if (posts.isEmpty) {
+                      return SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 24, 12, 18),
+                          child: Column(
+                            children: [
+                              SizedBox(height: MediaQuery.sizeOf(context).height * 0.06),
+                              const EmptyState(icon: Icons.feed_outlined, title: 'Nenhum post nesta comunidade ainda.'),
+                            ],
+                          ),
+                        ),
+                      );
                     }
-                    final t = RepoScope.of(context).openOrCreateThreadWith(admin);
-                    Navigator.of(context).pushNamed(
-                      Routes.chat,
-                      arguments: ChatArgs(
-                        threadId: t.id,
-                        peerName: t.peerName,
-                        peerUsername: t.peerUsername,
-                        peerIsVerified: t.peerIsVerified,
+
+                    return SliverList(
+                      delegate: SliverChildBuilderDelegate(
+                        (context, index) {
+                          if (index >= posts.length) {
+                            return const Padding(
+                              padding: EdgeInsets.fromLTRB(12, 12, 12, 18),
+                              child: Center(child: CircularProgressIndicator()),
+                            );
+                          }
+
+                          final post = posts[index];
+                          return PostCard(
+                            post: post,
+                            isAuthenticated: true,
+                            onOpenPost: () {
+                              Navigator.of(context).pushNamed(
+                                Routes.postDetail,
+                                arguments: PostDetailArgs(postId: post.id),
+                              );
+                            },
+                            onLike: () {
+                              if (!useRemote) {
+                                repo.toggleLike(post.id, isAuthenticated: true);
+                                return;
+                              }
+                              final idx = _feedRemotePosts.indexWhere((p) => p.id == post.id);
+                              if (idx < 0) return;
+                              final p = _feedRemotePosts[idx];
+                              final nextLiked = !p.viewerHasLiked;
+                              if (nextLiked) {
+                                repo.trackEvent('like_add', <String, Object?>{
+                                  'postId': p.id,
+                                  'kind': p.kind.analyticsValue,
+                                  'visibility': p.visibility.analyticsValue,
+                                });
+                              }
+                              final list = _feedRemotePosts.toList(growable: true);
+                              list[idx] = p.copyWith(
+                                viewerHasLiked: nextLiked,
+                                likeCount: nextLiked ? p.likeCount + 1 : (p.likeCount - 1).clamp(0, 1 << 30),
+                              );
+                              setState(() => _feedRemotePosts = List.unmodifiable(list));
+                              unawaited(repo.setLikeOnPostSupabase(postId: p.id, shouldLike: nextLiked));
+                            },
+                            onPray: () {
+                              if (!useRemote) {
+                                repo.togglePrayer(post.id, isAuthenticated: true);
+                                showInfoSnackBar(context, 'Oração registrada');
+                                return;
+                              }
+                              final idx = _feedRemotePosts.indexWhere((p) => p.id == post.id);
+                              if (idx < 0) return;
+                              final p = _feedRemotePosts[idx];
+                              if (p.viewerHasPrayed) return;
+                              repo.trackEvent('prayer_add', <String, Object?>{
+                                'postId': p.id,
+                                'kind': p.kind.analyticsValue,
+                                'visibility': p.visibility.analyticsValue,
+                              });
+                              final list = _feedRemotePosts.toList(growable: true);
+                              list[idx] = p.copyWith(viewerHasPrayed: true, prayerCount: p.prayerCount + 1);
+                              setState(() => _feedRemotePosts = List.unmodifiable(list));
+                              unawaited(repo.addPrayerOnPostSupabase(postId: p.id));
+                              showInfoSnackBar(context, 'Oração registrada');
+                            },
+                            onComment: () {
+                              Navigator.of(context).pushNamed(
+                                Routes.postComments,
+                                arguments: CommentsArgs(postId: post.id),
+                              );
+                            },
+                            onShare: () async {
+                              await showShareSheet(context, post: post, isAuthenticated: true);
+                            },
+                            onSave: () {
+                              if (!useRemote) {
+                                final willSave = !post.viewerHasSaved;
+                                repo.toggleSave(post.id, isAuthenticated: true);
+                                if (willSave) showInfoSnackBar(context, 'Salvo');
+                                return;
+                              }
+                              final idx = _feedRemotePosts.indexWhere((p) => p.id == post.id);
+                              if (idx < 0) return;
+                              final p = _feedRemotePosts[idx];
+                              final list = _feedRemotePosts.toList(growable: true);
+                              list[idx] = p.copyWith(viewerHasSaved: !p.viewerHasSaved);
+                              setState(() => _feedRemotePosts = List.unmodifiable(list));
+                              if (!p.viewerHasSaved) showInfoSnackBar(context, 'Salvo');
+                            },
+                          );
+                        },
+                        childCount: posts.length + (_feedLoadingMore ? 1 : 0),
                       ),
                     );
                   },
                 ),
+                const SliverToBoxAdapter(child: SizedBox(height: 8)),
               ],
-            ],
+            ),
           ),
         );
       },
@@ -32518,19 +33349,42 @@ class UserProfileScreen extends StatelessWidget {
                 },
               ),
               const SizedBox(height: 12),
-              TabBar(
-                labelColor: cs.onSurface,
-                unselectedLabelColor: cs.onSurfaceVariant,
-                dividerColor: Colors.transparent,
-                indicator: BoxDecoration(
-                  color: cs.surfaceContainerHighest,
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                indicatorPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                tabs: const [
-                  Tab(icon: Icon(Icons.view_agenda_outlined)),
-                  Tab(icon: Icon(Icons.grid_on_outlined)),
-                ],
+              Builder(
+                builder: (context) {
+                  final controller = DefaultTabController.of(context);
+                  return AnimatedBuilder(
+                    animation: controller,
+                    builder: (context, _) {
+                      final idx = controller.index;
+                      return TabBar(
+                        labelColor: cs.onSurface,
+                        unselectedLabelColor: cs.onSurfaceVariant,
+                        dividerColor: Colors.transparent,
+                        indicatorSize: TabBarIndicatorSize.label,
+                        indicator: BoxDecoration(
+                          color: cs.primary.withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        indicatorPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                        overlayColor: WidgetStatePropertyAll(cs.onSurface.withValues(alpha: 0.06)),
+                        tabs: [
+                          Tab(
+                            icon: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                              child: Icon(idx == 0 ? Icons.view_agenda : Icons.view_agenda_outlined),
+                            ),
+                          ),
+                          Tab(
+                            icon: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                              child: Icon(idx == 1 ? Icons.grid_on : Icons.grid_on_outlined),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  );
+                },
               ),
               const SizedBox(height: 12),
               SizedBox(
@@ -32612,9 +33466,13 @@ class _ProfileHeader extends StatelessWidget {
     final displayName = _displayNameForProfile(profile);
     final displayUsername = _usernameForProfile(profile, userId: profile.userId);
     return Card(
+      color: cs.surface,
       elevation: 0,
       surfaceTintColor: Colors.transparent,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: BorderSide(color: cs.outlineVariant.withValues(alpha: 0.55), width: 1),
+      ),
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: Column(
@@ -32729,10 +33587,15 @@ class _ProfileStatsRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
     return Card(
+      color: cs.surface,
       elevation: 0,
       surfaceTintColor: Colors.transparent,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(color: cs.outlineVariant.withValues(alpha: 0.55), width: 1),
+      ),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
         child: Row(
