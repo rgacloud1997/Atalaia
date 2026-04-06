@@ -16971,8 +16971,8 @@ class _HomeFeedScreenState extends State<HomeFeedScreen> {
                                 onComment: () {
                                   if (!isAuthenticated) return showCtaSnackBar(context);
                                   Navigator.of(context).pushNamed(
-                                    Routes.postDetail,
-                                    arguments: PostDetailArgs(postId: post.id),
+                                    Routes.postComments,
+                                    arguments: CommentsArgs(postId: post.id),
                                   );
                                 },
                                 onShare: () async {
@@ -18606,6 +18606,7 @@ class DirectInboxScreen extends StatefulWidget {
 
 class _DirectInboxScreenState extends State<DirectInboxScreen> {
   final _search = TextEditingController();
+  var _seededCommunityThreads = false;
 
   Future<void> _onRefresh() async {
     final repo = RepoScope.of(context);
@@ -18641,6 +18642,23 @@ class _DirectInboxScreenState extends State<DirectInboxScreen> {
           );
           if (widget.embedded) return content;
           return Scaffold(appBar: AppBar(title: const Text('Direct')), body: content);
+        }
+
+        if (!_seededCommunityThreads) {
+          _seededCommunityThreads = true;
+          Future<void>.microtask(() {
+            if (!mounted) return;
+            final repo = RepoScope.of(context);
+            final session = SessionScope.of(context).value;
+            if (session is! AuthSession) return;
+            final approved = repo
+                .communitiesFor(session)
+                .where((c) => c.viewerStatus == CommunityViewerStatus.approved)
+                .toList(growable: false);
+            for (final c in approved) {
+              repo.openOrCreateCommunityThread(c.id);
+            }
+          });
         }
 
         final threads = repo.threadsFor(s, query: _search.text);
@@ -20249,8 +20267,8 @@ class _RegionPostsScreenState extends State<RegionPostsScreen> {
                                     onComment: () {
                                       if (!isAuthenticated) return showCtaSnackBar(context);
                                       Navigator.of(context).pushNamed(
-                                        Routes.postDetail,
-                                        arguments: PostDetailArgs(postId: post.id),
+                                        Routes.postComments,
+                                        arguments: CommentsArgs(postId: post.id),
                                       );
                                     },
                                     onShare: () async {
@@ -24831,29 +24849,21 @@ class _HomeStoriesStrip extends StatelessWidget {
                         child: Icon(Icons.add, size: 14, color: cs.onPrimary),
                       ),
                     ),
-                  Positioned(
-                    left: 8,
-                    bottom: 8,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: cs.surface.withValues(alpha: 0.9),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Text(
-                        label,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: cs.onSurface,
-                          fontSize: labelFontSize ?? 12,
-                          fontWeight: labelWeight ?? FontWeight.w700,
-                          height: 1.1,
-                        ),
-                      ),
-                    ),
-                  ),
                 ],
+              ),
+              const SizedBox(height: 8),
+              Center(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: cs.onSurfaceVariant,
+                    fontSize: labelFontSize ?? 12,
+                    fontWeight: labelWeight ?? FontWeight.w700,
+                    height: 1.1,
+                  ),
+                ),
               ),
             ],
           ),
@@ -24914,7 +24924,11 @@ class _HomeStoriesStrip extends StatelessWidget {
                 const SizedBox(width: 10),
                 for (final userId in others) ...[
                   tile(
-                    label: '@${_normalizeDisplayUsername(repo.profileForUserId(userId)?.username, fallback: userId)}',
+                    label: () {
+                      final p = repo.profileForUserId(userId);
+                      if (p == null) return 'Usuário';
+                      return _displayNameForProfile(p);
+                    }(),
                     avatarUrl: repo.profileForUserId(userId)?.avatarUrl,
                     borderColor: cs.primary,
                     showUnreadDot: true,
@@ -29066,18 +29080,7 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                   AtalaiaSpacing.md,
                   AtalaiaSpacing.sm,
                 ),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: AtalaiaFilterChip(
-                    selected: _onlyRequests,
-                    label: 'Somente pedidos',
-                    onSelected: (v) {
-                      if (_onlyRequests == v) return;
-                      setState(() => _onlyRequests = v);
-                      if (useRemote) unawaited(_loadInitial());
-                    },
-                  ),
-                ),
+                child: SizedBox.shrink(),
               ),
               Expanded(
                 child: RefreshIndicator(
@@ -29175,8 +29178,8 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                   },
                                   onComment: () {
                                     Navigator.of(context).pushNamed(
-                                      Routes.postDetail,
-                                      arguments: PostDetailArgs(postId: post.id),
+                                      Routes.postComments,
+                                      arguments: CommentsArgs(postId: post.id),
                                     );
                                   },
                                   onShare: () async {
@@ -32019,8 +32022,8 @@ class _CommunityMapScreenState extends State<CommunityMapScreen> {
                             },
                             onComment: () {
                               Navigator.of(context).pushNamed(
-                                Routes.postDetail,
-                                arguments: PostDetailArgs(postId: post.id),
+                                Routes.postComments,
+                                arguments: CommentsArgs(postId: post.id),
                               );
                             },
                             onShare: () async {
@@ -32869,8 +32872,8 @@ class _ProfilePostsListState extends State<_ProfilePostsList> {
                       },
                       onComment: () {
                         Navigator.of(context).pushNamed(
-                          Routes.postDetail,
-                          arguments: PostDetailArgs(postId: post.id),
+                          Routes.postComments,
+                          arguments: CommentsArgs(postId: post.id),
                         );
                       },
                       onShare: () async {
