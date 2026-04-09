@@ -1,4 +1,4 @@
-package com.example.atalaia_social
+package com.rgachurch360.atalaia
 
 import io.flutter.embedding.android.FlutterActivity
 
