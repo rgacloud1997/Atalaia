@@ -2992,6 +2992,7 @@ class DemoRepository extends ChangeNotifier {
   var _profileSearchQuery = '';
   var _notificationsLoadedForViewerId = '';
   var _mediaLibraryLoadedForViewerId = '';
+  var _playlistsLoadedForViewerId = '';
   var _viewerUserId = 'u1';
   var _viewerSessionKey = 'anon';
   var _adSessionToken = 0;
@@ -3388,7 +3389,7 @@ class DemoRepository extends ChangeNotifier {
     String? communityId,
   }) {
     final now = DateTime.now();
-    final id = 'pl_${now.microsecondsSinceEpoch}';
+    final id = supabase != null && _looksLikeUuid(ownerId) ? _uuidV4() : 'pl_${now.microsecondsSinceEpoch}';
     final next = PlaylistModel(
       id: id,
       ownerId: ownerId,
@@ -3402,6 +3403,9 @@ class DemoRepository extends ChangeNotifier {
     );
     _playlists = [next, ..._playlists];
     notifyListeners();
+    if (supabase != null && !isOffline && ownerId == _viewerUserId && _looksLikeUuid(ownerId) && _looksLikeUuid(id)) {
+      unawaited(_createPlaylistSupabase(next));
+    }
     return id;
   }
 
@@ -3430,6 +3434,10 @@ class DemoRepository extends ChangeNotifier {
       updatedAt: DateTime.now(),
     );
     notifyListeners();
+    final updated = _playlists[index];
+    if (supabase != null && !isOffline && userId == _viewerUserId && _looksLikeUuid(userId) && _looksLikeUuid(updated.id)) {
+      unawaited(_updatePlaylistSupabase(updated));
+    }
     return true;
   }
 
@@ -3441,6 +3449,9 @@ class DemoRepository extends ChangeNotifier {
       entry.value.remove(playlistId);
     }
     notifyListeners();
+    if (supabase != null && !isOffline && userId == _viewerUserId && _looksLikeUuid(userId) && _looksLikeUuid(current.id)) {
+      unawaited(_deletePlaylistSupabase(playlistId: current.id));
+    }
     return true;
   }
 
@@ -3579,6 +3590,12 @@ class DemoRepository extends ChangeNotifier {
         )
         .toList(growable: false);
     notifyListeners();
+    if (supabase != null && !isOffline && userId == _viewerUserId && _looksLikeUuid(userId) && _looksLikeUuid(mediaItemId)) {
+      final owned = _playlists.where((p) => p.ownerId == userId && _looksLikeUuid(p.id)).toList(growable: false);
+      for (final p in owned) {
+        unawaited(_replacePlaylistItemsSupabase(p));
+      }
+    }
     if (userId == _viewerUserId) _schedulePersistMediaLibrary();
     if (supabase != null && !isOffline && userId == _viewerUserId && _looksLikeUuid(userId) && _looksLikeUuid(mediaItemId)) {
       unawaited(_deleteMediaLibraryItemSupabase(mediaItemId: mediaItemId));
@@ -3622,6 +3639,10 @@ class DemoRepository extends ChangeNotifier {
       updatedAt: now,
     );
     notifyListeners();
+    final updated = _playlists[playlistIndex];
+    if (supabase != null && !isOffline && userId == _viewerUserId && _looksLikeUuid(userId) && _looksLikeUuid(updated.id)) {
+      unawaited(_replacePlaylistItemsSupabase(updated));
+    }
     return true;
   }
 
@@ -3688,6 +3709,10 @@ class DemoRepository extends ChangeNotifier {
       updatedAt: DateTime.now(),
     );
     notifyListeners();
+    final updated = _playlists[index];
+    if (supabase != null && !isOffline && userId == _viewerUserId && _looksLikeUuid(userId) && _looksLikeUuid(updated.id)) {
+      unawaited(_replacePlaylistItemsSupabase(updated));
+    }
     return true;
   }
 
@@ -3740,7 +3765,90 @@ class DemoRepository extends ChangeNotifier {
       updatedAt: DateTime.now(),
     );
     notifyListeners();
+    final updated = _playlists[index];
+    if (supabase != null && !isOffline && userId == _viewerUserId && _looksLikeUuid(userId) && _looksLikeUuid(updated.id)) {
+      unawaited(_replacePlaylistItemsSupabase(updated));
+    }
     return true;
+  }
+
+  Future<void> _createPlaylistSupabase(PlaylistModel playlist) async {
+    final sb = supabase;
+    if (sb == null) return;
+    if (isOffline) return;
+    final viewerId = sb.auth.currentUser?.id;
+    if (viewerId == null || viewerId != playlist.ownerId) return;
+    try {
+      await sb.from('playlists').insert(<String, Object?>{
+        'id': playlist.id,
+        'owner_id': playlist.ownerId,
+        'title': playlist.title,
+        'description': playlist.description,
+        'cover_url': playlist.coverUrl,
+        'visibility': playlist.visibility.name,
+        'community_id': playlist.communityId,
+      });
+      if (playlist.items.isNotEmpty) {
+        await _replacePlaylistItemsSupabase(playlist);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _updatePlaylistSupabase(PlaylistModel playlist) async {
+    final sb = supabase;
+    if (sb == null) return;
+    if (isOffline) return;
+    final viewerId = sb.auth.currentUser?.id;
+    if (viewerId == null || viewerId != playlist.ownerId) return;
+    try {
+      await sb.from('playlists').update(<String, Object?>{
+        'title': playlist.title,
+        'description': playlist.description,
+        'cover_url': playlist.coverUrl,
+        'visibility': playlist.visibility.name,
+        'community_id': playlist.communityId,
+      }).match(<String, Object>{'id': playlist.id, 'owner_id': playlist.ownerId});
+    } catch (_) {}
+  }
+
+  Future<void> _deletePlaylistSupabase({required String playlistId}) async {
+    final sb = supabase;
+    if (sb == null) return;
+    if (isOffline) return;
+    final viewerId = sb.auth.currentUser?.id;
+    if (viewerId == null) return;
+    try {
+      await sb.from('playlists').delete().match(<String, Object>{'id': playlistId, 'owner_id': viewerId});
+    } catch (_) {}
+  }
+
+  Future<void> _replacePlaylistItemsSupabase(PlaylistModel playlist) async {
+    final sb = supabase;
+    if (sb == null) return;
+    if (isOffline) return;
+    final viewerId = sb.auth.currentUser?.id;
+    if (viewerId == null || viewerId != playlist.ownerId) return;
+    if (!_looksLikeUuid(playlist.id)) return;
+    try {
+      await sb.from('playlist_items').delete().eq('playlist_id', playlist.id);
+      if (playlist.items.isEmpty) return;
+      final rows = <Map<String, Object?>>[];
+      for (final item in playlist.items) {
+        rows.add(<String, Object?>{
+          'id': _looksLikeUuid(item.id) ? item.id : _uuidV4(),
+          'playlist_id': playlist.id,
+          'media_item_id': _looksLikeUuid(item.mediaItemId) ? item.mediaItemId : null,
+          'title': item.title,
+          'subtitle': item.subtitle,
+          'type': item.type.name,
+          'media_url': item.mediaUrl,
+          'thumbnail_url': item.thumbnailUrl,
+          'duration_seconds': item.durationSeconds,
+          'position': item.position,
+        });
+      }
+      await sb.from('playlist_items').insert(rows);
+    } catch (_) {}
   }
 
   List<PlaylistItemModel> _normalizePlaylistItems(List<PlaylistItemModel> items) {
@@ -3791,6 +3899,7 @@ class DemoRepository extends ChangeNotifier {
     if (supabase != null && viewerChanged && prevViewerId.trim().isNotEmpty) {
       _mediaLibraryItems =
           _mediaLibraryItems.where((i) => i.ownerId != prevViewerId).toList(growable: false);
+      _playlists = _playlists.where((p) => p.ownerId != prevViewerId).toList(growable: false);
     }
     if (sessionChanged) {
       _adSessionToken++;
@@ -3823,6 +3932,7 @@ class DemoRepository extends ChangeNotifier {
       _communityMessagesLoadedFor.clear();
       _directCacheLoadedForSessionKey = '';
       _mediaLibraryLoadedForViewerId = '';
+      _playlistsLoadedForViewerId = '';
       for (final ch in _communityChatChannelsById.values) {
         unawaited(ch.unsubscribe());
       }
@@ -3840,6 +3950,7 @@ class DemoRepository extends ChangeNotifier {
         unawaited(_refreshViewerFollowing(session.userId));
         unawaited(refreshDirectForViewer(session.userId, force: true));
         unawaited(refreshMediaLibraryForViewer(force: true));
+        unawaited(refreshPlaylistsForViewer(force: true));
       }
     }
     if (sessionChanged || viewerChanged) notifyListeners();
@@ -3887,6 +3998,7 @@ class DemoRepository extends ChangeNotifier {
           ),
         );
       }
+      if (loaded.isEmpty) return;
       final kept = _mediaLibraryItems.where((i) => i.ownerId != viewerId).toList(growable: true);
       final byId = <String, MediaLibraryItemModel>{for (final m in kept) m.id: m};
       for (final m in loaded) {
@@ -3895,6 +4007,93 @@ class DemoRepository extends ChangeNotifier {
       final next = byId.values.toList(growable: false);
       next.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
       _mediaLibraryItems = List.unmodifiable(next);
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> refreshPlaylistsForViewer({bool force = false}) async {
+    final sb = supabase;
+    if (sb == null) return;
+    if (isOffline) return;
+    final viewerId = sb.auth.currentUser?.id;
+    if (viewerId == null || viewerId.trim().isEmpty) return;
+    if (!force && _playlistsLoadedForViewerId == viewerId) return;
+    _playlistsLoadedForViewerId = viewerId;
+    try {
+      final rows = await sb
+          .from('playlists')
+          .select(
+            'id, owner_id, title, description, cover_url, visibility, community_id, created_at, updated_at, playlist_items(id, media_item_id, title, subtitle, type, media_url, thumbnail_url, duration_seconds, position)',
+          )
+          .eq('owner_id', viewerId)
+          .order('updated_at', ascending: false);
+      final loaded = <PlaylistModel>[];
+      for (final raw in rows) {
+        final id = raw['id']?.toString() ?? '';
+        final ownerId = raw['owner_id']?.toString() ?? '';
+        final title = raw['title']?.toString() ?? '';
+        final createdAt = DateTime.tryParse(raw['created_at']?.toString() ?? '')?.toLocal();
+        final updatedAt = DateTime.tryParse(raw['updated_at']?.toString() ?? '')?.toLocal();
+        if (id.isEmpty || ownerId.isEmpty || title.isEmpty || createdAt == null || updatedAt == null) {
+          continue;
+        }
+        final visibilityRaw = raw['visibility']?.toString() ?? '';
+        final visibility = PlaylistVisibility.values.firstWhere(
+          (v) => v.name == visibilityRaw,
+          orElse: () => PlaylistVisibility.public,
+        );
+        final itemsRaw = raw['playlist_items'];
+        final items = <PlaylistItemModel>[];
+        if (itemsRaw is List) {
+          for (final itemRaw in itemsRaw) {
+            if (itemRaw is! Map) continue;
+            final itemId = itemRaw['id']?.toString() ?? '';
+            final mediaItemId = itemRaw['media_item_id']?.toString() ?? '';
+            final itemTitle = itemRaw['title']?.toString() ?? '';
+            final mediaUrl = itemRaw['media_url']?.toString() ?? '';
+            if (itemId.isEmpty || itemTitle.isEmpty || mediaUrl.isEmpty) continue;
+            final typeRaw = itemRaw['type']?.toString() ?? '';
+            final type = PlaylistItemType.values.firstWhere((t) => t.name == typeRaw, orElse: () => PlaylistItemType.audio);
+            items.add(
+              PlaylistItemModel(
+                id: itemId,
+                mediaItemId: mediaItemId.isEmpty ? itemId : mediaItemId,
+                title: itemTitle,
+                subtitle: itemRaw['subtitle']?.toString(),
+                type: type,
+                mediaUrl: mediaUrl,
+                thumbnailUrl: itemRaw['thumbnail_url']?.toString(),
+                durationSeconds: (itemRaw['duration_seconds'] as num?)?.toInt(),
+                position: (itemRaw['position'] as num?)?.toInt() ?? 0,
+              ),
+            );
+          }
+        }
+        items.sort((a, b) => a.position.compareTo(b.position));
+        loaded.add(
+          PlaylistModel(
+            id: id,
+            ownerId: ownerId,
+            title: title,
+            description: raw['description']?.toString() ?? '',
+            coverUrl: raw['cover_url']?.toString(),
+            visibility: visibility,
+            communityId: raw['community_id']?.toString(),
+            items: items,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+          ),
+        );
+      }
+      if (loaded.isEmpty) return;
+      final kept = _playlists.where((p) => p.ownerId != viewerId).toList(growable: true);
+      final byId = <String, PlaylistModel>{for (final p in kept) p.id: p};
+      for (final p in loaded) {
+        byId[p.id] = p;
+      }
+      final next = byId.values.toList(growable: false);
+      next.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      _playlists = List.unmodifiable(next);
       notifyListeners();
     } catch (_) {}
   }
@@ -12306,6 +12505,56 @@ class DemoRepository extends ChangeNotifier {
     unawaited(refreshCommunityJoinRequests(communityId, force: true));
   }
 
+  Future<bool> leaveCommunity(String communityId, {required bool isAuthenticated}) async {
+    if (!isAuthenticated) return false;
+    final id = communityId.trim();
+    if (id.isEmpty) return false;
+    if (supabase != null) {
+      return await _leaveCommunitySupabase(communityId: id);
+    }
+    final i = _communities.indexWhere((c) => c.id == id);
+    if (i < 0) return false;
+    final c = _communities[i];
+    final members = (_communityMembersById[id] ?? const <String>{}).toSet();
+    final removed = members.remove(_viewerUserId);
+    _communityMembersById[id] = members;
+    final requests = (_communityJoinRequestsById[id] ?? const <String>[]).toList();
+    requests.removeWhere((x) => x == _viewerUserId);
+    _communityJoinRequestsById[id] = requests;
+    _communities[i] = c.copyWith(
+      viewerStatus: CommunityViewerStatus.none,
+      memberCount: removed ? (c.memberCount - 1).clamp(0, 1 << 30) : c.memberCount,
+    );
+    if (_activeCommunityFilterId == id) {
+      setActiveCommunityFilterId(null);
+    }
+    notifyListeners();
+    return true;
+  }
+
+  Future<bool> _leaveCommunitySupabase({required String communityId}) async {
+    final sb = supabase;
+    if (sb == null) return false;
+    if (isOffline) return false;
+    final viewerId = sb.auth.currentUser?.id;
+    if (viewerId == null) return false;
+    try {
+      await sb.from('community_members').delete().match(<String, Object>{
+        'community_id': communityId,
+        'user_id': viewerId,
+      });
+    } catch (_) {
+      return false;
+    }
+    unawaited(refreshCommunitiesForViewer(force: true));
+    unawaited(refreshCommunityMembers(communityId, force: true));
+    unawaited(refreshCommunityJoinRequests(communityId, force: true));
+    if (_activeCommunityFilterId == communityId) {
+      setActiveCommunityFilterId(null);
+    }
+    return true;
+  }
+
   Future<void> _acceptCommunityInviteSupabase({required String communityId}) async {
     final sb = supabase;
     if (sb == null) return;
@@ -17728,39 +17977,41 @@ class _ShellScreenState extends State<ShellScreen> {
           3 => viewerName.isNotEmpty ? viewerName : l10n.mainTitleProfile,
           _ => l10n.appTitle,
         };
-        final leadingLabel = (_index == 1 && activeMapCommunityId != null)
-            ? l10n.mainLeadingFeed
-            : switch (_index) {
-          2 => l10n.mainLeadingNewMessage,
-          1 => l10n.mainLeadingMoment,
-          _ => l10n.mainLeadingCreate,
-        };
-        final leadingIcon = (_index == 1 && activeMapCommunityId != null)
-            ? Icons.rss_feed_outlined
-            : switch (_index) {
-          2 => Icons.edit_outlined,
-          1 => Icons.photo_camera_outlined,
-          _ => Icons.add_box_outlined,
-        };
-        final VoidCallback leadingAction = () {
-          if (_index == 1) {
-            final future = activeMapCommunityId != null
-                ? _mapKey.currentState?.openActiveCommunityFeedFromAppBar()
-                : _mapKey.currentState?.createMomentFromAppBar();
-            if (future == null) return;
-            unawaited(future);
-            return;
-          }
-          if (!value.isAuthenticated) {
-            showCtaSnackBar(context);
-            return;
-          }
-          if (_index == 2) {
-            Navigator.of(context).pushNamed(Routes.newMessage);
-            return;
-          }
-          Navigator.of(context).pushNamed(Routes.createPost);
-        };
+        final String? leadingLabel = (_index == 1 && activeMapCommunityId == null)
+            ? null
+            : (_index == 1 && activeMapCommunityId != null)
+                ? l10n.mainLeadingFeed
+                : switch (_index) {
+                    2 => l10n.mainLeadingNewMessage,
+                    _ => l10n.mainLeadingCreate,
+                  };
+        final IconData? leadingIcon = (_index == 1 && activeMapCommunityId == null)
+            ? null
+            : (_index == 1 && activeMapCommunityId != null)
+                ? Icons.rss_feed_outlined
+                : switch (_index) {
+                    2 => Icons.edit_outlined,
+                    _ => Icons.add_box_outlined,
+                  };
+        final VoidCallback? leadingAction = (_index == 1 && activeMapCommunityId == null)
+            ? null
+            : () {
+                if (_index == 1) {
+                  final future = _mapKey.currentState?.openActiveCommunityFeedFromAppBar();
+                  if (future == null) return;
+                  unawaited(future);
+                  return;
+                }
+                if (!value.isAuthenticated) {
+                  showCtaSnackBar(context);
+                  return;
+                }
+                if (_index == 2) {
+                  Navigator.of(context).pushNamed(Routes.newMessage);
+                  return;
+                }
+                Navigator.of(context).pushNamed(Routes.createPost);
+              };
 
         final actionLabel = (_index == 1 && activeMapCommunityId != null)
             ? l10n.mainActionChat
@@ -17901,9 +18152,9 @@ class _MapTab extends StatelessWidget {
 class _AtalaiaMainAppBar extends StatelessWidget implements PreferredSizeWidget {
   const _AtalaiaMainAppBar({
     required this.title,
-    required this.leadingIcon,
-    required this.leadingLabel,
-    required this.onLeading,
+    this.leadingIcon,
+    this.leadingLabel,
+    this.onLeading,
     required this.actionLabel,
     required this.onAction,
     required this.unreadCount,
@@ -17914,9 +18165,9 @@ class _AtalaiaMainAppBar extends StatelessWidget implements PreferredSizeWidget 
   });
 
   final String title;
-  final IconData leadingIcon;
-  final String leadingLabel;
-  final VoidCallback onLeading;
+  final IconData? leadingIcon;
+  final String? leadingLabel;
+  final VoidCallback? onLeading;
   final String actionLabel;
   final VoidCallback onAction;
   final int unreadCount;
@@ -17936,11 +18187,13 @@ class _AtalaiaMainAppBar extends StatelessWidget implements PreferredSizeWidget 
       scrolledUnderElevation: 0,
       titleSpacing: 0,
       centerTitle: true,
-      leading: AtalaiaIconButton(
-        icon: leadingIcon,
-        label: leadingLabel,
-        onPressed: onLeading,
-      ),
+      leading: (leadingIcon != null && leadingLabel != null && onLeading != null)
+          ? AtalaiaIconButton(
+              icon: leadingIcon!,
+              label: leadingLabel!,
+              onPressed: onLeading!,
+            )
+          : null,
       title: SizedBox(
         width: double.infinity,
         child: Center(
@@ -25240,7 +25493,6 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
         showDragHandle: true,
         builder: (ctx) {
           final bottom = MediaQuery.viewInsetsOf(ctx).bottom;
-          var type = 'record';
           return SafeArea(
             child: Padding(
               padding: EdgeInsets.only(left: 16, right: 16, top: 12, bottom: 12 + bottom),
@@ -25255,22 +25507,6 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
                     style: TextStyle(color: Theme.of(ctx).colorScheme.outline, fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 12),
-                  StatefulBuilder(
-                    builder: (context, setModalState) {
-                      return DropdownButtonFormField<String>(
-                        initialValue: type,
-                        items: [
-                          DropdownMenuItem<String>(value: 'record', child: Text(t(context).prayerSessionRecordTypeRecord)),
-                          DropdownMenuItem<String>(value: 'revelation', child: Text(t(context).prayerSessionRecordTypeRevelation)),
-                          DropdownMenuItem<String>(value: 'testimony', child: Text(t(context).prayerSessionRecordTypeTestimony)),
-                          DropdownMenuItem<String>(value: 'other', child: Text(t(context).prayerSessionRecordTypeOther)),
-                        ],
-                        onChanged: (v) => setModalState(() => type = v ?? 'record'),
-                        decoration: InputDecoration(labelText: t(context).prayerSessionRecordTypeField),
-                      );
-                    },
-                  ),
-                  const SizedBox(height: 10),
                   TextField(
                     controller: recordController,
                     maxLines: 5,
@@ -25289,7 +25525,7 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
                         Navigator.of(ctx).pop(null);
                         return;
                       }
-                      Navigator.of(ctx).pop(_PrayerFinishRecord(type: type, text: text));
+                      Navigator.of(ctx).pop(_PrayerFinishRecord(type: 'record', text: text));
                     },
                   ),
                   const SizedBox(height: 8),
@@ -26548,12 +26784,6 @@ class _PlaylistFormSheetState extends State<_PlaylistFormSheet> {
                   maxLines: 3,
                 ),
                 const SizedBox(height: 10),
-                AtalaiaTextField(
-                  controller: _coverController,
-                  labelText: t(context).playlistFieldCoverUrl,
-                  hintText: t(context).playlistFieldCoverUrlHint,
-                ),
-                const SizedBox(height: 10),
                 DropdownButtonFormField<PlaylistVisibility>(
                   initialValue: _visibility,
                   decoration: InputDecoration(labelText: t(context).playlistFieldVisibility),
@@ -26631,7 +26861,7 @@ class _MediaItemFormSheetState extends State<_MediaItemFormSheet> {
     _urlController = TextEditingController(text: widget.initialMediaUrl);
     _thumbnailController = TextEditingController(text: widget.initialThumbnailUrl);
     _durationController = TextEditingController(text: widget.initialDurationSeconds?.toString() ?? '');
-    _type = widget.initialType;
+    _type = PlaylistItemType.youtube;
   }
 
   @override
@@ -26667,42 +26897,9 @@ class _MediaItemFormSheetState extends State<_MediaItemFormSheet> {
                 ),
                 const SizedBox(height: 10),
                 AtalaiaTextField(
-                  controller: _subtitleController,
-                  labelText: t(context).playlistSongFieldSubtitle,
-                  hintText: t(context).playlistSongFieldSubtitleHint,
-                ),
-                const SizedBox(height: 10),
-                DropdownButtonFormField<PlaylistItemType>(
-                  initialValue: _type,
-                  decoration: InputDecoration(labelText: t(context).playlistItemFieldType),
-                  items: [
-                    DropdownMenuItem(value: PlaylistItemType.audio, child: Text(t(context).playlistItemTypeAudio)),
-                    DropdownMenuItem(value: PlaylistItemType.youtube, child: Text(t(context).playlistItemTypeYoutube)),
-                    DropdownMenuItem(value: PlaylistItemType.spotify, child: Text(t(context).playlistItemTypeSpotify)),
-                  ],
-                  onChanged: (value) {
-                    if (value == null) return;
-                    setState(() => _type = value);
-                  },
-                ),
-                const SizedBox(height: 10),
-                AtalaiaTextField(
                   controller: _urlController,
                   labelText: t(context).playlistItemFieldUrl,
                   hintText: t(context).playlistItemFieldUrlHint,
-                ),
-                const SizedBox(height: 10),
-                AtalaiaTextField(
-                  controller: _thumbnailController,
-                  labelText: t(context).playlistFieldCoverUrl,
-                  hintText: t(context).playlistFieldCoverUrlHint,
-                ),
-                const SizedBox(height: 10),
-                AtalaiaTextField(
-                  controller: _durationController,
-                  labelText: t(context).playlistItemFieldDuration,
-                  hintText: t(context).playlistItemFieldDurationHint,
-                  keyboardType: TextInputType.number,
                 ),
                 const SizedBox(height: 14),
                 PrimaryButton(
@@ -27732,37 +27929,6 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
     return 'video/mp4';
   }
 
-  bool _looksLikeCityPath(String path) {
-    final v = path.trim();
-    if (v.isEmpty) return false;
-    if (!v.startsWith('world/')) return false;
-    return v.split('/').where((p) => p.trim().isNotEmpty).length >= 5;
-  }
-
-  Future<String?> _autoResolveStoryCityId(DemoRepository repo) async {
-    final candidatePath = repo.lastFeedLocationPath;
-    if (!_looksLikeCityPath(candidatePath)) return null;
-    final parts = candidatePath.split('/').where((p) => p.trim().isNotEmpty).toList(growable: false);
-    if (parts.length < 5 || parts.first != 'world') return null;
-    final id = await repo.locationIdByPath(parts.take(5).join('/'));
-    if (!context.mounted) return null;
-    if (id == null || id.trim().isEmpty) return null;
-    return id.trim();
-  }
-
-  Future<void> _tryAttachCityToStoryFromFeedInBackground({
-    required DemoRepository repo,
-    required AuthSession session,
-    required String storyId,
-  }) async {
-    await Future<void>.delayed(const Duration(milliseconds: 450));
-    if (!mounted) return;
-    final resolved = await _autoResolveStoryCityId(repo);
-    if (!mounted) return;
-    if (resolved == null || resolved.isEmpty) return;
-    await repo.updateStoryCityId(session: session, storyId: storyId, cityId: resolved);
-  }
-
   Future<XFile?> _pickStoryMediaFromGallery() async {
     if (kIsWeb) return null;
     try {
@@ -27799,7 +27965,7 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
     return ComposerDraft(
       initialRegionPath: repo.lastFeedLocationPath,
       initialCommunityId: repo.activeCommunityFilterId,
-      initialKind: PostKind.request,
+      initialKind: PostKind.testimony,
     );
   }
 
@@ -27916,110 +28082,57 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
     }
     final normalizedExt = e.isEmpty ? 'jpg' : e;
 
-    final caption = TextEditingController();
-    var shareTarget = 'social';
     final confirm = await showAtalaiaBottomSheet<bool>(
       context,
       isScrollControlled: true,
       builder: (ctx) {
-        return StatefulBuilder(
-          builder: (ctx, setLocalState) {
-            final l10n = t(ctx);
-            return SafeArea(
-              child: Padding(
-                padding: EdgeInsets.only(
-                  left: 16,
-                  right: 16,
-                  top: 12,
-                  bottom: 16 + MediaQuery.viewInsetsOf(ctx).bottom,
+        final l10n = t(ctx);
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.only(left: 16, right: 16, top: 12, bottom: 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(l10n.storiesShareSheetTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                const SizedBox(height: 10),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(16),
+                  child: Image.memory(
+                    mediaBytes,
+                    fit: BoxFit.cover,
+                    height: 220,
+                  ),
                 ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(l10n.storiesShareSheetTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
-                    const SizedBox(height: 10),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(16),
-                      child: Image.memory(
-                        mediaBytes,
-                        fit: BoxFit.cover,
-                        height: 220,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: caption,
-                      maxLines: 2,
-                      decoration: InputDecoration(
-                        hintText: l10n.storiesCaptionHintOptional,
-                        border: const OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(l10n.storiesShareIn, style: const TextStyle(fontWeight: FontWeight.w900)),
-                    const SizedBox(height: 6),
-                    RadioGroup<String>(
-                      groupValue: shareTarget,
-                      onChanged: (v) {
-                        setLocalState(() => shareTarget = v ?? shareTarget);
-                      },
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          RadioListTile<String>(
-                            value: 'social',
-                            title: Text(l10n.storiesShareTargetMyStory),
-                            contentPadding: EdgeInsets.zero,
-                            dense: true,
-                          ),
-                          RadioListTile<String>(
-                            value: 'regional',
-                            title: Text(l10n.storiesShareTargetCurrentRegion),
-                            contentPadding: EdgeInsets.zero,
-                            dense: true,
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    FilledButton(
-                      onPressed: () => Navigator.of(ctx).pop(true),
-                      child: Text(l10n.storiesPublish),
-                    ),
-                  ],
+                const SizedBox(height: 10),
+                FilledButton(
+                  onPressed: () => Navigator.of(ctx).pop(true),
+                  child: Text(l10n.storiesPublish),
                 ),
-              ),
-            );
-          },
+              ],
+            ),
+          ),
         );
       },
     );
     if (!context.mounted) {
-      caption.dispose();
       return;
     }
     if (confirm != true) {
-      caption.dispose();
       return;
     }
     await WidgetsBinding.instance.endOfFrame;
     await Future<void>.delayed(const Duration(milliseconds: 220));
     if (!context.mounted) return;
-    final captionText = caption.text.trim();
-    caption.dispose();
-
-    final cityId = shareTarget == 'regional' ? await _autoResolveStoryCityId(repo) : null;
-    if (!context.mounted) return;
     final story = await repo.createStory(
       session: session,
-      cityId: cityId,
+      cityId: null,
       mediaType: 'image',
       communityId: null,
       mediaBytes: mediaBytes,
       contentType: _inferContentType(normalizedExt, isVideo: false),
       fileExtension: normalizedExt,
-      text: captionText.isEmpty ? null : captionText,
+      text: null,
     );
     if (!context.mounted) return;
     if (story == null) {
@@ -28031,9 +28144,6 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
       return;
     }
     showInfoSnackBar(context, t(context).storiesPublished);
-    if (shareTarget == 'regional' && (story.cityId == null || story.cityId!.trim().isEmpty)) {
-      unawaited(_tryAttachCityToStoryFromFeedInBackground(repo: repo, session: session, storyId: story.id));
-    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       Navigator.of(context).pop();
@@ -28825,7 +28935,7 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
   final TextEditingController _tagInput = TextEditingController();
   final List<String> _tags = <String>[];
   PostVisibility _visibility = PostVisibility.public;
-  PostKind _kind = PostKind.request;
+  PostKind _kind = PostKind.testimony;
   String? _location;
 
   bool _uploading = false;
@@ -28834,8 +28944,11 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
   @override
   void initState() {
     super.initState();
-    _kind = widget.draft.initialKind;
     _visibility = widget.draft.initialVisibility;
+    if (_visibility == PostVisibility.church) {
+      _visibility = PostVisibility.followers;
+    }
+    _kind = PostKind.testimony;
     _location = widget.draft.initialLocation;
   }
 
@@ -29250,10 +29363,7 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
             title: Text(
               isEditing
                   ? t(context).composerEditPostTitle
-                  : switch (_kind) {
-                      PostKind.request => t(context).composerNewRequestTitle,
-                      PostKind.testimony => t(context).composerNewTestimonyTitle,
-                    },
+                  : t(context).createFlowTitleNewPost,
             ),
             actions: [
               AtalaiaIconButton(
@@ -29278,23 +29388,6 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
                 mediaPreview,
                 const SizedBox(height: 12),
               ],
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  ChoiceChip(
-                    label: Text(t(context).communityRequest),
-                    selected: _kind == PostKind.request,
-                    onSelected: isEditing || _uploading ? null : (_) => setState(() => _kind = PostKind.request),
-                  ),
-                  ChoiceChip(
-                    label: Text(t(context).prayerSessionRecordTypeTestimony),
-                    selected: _kind == PostKind.testimony,
-                    onSelected: isEditing || _uploading ? null : (_) => setState(() => _kind = PostKind.testimony),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
               AtalaiaTextField(
                 controller: _text,
                 minLines: 4,
@@ -29302,10 +29395,7 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
                 keyboardType: TextInputType.multiline,
                 textInputAction: TextInputAction.newline,
                 onChanged: (_) => setState(() {}),
-                hintText: switch (_kind) {
-                  PostKind.request => t(context).composerRequestHint,
-                  PostKind.testimony => t(context).composerTestimonyHint,
-                },
+                hintText: t(context).prayerSessionRecordHint,
               ),
               const SizedBox(height: 12),
               AtalaiaTextField(
@@ -29343,7 +29433,6 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
                 items: [
                   DropdownMenuItem(value: PostVisibility.public, child: Text(t(context).composerVisibilityPublic)),
                   DropdownMenuItem(value: PostVisibility.followers, child: Text(t(context).composerVisibilityFollowers)),
-                  DropdownMenuItem(value: PostVisibility.church, child: Text(t(context).composerVisibilityChurch)),
                 ],
                 onChanged: (v) => setState(() => _visibility = v ?? _visibility),
               ),
@@ -36823,13 +36912,44 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
                             Expanded(
                               child: SecondaryButton(
                                 label: t(context).communityLeave,
-                                onPressed: () => Navigator.of(context).pop(true),
+                                onPressed: () {
+                                  if (!isAuthenticated) {
+                                    showLoginSnackBar(context, message: t(context).settingsSignInToContinue);
+                                    return;
+                                  }
+                                  if (repo.isOffline) {
+                                    showErrorSnackBar(
+                                      context,
+                                      onRetry: () {
+                                        if (RepoScope.of(context).isOffline) return;
+                                        unawaited(RepoScope.of(context).leaveCommunity(c.id, isAuthenticated: true));
+                                      },
+                                    );
+                                    return;
+                                  }
+                                  unawaited(RepoScope.of(context).leaveCommunity(c.id, isAuthenticated: true));
+                                  Navigator.of(context).pop(true);
+                                },
                               ),
                             ),
                           ],
                         ),
                         const SizedBox(height: 14),
-                        Text(t(context).communityFeedSectionTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                t(context).communityFeedSectionTitle,
+                                style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
+                              ),
+                            ),
+                            IconButton(
+                              onPressed: () => Navigator.of(context).maybePop(),
+                              tooltip: t(context).commonBack,
+                              icon: const Icon(Icons.arrow_back),
+                            ),
+                          ],
+                        ),
                         const SizedBox(height: 8),
                       ],
                     ),
