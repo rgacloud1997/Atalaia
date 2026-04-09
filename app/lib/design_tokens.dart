@@ -172,9 +172,10 @@ Future<bool?> showAtalaiaConfirmDialog(
   required String title,
   String? message,
   required String confirmLabel,
-  String cancelLabel = 'Cancelar',
+  String? cancelLabel,
   bool isDestructive = false,
 }) {
+  final resolvedCancelLabel = cancelLabel ?? MaterialLocalizations.of(context).cancelButtonLabel;
   return showDialog<bool>(
     context: context,
     builder: (context) {
@@ -183,7 +184,7 @@ Future<bool?> showAtalaiaConfirmDialog(
         content: message == null ? null : Text(message),
         actions: [
           AtalaiaTextButton(
-            label: cancelLabel,
+            label: resolvedCancelLabel,
             onPressed: () => Navigator.of(context).pop(false),
           ),
           isDestructive
@@ -506,7 +507,7 @@ class SearchField extends StatelessWidget {
   const SearchField({
     required this.controller,
     this.labelText,
-    this.hintText = 'Pesquisar',
+    this.hintText = '',
     this.onChanged,
     this.onSubmitted,
     super.key,
@@ -520,10 +521,11 @@ class SearchField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final resolvedHintText = hintText.isEmpty ? MaterialLocalizations.of(context).searchFieldLabel : hintText;
     return AtalaiaTextField(
       controller: controller,
       labelText: labelText,
-      hintText: hintText,
+      hintText: resolvedHintText,
       prefixIcon: Icons.search,
       onChanged: onChanged,
       textInputAction: TextInputAction.search,
@@ -536,7 +538,9 @@ class PasswordField extends StatefulWidget {
   const PasswordField({
     required this.controller,
     this.labelText,
-    this.hintText = 'Senha',
+    this.hintText = '',
+    this.showPasswordLabel = '',
+    this.hidePasswordLabel = '',
     this.errorText,
     this.onChanged,
     this.onSubmitted,
@@ -546,6 +550,8 @@ class PasswordField extends StatefulWidget {
   final TextEditingController controller;
   final String? labelText;
   final String hintText;
+  final String showPasswordLabel;
+  final String hidePasswordLabel;
   final String? errorText;
   final ValueChanged<String>? onChanged;
   final ValueChanged<String>? onSubmitted;
@@ -570,7 +576,7 @@ class _PasswordFieldState extends State<PasswordField> {
       autofillHints: const [AutofillHints.password],
       suffixIcon: AtalaiaIconButton(
         icon: _obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined,
-        label: _obscure ? 'Mostrar senha' : 'Ocultar senha',
+        label: _obscure ? widget.showPasswordLabel : widget.hidePasswordLabel,
         onPressed: () => setState(() => _obscure = !_obscure),
       ),
     );
@@ -580,7 +586,7 @@ class _PasswordFieldState extends State<PasswordField> {
 class MultiLineComposer extends StatelessWidget {
   const MultiLineComposer({
     required this.controller,
-    this.hintText = 'Escreva…',
+    required this.hintText,
     this.errorText,
     this.enabled = true,
     this.focusNode,
@@ -652,7 +658,7 @@ class AtalaiaFilterChip extends StatelessWidget {
 }
 
 class VerifiedChip extends StatelessWidget {
-  const VerifiedChip({this.label = 'Verificado', super.key});
+  const VerifiedChip({required this.label, super.key});
 
   final String label;
 
@@ -742,7 +748,7 @@ class Avatar extends StatelessWidget {
         (url.startsWith('https://') || url.startsWith('http://'));
     return Semantics(
       image: true,
-      label: 'Foto de $name',
+      label: name,
       excludeSemantics: true,
       child: CircleAvatar(
         radius: _radius,

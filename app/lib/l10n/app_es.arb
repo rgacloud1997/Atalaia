@@ -1,39 +1,2991 @@
 {
   "@@locale": "es",
   "appTitle": "Atalaia",
+  "@appTitle": {
+    "description": "Localized message for appTitle."
+  },
   "commonBack": "Volver",
+  "@commonBack": {
+    "description": "Localized message for commonBack."
+  },
   "commonCancel": "Cancelar",
+  "@commonCancel": {
+    "description": "Localized message for commonCancel."
+  },
   "commonOk": "OK",
+  "@commonOk": {
+    "description": "Localized message for commonOk."
+  },
   "commonSave": "Guardar",
+  "@commonSave": {
+    "description": "Localized message for commonSave."
+  },
   "commonSaved": "Guardado",
+  "@commonSaved": {
+    "description": "Localized message for commonSaved."
+  },
   "commonLinkCopied": "Enlace copiado",
+  "@commonLinkCopied": {
+    "description": "Localized message for commonLinkCopied."
+  },
   "commonInvalidLink": "Enlace inválido",
+  "@commonInvalidLink": {
+    "description": "Localized message for commonInvalidLink."
+  },
   "settingsTitle": "Configuración",
+  "@settingsTitle": {
+    "description": "Localized message for settingsTitle."
+  },
   "settingsSignInToContinue": "Iniciar sesión para continuar",
+  "@settingsSignInToContinue": {
+    "description": "Localized message for settingsSignInToContinue."
+  },
   "settingsSectionAccount": "Cuenta",
+  "@settingsSectionAccount": {
+    "description": "Localized message for settingsSectionAccount."
+  },
   "settingsAccount": "Cuenta",
+  "@settingsAccount": {
+    "description": "Localized message for settingsAccount."
+  },
   "settingsVerification": "Verificación",
+  "@settingsVerification": {
+    "description": "Localized message for settingsVerification."
+  },
+  "campaignCategoryMedical": "Salud",
+  "@campaignCategoryMedical": {
+    "description": "Label for the medical campaign category."
+  },
+  "campaignCategoryEmergency": "Emergencia",
+  "@campaignCategoryEmergency": {
+    "description": "Label for the emergency campaign category."
+  },
+  "campaignCategorySocial": "Acción social",
+  "@campaignCategorySocial": {
+    "description": "Label for the social action campaign category."
+  },
+  "campaignCategoryChurch": "Iglesia",
+  "@campaignCategoryChurch": {
+    "description": "Label for the church campaign category."
+  },
+  "campaignCategoryMission": "Misión",
+  "@campaignCategoryMission": {
+    "description": "Label for the mission campaign category."
+  },
+  "campaignCategoryEducation": "Educación",
+  "@campaignCategoryEducation": {
+    "description": "Label for the education campaign category."
+  },
+  "campaignCategoryDisaster": "Desastre",
+  "@campaignCategoryDisaster": {
+    "description": "Label for the disaster campaign category."
+  },
+  "campaignCategoryCommunityProject": "Proyecto comunitario",
+  "@campaignCategoryCommunityProject": {
+    "description": "Label for the community project campaign category."
+  },
+  "campaignStatusDraft": "Borrador",
+  "@campaignStatusDraft": {
+    "description": "Label for a draft campaign status."
+  },
+  "campaignStatusActive": "Activa",
+  "@campaignStatusActive": {
+    "description": "Label for an active campaign status."
+  },
+  "campaignStatusClosed": "Cerrada",
+  "@campaignStatusClosed": {
+    "description": "Label for a closed campaign status."
+  },
+  "campaignStatusCancelled": "Cancelada",
+  "@campaignStatusCancelled": {
+    "description": "Label for a cancelled campaign status."
+  },
+  "campaignUrgent": "Urgente",
+  "@campaignUrgent": {
+    "description": "Label for urgent campaigns."
+  },
+  "verificationTypeNone": "Sin verificación",
+  "@verificationTypeNone": {
+    "description": "Label for profiles without verification."
+  },
+  "verificationTypeCommunityLeader": "Líder comunitario",
+  "@verificationTypeCommunityLeader": {
+    "description": "Label for the community leader verification type."
+  },
+  "verificationTypeChurch": "Iglesia",
+  "@verificationTypeChurch": {
+    "description": "Label for the church verification type."
+  },
+  "verificationTypeOrganization": "Organización",
+  "@verificationTypeOrganization": {
+    "description": "Label for the organization verification type."
+  },
+  "verificationTypeModerator": "Moderador",
+  "@verificationTypeModerator": {
+    "description": "Label for the moderator verification type."
+  },
+  "verificationTypeAdmin": "Admin",
+  "@verificationTypeAdmin": {
+    "description": "Label for the admin verification type."
+  },
   "settingsModeration": "Moderación",
+  "@settingsModeration": {
+    "description": "Localized message for settingsModeration."
+  },
   "settingsAds": "Anuncios",
+  "@settingsAds": {
+    "description": "Localized message for settingsAds."
+  },
+  "adsLocationNotFound": "Ubicación no encontrada",
+  "adsInvalidCreative": "Creativo inválido",
+  "adsPinCreated": "Pin creado",
+  "adsPinCreateFailed": "Error al crear el pin",
+  "adsStatusUpdated": "Estado actualizado",
+  "adsStatusUpdateFailed": "Error al actualizar el estado",
+  "adsNewAdvertiser": "Nuevo anunciante",
+  "adsFieldName": "Nombre",
+  "adsFieldEmailOptional": "Email (opcional)",
+  "adsFieldPhoneOptional": "Teléfono (opcional)",
+  "adsOnlyModeratorsCanCreate": "Solo moderadores/admin pueden crear.",
+  "adsAdvertiserCreated": "Anunciante creado",
+  "adsAdvertiserCreateFailed": "Error al crear anunciante",
+  "adsNewCampaign": "Nueva campaña",
+  "adsFieldDescriptionOptional": "Descripción (opcional)",
+  "adsFieldObjective": "Objetivo",
+  "adsObjectiveTraffic": "Tráfico",
+  "adsObjectiveAwareness": "Alcance",
+  "adsObjectivePromotion": "Promoción",
+  "adsObjectiveCommunity": "Comunidad",
+  "adsObjectiveEvent": "Evento",
+  "adsCampaignCreatedDraft": "Campaña creada (draft)",
+  "adsCampaignCreateFailed": "Error al crear campaña",
+  "adsLearnMore": "Saber más",
+  "adsNewCreative": "Nuevo creativo",
+  "adsFieldType": "Tipo",
+  "adsCreativeTypeText": "Texto",
+  "adsCreativeTypeImage": "Imagen",
+  "adsCreativeTypeVideo": "Video",
+  "adsFieldHeadlineOptional": "Headline (opcional)",
+  "adsFieldTextOptional": "Texto (opcional)",
+  "adsFieldCtaOptional": "CTA (opcional)",
+  "adsFieldTargetUrl": "URL de destino",
+  "adsActive": "Activo",
+  "adsInactive": "Inactivo",
+  "adsCreativeCreated": "Creativo creado",
+  "adsCreativeCreateFailed": "Error al crear creativo",
+  "adsNewTargeting": "Nuevo targeting",
+  "adsFieldScope": "Alcance",
+  "adsScopeWorld": "Mundo",
+  "adsScopeCountry": "País",
+  "adsScopeState": "Estado",
+  "adsScopeCity": "Ciudad",
+  "adsScopeCommunity": "Comunidad",
+  "adsFieldPlacement": "Placement",
+  "adsPlacementFeed": "Feed",
+  "adsPlacementMapPin": "Pin en el mapa",
+  "adsPlacementStorySlot": "Story slot",
+  "adsPlacementCommunityFeed": "Feed de la comunidad",
+  "adsFieldLocationPath": "Location path",
+  "adsFieldCommunityId": "Community ID (uuid)",
+  "adsFieldPriority": "Prioridad (int)",
+  "adsInvalidCommunity": "Community inválida",
+  "adsEmptyPath": "Path vacío",
+  "adsTargetingCreated": "Targeting creado",
+  "adsTargetingCreateFailed": "Error al crear targeting",
+  "adsCreateCreativeFirst": "Crea un creativo primero",
+  "adsNewSponsoredPin": "Nuevo pin patrocinado",
+  "adsFieldCreative": "Creativo",
+  "adsFieldLabelOptional": "Label (opcional)",
+  "adsSupabaseUnavailable": "Supabase no disponible para administrar anuncios.",
+  "adsAdvertisersSection": "Anunciantes",
+  "adsCampaignsSection": "Campañas",
+  "adsCreativesSection": "Creativos",
+  "adsTargetingSection": "Targeting",
+  "adsSponsoredPinsSection": "Pins patrocinados",
+  "adsMetricsSection": "Métricas",
+  "adsNew": "Nuevo",
+  "adsNoAdvertisers": "Ningún anunciante",
+  "adsNoCampaigns": "Ninguna campaña",
+  "adsNoCreatives": "Ningún creativo",
+  "adsNoTargeting": "Ningún targeting",
+  "adsNoPins": "Ningún pin",
+  "adsNoData": "Sin datos",
+  "adsSelect": "Seleccionar",
+  "adsActivate": "Activar",
+  "adsPause": "Pausar",
+  "adsComplete": "Concluir",
+  "adsPriorityShort": "prio",
+  "adsUnknown": "desconocido",
+  "adsImpressions": "Impresiones",
+  "adsClicks": "Clics",
+  "adsCtr": "CTR",
+  "adsLocationPathExample": "Ej.: world/sa/br/sp/sao-paulo",
+  "adsPinLabelExample": "Ej.: Patrocinado",
+  "adsAdvertiserNameExample": "Ej.: Librería Ebenezer",
+  "adsAdvertiserEmailExample": "contacto@ejemplo.com",
+  "adsAdvertiserPhoneExample": "+55…",
+  "adsCampaignTitleExample": "Ej.: Biblia con descuento",
+  "adsCampaignDescriptionHint": "Contexto interno…",
+  "adsHiddenSnack": "Anuncio ocultado",
+  "communityMemberActionPromoteToAdmin": "Promover a admin",
+  "communityMemberActionDemoteToMember": "Degradar a miembro",
+  "communityMemberActionTransferOwnership": "Transferir propiedad",
+  "communityMemberPromotedSnack": "Promovido a admin",
+  "communityMemberDemotedSnack": "Degradado a miembro",
+  "communityOwnershipTransferConfirmTitle": "¿Transferir propiedad?",
+  "communityOwnershipTransferConfirmBody": "La comunidad quedará bajo el control de {name}.",
+  "@communityOwnershipTransferConfirmBody": {
+    "placeholders": {
+      "name": {}
+    }
+  },
+  "communityOwnershipTransferredSnack": "Propiedad transferida",
+  "communityRequestsEmpty": "No hay solicitudes pendientes.",
+  "communityRequestApproveAction": "Aprobar",
+  "communityRequestRejectAction": "Rechazar",
+  "communityRequestApprovedSnack": "Aprobado",
+  "communityRequestRejectedSnack": "Rechazado",
+  "communityRequestsCardTitle": "Pedidos",
+  "communityRequestsCardLoading": "Cargando pedidos…",
+  "communityRequestsCardEmpty": "Sin pedidos por ahora.",
+  "communityRequestsCardNoText": "(sin texto)",
+  "communityRequestsTriageSortNewest": "Más recientes",
+  "communityRequestsTriageSortLeastPrayed": "Menos oraciones",
+  "communityRequestsTriageSortMostPrayed": "Más oraciones",
+  "communityRequestsTriageSortMostCommented": "Más comentarios",
+  "communityRequestsTriageSearchHint": "Buscar pedidos",
+  "communityRequestsTriageFilterAll": "Todos",
+  "communityRequestsTriageFilterReported": "Denuncias",
+  "communityRequestsTriageFilterHidden": "Ocultos",
+  "communityRequestsTriageSortTooltip": "Ordenar",
+  "communityRequestsTriageEmptyReported": "No hay denuncias en pedidos.",
+  "communityRequestsTriageEmptyHidden": "No hay pedidos ocultos.",
+  "communityRequestsTriageEmptyCommunity": "Aún no hay pedidos en esta comunidad.",
+  "communityRequestsTriagePrayerRequestFallback": "Pedido de oración",
+  "communityRequestsTriageHiddenChip": "Oculto",
+  "communityRequestsScreenNewRequestTooltip": "Nuevo pedido",
+  "communityRequestsScreenTabMap": "Mapa",
+  "communityRequestsScreenTabRequests": "Pedidos",
+  "communityRequestsScreenTabRequestsWithCount": "Pedidos ({count})",
+  "@communityRequestsScreenTabRequestsWithCount": {
+    "placeholders": {
+      "count": {}
+    }
+  },
+  "communityRequestsScreenTabTriage": "Triaje",
+  "verificationStatusVerifiedTitle": "Estás verificado",
+  "verificationStatusCanceledTitle": "Suscripción cancelada",
+  "verificationStatusVerifiedDescription": "Tu perfil tiene una insignia activa.",
+  "verificationStatusCanceledDescription": "Puedes suscribirte de nuevo para reactivar la insignia.",
+  "verificationStatusStartLabel": "Inicio",
+  "verificationStatusPlanLabel": "Plan",
+  "verificationStatusManageSubscription": "Gestionar suscripción",
+  "verificationStatusResubscribe": "Suscribirse de nuevo",
+  "verificationStatusFaqTitle": "FAQ",
+  "verificationStatusFaqHowItWorksQuestion": "¿Cómo funciona la verificación?",
+  "verificationStatusFaqHowItWorksAnswer": "La verificación se activa tras la confirmación del pago en el servidor.",
+  "verificationStatusFaqWhenBadgeQuestion": "¿Cuándo aparece la insignia?",
+  "verificationStatusFaqWhenBadgeAnswer": "Aparece en cuanto la suscripción esté activa en el servidor.",
+  "verificationStatusFaqCancelQuestion": "¿Puedo cancelar cuando quiera?",
+  "verificationStatusFaqCancelAnswer": "Sí, la gestión ocurre en la tienda (fase 2).",
+  "regionPostsEmptyTestimonies": "Aún no hay testimonios en esta región",
+  "regionPostsEmptyRequests": "Aún no hay pedidos en esta región",
+  "regionPostsCreateTestimony": "Crear testimonio",
+  "regionPostsCreateRequest": "Crear pedido",
+  "regionPostsTitle": "Pedidos en {location}",
+  "@regionPostsTitle": {
+    "placeholders": {
+      "location": {}
+    }
+  },
+  "regionPostsTitleWithCommunity": "Pedidos en {location} • {community}",
+  "@regionPostsTitleWithCommunity": {
+    "placeholders": {
+      "location": {},
+      "community": {}
+    }
+  },
+  "regionPostsFilterAll": "Todos",
+  "regionPostsFilterRequests": "Pedidos",
+  "regionPostsFilterTestimonies": "Testimonios",
+  "regionNewsTitleShort": "Noticias",
+  "regionNewsTitle": "Noticias • {location}",
+  "@regionNewsTitle": {
+    "placeholders": {
+      "location": {}
+    }
+  },
+  "regionNewsEmpty": "Aún no hay noticias relevantes en esta región.",
+  "regionPrayersTitleShort": "Oraciones",
+  "regionPrayersTitle": "Oraciones • {location}",
+  "@regionPrayersTitle": {
+    "placeholders": {
+      "location": {}
+    }
+  },
+  "regionPrayersEmpty": "Aún no hay oraciones registradas aquí.",
+  "regionPrayForThisRegion": "Orar por esta región",
+  "regionActivityTitle": "Actividad",
+  "regionActivityEmpty": "Aún no hay actividad en esta región.",
+  "prayerSessionActiveTitle": "Sesión activa",
+  "prayerSessionActivePrompt": "¿Deseas finalizar o cancelar?",
+  "prayerSessionContinuePraying": "Seguir orando",
+  "prayerSessionCancelAction": "Cancelar sesión",
+  "prayerSessionFinishAction": "Finalizar",
+  "prayerSessionFinishSheetTitle": "Finalizar oración",
+  "prayerSessionFinishSheetPrompt": "¿Deseas registrar algo sobre esta oración?",
+  "prayerSessionRecordTypeRecord": "Registro",
+  "prayerSessionRecordTypeRevelation": "Revelación",
+  "prayerSessionRecordTypeTestimony": "Testimonio",
+  "prayerSessionRecordTypeOther": "Otro",
+  "prayerSessionRecordTypeField": "Tipo",
+  "prayerSessionRecordField": "Registro",
+  "prayerSessionRecordHint": "Escribe aquí…",
+  "prayerSessionSaveAndFinish": "Guardar y finalizar",
+  "prayerSessionFinishWithoutRecord": "Finalizar sin registro",
+  "prayerSessionPaused": "Pausado",
+  "prayerSessionLive": "En vivo",
+  "prayerSessionIntentHint": "Ora por esta región con intención.",
+  "prayerSessionResume": "Reanudar",
+  "prayerSessionPause": "Pausar",
+  "playlistStartTitle": "Elige una playlist",
+  "playlistStartSubtitle": "Selecciona algo para acompañar tu momento de oración.",
+  "playlistStartSkip": "Iniciar sin playlist",
+  "playlistNowPlayingTitle": "Playlist seleccionada",
+  "playlistPlayAction": "Reproducir",
+  "playlistShareAction": "Compartir",
+  "playlistItemTypeAudio": "Audio",
+  "playlistItemTypeYoutube": "YouTube",
+  "playlistItemTypeSpotify": "Spotify",
+  "playlistSummary": "{type} • {count} elementos",
+  "@playlistSummary": {
+    "placeholders": {
+      "type": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "playlistLibraryTitle": "Biblioteca de playlists",
+  "playlistLibraryAction": "Biblioteca",
+  "playlistLibraryEmpty": "Aún no hay playlists. Crea la primera.",
+  "playlistLibraryCreateAction": "Crear playlist",
+  "playlistLibraryUpdateAction": "Actualizar playlist",
+  "playlistLibraryManageItems": "Gestionar elementos",
+  "playlistLibrarySaveAction": "Guardar en biblioteca",
+  "playlistLibraryUnsaveAction": "Quitar de biblioteca",
+  "playlistSavedToLibrary": "Playlist guardada en tu biblioteca",
+  "playlistRemovedFromLibrary": "Playlist quitada de tu biblioteca",
+  "playlistLibraryFormTitle": "Detalles de la playlist",
+  "playlistFieldTitle": "Título",
+  "playlistFieldTitleHint": "Ej.: Intercesión de la mañana",
+  "playlistFieldDescription": "Descripción",
+  "playlistFieldDescriptionHint": "¿Para qué es esta playlist?",
+  "playlistFieldVisibility": "Visibilidad",
+  "playlistVisibilityPrivate": "Privada",
+  "playlistVisibilityUnlisted": "No listada",
+  "playlistVisibilityPublic": "Pública",
+  "playlistDeleteConfirmTitle": "¿Eliminar esta playlist?",
+  "playlistDeleteConfirmBody": "Esta acción no se puede deshacer.",
+  "playlistDeletedSnack": "Playlist eliminada",
+  "playlistEditorTitle": "Editar playlist",
+  "playlistEditorMissing": "Playlist no disponible",
+  "playlistItemAddTitle": "Agregar elemento",
+  "playlistItemAddAction": "Agregar elemento",
+  "playlistItemFieldTitle": "Título del elemento",
+  "playlistItemFieldTitleHint": "Ej.: Alabanza antes de orar",
+  "playlistItemFieldType": "Tipo de elemento",
+  "playlistItemFieldUrl": "Enlace o URL de media",
+  "playlistItemFieldUrlHint": "https://…",
+  "playlistItemFieldDuration": "Duración (segundos)",
+  "playlistItemFieldDurationHint": "Opcional",
+  "playlistOpenAction": "Abrir",
+  "playlistLibraryTabPlaylists": "Playlists",
+  "playlistLibraryTabSongs": "Canciones",
+  "playlistFieldCoverUrl": "URL de portada",
+  "playlistFieldCoverUrlHint": "https://…",
+  "playlistSongEmpty": "Aún no hay canciones. Agrega la primera.",
+  "playlistSongAddAction": "Agregar canción",
+  "playlistSongFormTitle": "Detalles de la canción",
+  "playlistSongFieldSubtitle": "Subtítulo / artista",
+  "playlistSongFieldSubtitleHint": "Ej.: Artista, ministración, origen",
+  "playlistSongAddToPlaylist": "Agregar a playlist",
+  "playlistSongDeleteConfirmTitle": "¿Eliminar esta canción?",
+  "playlistSongDeleteConfirmBody": "Esto también la quitará de las playlists.",
+  "playlistSongDeletedSnack": "Canción eliminada",
+  "playlistSongAddedToPlaylist": "Canción agregada a la playlist",
+  "playlistSongChoosePlaylistTitle": "Elige una playlist",
+  "playlistSongChoosePlaylistEmpty": "Crea una playlist primero.",
+  "commentsTitle": "Comentarios",
+  "createFlowTitleNewPost": "Nueva publicación",
+  "createFlowTitleNewStory": "Nueva story",
+  "createFlowTitleNewVideo": "Nuevo video",
+  "createFlowSelectVideoSnack": "Selecciona un video",
+  "createFlowEmptyFileSnack": "Archivo vacío",
+  "createFlowStoryMustBePhotoSnack": "La story debe ser una foto",
+  "createFlowModePost": "POST",
+  "createFlowModeStory": "STORY",
+  "createFlowModeVideo": "VIDEO",
+  "createFlowSignInToPost": "Iniciar sesión para publicar",
+  "createFlowSectionPost": "Publicación",
+  "createFlowWriteNow": "Escribir ahora",
+  "createFlowAddMedia": "Agregar media",
+  "createFlowPostHelp": "Puedes publicar solo texto o adjuntar media sin perder el contexto de región/comunidad.",
+  "createFlowSectionStory24h": "Story (24h)",
+  "createFlowOpenGallery": "Abrir galería",
+  "createFlowStoryHelp": "Las stories expiran en 24 horas. El texto de la leyenda es opcional.",
+  "createFlowSectionVideo": "Video",
+  "createFlowSelectVideo": "Seleccionar video",
+  "createFlowVideoHelp": "Eliges portada y duración antes de publicar.",
+  "shofarIconTitle": "Ícono Shofar",
+  "mediaEditTitle": "Editar media",
+  "mediaEditNext": "Siguiente",
+  "mediaEditCropSection": "Recorte",
+  "mediaEditRotateAction": "Rotar",
+  "mediaEditCoverSection": "Portada",
+  "composerAddLocation": "Agregar ubicación",
+  "composerLocationGoiania": "Goiânia, GO",
+  "composerLocationSaoPaulo": "São Paulo, SP",
+  "composerLocationBrazil": "Brasil",
+  "composerRemoveLocation": "Quitar ubicación",
+  "composerMediaSheetTitle": "Media",
+  "composerPhoto": "Foto",
+  "composerVideo": "Video",
+  "composerEditPostTitle": "Editar publicación",
+  "composerNewRequestTitle": "Nueva petición",
+  "composerNewTestimonyTitle": "Nuevo testimonio",
+  "composerMediaAction": "Media",
+  "composerRequestHint": "Escribe tu petición de oración…",
+  "composerTestimonyHint": "Comparte tu testimonio…",
+  "composerAddTagHint": "Agregar etiqueta (ej.: sanidad)",
+  "composerVisibilityField": "Visibilidad",
+  "composerVisibilityPublic": "Público",
+  "composerVisibilityFollowers": "Seguidores",
+  "composerVisibilityChurch": "Iglesia",
+  "alertDetailTitle": "Alerta",
+  "alertNotAvailable": "Esta alerta no está disponible.",
+  "alertFollow": "Seguir",
+  "alertFollowing": "Siguiendo",
+  "alertFollowAction": "Seguir alerta",
+  "alertSignInToFollow": "Iniciar sesión para seguir",
+  "alertFollowingStartedSnack": "Siguiendo alerta",
+  "alertFollowingStoppedSnack": "Dejó de seguir",
+  "alertConfidenceLabel": "Confianza: {value}",
+  "@alertConfidenceLabel": {
+    "placeholders": {
+      "value": {}
+    }
+  },
+  "alertCommunityVoteTitle": "Voto de la comunidad",
+  "alertVoteConfirmed": "Confirmado",
+  "alertVoteFalse": "Falso",
+  "alertVoteResolved": "Resuelto",
+  "alertVoteRegisteredSnack": "Voto registrado",
+  "alertConfidenceHelp": "La confianza se calcula a partir de los votos (confirmado − falso).",
   "settingsSectionPreferences": "Preferencias",
+  "@settingsSectionPreferences": {
+    "description": "Localized message for settingsSectionPreferences."
+  },
   "settingsLanguageRegion": "Idioma y región",
+  "@settingsLanguageRegion": {
+    "description": "Localized message for settingsLanguageRegion."
+  },
   "settingsNotifications": "Notificaciones",
+  "@settingsNotifications": {
+    "description": "Localized message for settingsNotifications."
+  },
   "settingsTheme": "Tema",
+  "@settingsTheme": {
+    "description": "Localized message for settingsTheme."
+  },
   "settingsSectionSupport": "Soporte",
+  "@settingsSectionSupport": {
+    "description": "Localized message for settingsSectionSupport."
+  },
   "settingsHelp": "Ayuda",
+  "@settingsHelp": {
+    "description": "Localized message for settingsHelp."
+  },
   "settingsTermsPrivacy": "Términos y privacidad",
+  "@settingsTermsPrivacy": {
+    "description": "Localized message for settingsTermsPrivacy."
+  },
   "settingsSectionActions": "Acciones",
+  "@settingsSectionActions": {
+    "description": "Localized message for settingsSectionActions."
+  },
   "settingsLogout": "Cerrar sesión",
+  "@settingsLogout": {
+    "description": "Localized message for settingsLogout."
+  },
   "localeScreenTitle": "Idioma y región",
+  "@localeScreenTitle": {
+    "description": "Localized message for localeScreenTitle."
+  },
   "localeLanguageLabel": "Idioma",
+  "@localeLanguageLabel": {
+    "description": "Localized message for localeLanguageLabel."
+  },
   "localeLanguageDevice": "Automático (dispositivo)",
+  "@localeLanguageDevice": {
+    "description": "Localized message for localeLanguageDevice."
+  },
   "localeLanguagePortuguese": "Português (Brasil)",
+  "@localeLanguagePortuguese": {
+    "description": "Localized message for localeLanguagePortuguese."
+  },
   "localeLanguageEnglish": "English",
+  "@localeLanguageEnglish": {
+    "description": "Localized message for localeLanguageEnglish."
+  },
   "localeLanguageSpanish": "Español",
+  "@localeLanguageSpanish": {
+    "description": "Localized message for localeLanguageSpanish."
+  },
   "localeCountryLabel": "País (ISO)",
+  "@localeCountryLabel": {
+    "description": "Localized message for localeCountryLabel."
+  },
   "localeTimezoneLabel": "Zona horaria",
+  "@localeTimezoneLabel": {
+    "description": "Localized message for localeTimezoneLabel."
+  },
   "localeTimezoneDevice": "Del dispositivo",
+  "@localeTimezoneDevice": {
+    "description": "Localized message for localeTimezoneDevice."
+  },
   "localeReceiveGlobalContent": "Recibir contenido global",
+  "@localeReceiveGlobalContent": {
+    "description": "Localized message for localeReceiveGlobalContent."
+  },
   "localeHintCountry": "Ej: BR, US, ES",
-  "localeHintTimezone": "Ej: America/Sao_Paulo"
+  "@localeHintCountry": {
+    "description": "Localized message for localeHintCountry."
+  },
+  "localeHintTimezone": "Ej: America/Sao_Paulo",
+  "@localeHintTimezone": {
+    "description": "Localized message for localeHintTimezone."
+  },
+  "commonSignIn": "Iniciar sesión",
+  "@commonSignIn": {
+    "description": "Localized message for commonSignIn."
+  },
+  "commonSearch": "Buscar",
+  "@commonSearch": {
+    "description": "Localized message for commonSearch."
+  },
+  "searchTabAll": "Todo",
+  "@searchTabAll": {
+    "description": "Localized message for searchTabAll."
+  },
+  "searchTabPeople": "Personas",
+  "@searchTabPeople": {
+    "description": "Localized message for searchTabPeople."
+  },
+  "searchTabPosts": "Publicaciones",
+  "@searchTabPosts": {
+    "description": "Localized message for searchTabPosts."
+  },
+  "searchTabCommunities": "Comunidades",
+  "@searchTabCommunities": {
+    "description": "Localized message for searchTabCommunities."
+  },
+  "searchSuggestionsTitle": "Sugerencias",
+  "@searchSuggestionsTitle": {
+    "description": "Localized message for searchSuggestionsTitle."
+  },
+  "searchMapButton": "Mapa",
+  "@searchMapButton": {
+    "description": "Localized message for searchMapButton."
+  },
+  "searchTopicsTitle": "Temas",
+  "@searchTopicsTitle": {
+    "description": "Localized message for searchTopicsTitle."
+  },
+  "searchNoResults": "No hay resultados para “{query}”",
+  "@searchNoResults": {
+    "placeholders": {
+      "query": {}
+    },
+    "description": "Localized message for searchNoResults."
+  },
+  "searchSectionPeople": "Personas",
+  "@searchSectionPeople": {
+    "description": "Localized message for searchSectionPeople."
+  },
+  "searchSectionPosts": "Publicaciones",
+  "@searchSectionPosts": {
+    "description": "Localized message for searchSectionPosts."
+  },
+  "searchSectionCommunities": "Comunidades",
+  "@searchSectionCommunities": {
+    "description": "Localized message for searchSectionCommunities."
+  },
+  "searchHintPeople": "Busca personas",
+  "@searchHintPeople": {
+    "description": "Localized message for searchHintPeople."
+  },
+  "searchHintPosts": "Busca publicaciones",
+  "@searchHintPosts": {
+    "description": "Localized message for searchHintPosts."
+  },
+  "searchHintCommunities": "Busca comunidades",
+  "@searchHintCommunities": {
+    "description": "Localized message for searchHintCommunities."
+  },
+  "searchTopicHealing": "sanación",
+  "@searchTopicHealing": {
+    "description": "Localized message for searchTopicHealing."
+  },
+  "searchTopicFamily": "familia",
+  "@searchTopicFamily": {
+    "description": "Localized message for searchTopicFamily."
+  },
+  "searchTopicWork": "trabajo",
+  "@searchTopicWork": {
+    "description": "Localized message for searchTopicWork."
+  },
+  "searchTopicAnxiety": "ansiedad",
+  "@searchTopicAnxiety": {
+    "description": "Localized message for searchTopicAnxiety."
+  },
+  "searchTopicGratitude": "gratitud",
+  "@searchTopicGratitude": {
+    "description": "Localized message for searchTopicGratitude."
+  },
+  "searchTopicFinances": "finanzas",
+  "@searchTopicFinances": {
+    "description": "Localized message for searchTopicFinances."
+  },
+  "commonSeeMore": "Ver más",
+  "@commonSeeMore": {
+    "description": "Localized message for commonSeeMore."
+  },
+  "commonSeeLess": "Ver menos",
+  "@commonSeeLess": {
+    "description": "Localized message for commonSeeLess."
+  },
+  "commonComingSoon": "Próximamente",
+  "@commonComingSoon": {
+    "description": "Localized message for commonComingSoon."
+  },
+  "commonSomethingWentWrong": "Algo salió mal",
+  "@commonSomethingWentWrong": {
+    "description": "Localized message for commonSomethingWentWrong."
+  },
+  "commonRetry": "Reintentar",
+  "@commonRetry": {
+    "description": "Localized message for commonRetry."
+  },
+  "commonTryAgain": "Reintentar",
+  "@commonTryAgain": {
+    "description": "Localized message for commonTryAgain."
+  },
+  "commonNoConnection": "Sin conexión",
+  "@commonNoConnection": {
+    "description": "Localized message for commonNoConnection."
+  },
+  "commonNoPermission": "No tienes permiso",
+  "@commonNoPermission": {
+    "description": "Localized message for commonNoPermission."
+  },
+  "commonRefresh": "Actualizar",
+  "@commonRefresh": {
+    "description": "Localized message for commonRefresh."
+  },
+  "commonClearSearch": "Borrar búsqueda",
+  "@commonClearSearch": {
+    "description": "Localized message for commonClearSearch."
+  },
+  "commonRestrictedAccess": "Acceso restringido",
+  "@commonRestrictedAccess": {
+    "description": "Localized message for commonRestrictedAccess."
+  },
+  "commonReset": "Restablecer",
+  "@commonReset": {
+    "description": "Localized message for commonReset."
+  },
+  "commonPhase2": "Fase 2",
+  "@commonPhase2": {
+    "description": "Localized message for commonPhase2."
+  },
+  "commonOpen": "Abrir",
+  "@commonOpen": {
+    "description": "Localized message for commonOpen."
+  },
+  "commonDelete": "Eliminar",
+  "@commonDelete": {
+    "description": "Localized message for commonDelete."
+  },
+  "commonHide": "Ocultar",
+  "@commonHide": {
+    "description": "Localized message for commonHide."
+  },
+  "commonUnhide": "Volver a mostrar",
+  "@commonUnhide": {
+    "description": "Localized message for commonUnhide."
+  },
+  "commonViewDetails": "Ver detalles",
+  "@commonViewDetails": {
+    "description": "Localized message for commonViewDetails."
+  },
+  "commonIdCopied": "ID copiado",
+  "@commonIdCopied": {
+    "description": "Localized message for commonIdCopied."
+  },
+  "timeNow": "ahora",
+  "@timeNow": {
+    "description": "Localized message for timeNow."
+  },
+  "timeAgoMinutes": "hace {minutes}min",
+  "@timeAgoMinutes": {
+    "placeholders": {
+      "minutes": {
+        "type": "int"
+      }
+    },
+    "description": "Localized message for timeAgoMinutes."
+  },
+  "timeAgoHours": "hace {hours}h",
+  "@timeAgoHours": {
+    "placeholders": {
+      "hours": {
+        "type": "int"
+      }
+    },
+    "description": "Localized message for timeAgoHours."
+  },
+  "timeAgoDays": "hace {days}d",
+  "@timeAgoDays": {
+    "placeholders": {
+      "days": {
+        "type": "int"
+      }
+    },
+    "description": "Localized message for timeAgoDays."
+  },
+  "authErrorInvalidCredentials": "Correo o contraseña inválidos",
+  "@authErrorInvalidCredentials": {
+    "description": "Localized message for authErrorInvalidCredentials."
+  },
+  "authErrorLoginFailed": "Error al iniciar sesión",
+  "@authErrorLoginFailed": {
+    "description": "Localized message for authErrorLoginFailed."
+  },
+  "authErrorCreateAccountFailed": "No se pudo crear la cuenta",
+  "@authErrorCreateAccountFailed": {
+    "description": "Localized message for authErrorCreateAccountFailed."
+  },
+  "authErrorAccountCreatedNoSession": "Cuenta creada, pero sin sesión",
+  "@authErrorAccountCreatedNoSession": {
+    "description": "Localized message for authErrorAccountCreatedNoSession."
+  },
+  "authErrorRateLimit": "Se alcanzó el límite de envío de correos. Espera unos minutos e inténtalo de nuevo.",
+  "@authErrorRateLimit": {
+    "description": "Localized message for authErrorRateLimit."
+  },
+  "authErrorEmailAlreadyRegistered": "Correo ya registrado",
+  "@authErrorEmailAlreadyRegistered": {
+    "description": "Localized message for authErrorEmailAlreadyRegistered."
+  },
+  "authErrorUsernameUnavailable": "Nombre de usuario no disponible",
+  "@authErrorUsernameUnavailable": {
+    "description": "Localized message for authErrorUsernameUnavailable."
+  },
+  "authGateTitle": "Inicia sesión para orar, comentar y participar",
+  "@authGateTitle": {
+    "description": "Localized message for authGateTitle."
+  },
+  "authGateSubtitle": "Para continuar, inicia sesión o crea una cuenta.",
+  "@authGateSubtitle": {
+    "description": "Localized message for authGateSubtitle."
+  },
+  "authWelcomeTitle": "Bienvenido",
+  "@authWelcomeTitle": {
+    "description": "Localized message for authWelcomeTitle."
+  },
+  "authEmailLabel": "Correo",
+  "@authEmailLabel": {
+    "description": "Localized message for authEmailLabel."
+  },
+  "authPasswordLabel": "Contraseña",
+  "@authPasswordLabel": {
+    "description": "Localized message for authPasswordLabel."
+  },
+  "authForgotPassword": "Olvidé mi contraseña",
+  "@authForgotPassword": {
+    "description": "Localized message for authForgotPassword."
+  },
+  "authCreateAccount": "Crear cuenta",
+  "@authCreateAccount": {
+    "description": "Localized message for authCreateAccount."
+  },
+  "authNameLabel": "Nombre",
+  "@authNameLabel": {
+    "description": "Localized message for authNameLabel."
+  },
+  "authUsernameLabel": "@usuario",
+  "@authUsernameLabel": {
+    "description": "Localized message for authUsernameLabel."
+  },
+  "authAcceptTerms": "Acepto los términos",
+  "@authAcceptTerms": {
+    "description": "Localized message for authAcceptTerms."
+  },
+  "authHaveAccountSignIn": "Ya tengo cuenta → Iniciar sesión",
+  "@authHaveAccountSignIn": {
+    "description": "Localized message for authHaveAccountSignIn."
+  },
+  "authNameRequired": "Ingresa tu nombre",
+  "@authNameRequired": {
+    "description": "Localized message for authNameRequired."
+  },
+  "authUsernameMin3": "Mín 3 caracteres",
+  "@authUsernameMin3": {
+    "description": "Localized message for authUsernameMin3."
+  },
+  "authUsernameAllowedChars": "Usa solo a-z, 0-9, . y _",
+  "@authUsernameAllowedChars": {
+    "description": "Localized message for authUsernameAllowedChars."
+  },
+  "authUsernameNoSpaces": "Sin espacios",
+  "@authUsernameNoSpaces": {
+    "description": "Localized message for authUsernameNoSpaces."
+  },
+  "authEmailInvalid": "Correo inválido",
+  "@authEmailInvalid": {
+    "description": "Localized message for authEmailInvalid."
+  },
+  "authPasswordMin8": "Contraseña mín 8",
+  "@authPasswordMin8": {
+    "description": "Localized message for authPasswordMin8."
+  },
+  "authWaitSeconds": "Espera {seconds}s",
+  "@authWaitSeconds": {
+    "placeholders": {
+      "seconds": {
+        "type": "int"
+      }
+    },
+    "description": "Localized message for authWaitSeconds."
+  },
+  "authResetPasswordTitle": "Restablecer contraseña",
+  "@authResetPasswordTitle": {
+    "description": "Localized message for authResetPasswordTitle."
+  },
+  "authSendLink": "Enviar enlace",
+  "@authSendLink": {
+    "description": "Localized message for authSendLink."
+  },
+  "authResetEmailSentSnack": "Enviamos un correo…",
+  "@authResetEmailSentSnack": {
+    "description": "Localized message for authResetEmailSentSnack."
+  },
+  "authSupabaseNotConfigured": "Supabase no configurado",
+  "@authSupabaseNotConfigured": {
+    "description": "Localized message for authSupabaseNotConfigured."
+  },
+  "authConfigureSupabase": "Configurar Supabase",
+  "@authConfigureSupabase": {
+    "description": "Localized message for authConfigureSupabase."
+  },
+  "authShowPassword": "Mostrar contraseña",
+  "@authShowPassword": {
+    "description": "Localized message for authShowPassword."
+  },
+  "authHidePassword": "Ocultar contraseña",
+  "@authHidePassword": {
+    "description": "Localized message for authHidePassword."
+  },
+  "adsHeadlineExample": "Ej.: Entrega rápida",
+  "@adsHeadlineExample": {
+    "description": "Localized message for adsHeadlineExample."
+  },
+  "adsMessageHint": "Mensaje…",
+  "@adsMessageHint": {
+    "description": "Localized message for adsMessageHint."
+  },
+  "adsCtaExample": "Ej.: Comprar",
+  "@adsCtaExample": {
+    "description": "Localized message for adsCtaExample."
+  },
+  "adsSponsoredLabel": "Patrocinado",
+  "@adsSponsoredLabel": {
+    "description": "Localized message for adsSponsoredLabel."
+  },
+  "adsHideAction": "Ocultar anuncio",
+  "@adsHideAction": {
+    "description": "Localized message for adsHideAction."
+  },
+  "privacyScreenTitle": "Privacidad",
+  "@privacyScreenTitle": {
+    "description": "Localized message for privacyScreenTitle."
+  },
+  "privacyScreenComingSoon": "Pronto habrá más opciones de privacidad.",
+  "@privacyScreenComingSoon": {
+    "description": "Localized message for privacyScreenComingSoon."
+  },
+  "logoutConfirmTitle": "¿Cerrar sesión en Atalaia?",
+  "@logoutConfirmTitle": {
+    "description": "Localized message for logoutConfirmTitle."
+  },
+  "supabaseSetupTitle": "Configurar Supabase",
+  "@supabaseSetupTitle": {
+    "description": "Localized message for supabaseSetupTitle."
+  },
+  "supabaseSetupResetLocalConfigSnack": "Configuración local de Supabase restablecida. Reinicia la app.",
+  "@supabaseSetupResetLocalConfigSnack": {
+    "description": "Localized message for supabaseSetupResetLocalConfigSnack."
+  },
+  "supabaseSetupMissingUrlKeySnack": "Ingresa URL y ANON KEY",
+  "@supabaseSetupMissingUrlKeySnack": {
+    "description": "Localized message for supabaseSetupMissingUrlKeySnack."
+  },
+  "supabaseSetupConfiguredSnack": "Supabase configurado",
+  "@supabaseSetupConfiguredSnack": {
+    "description": "Localized message for supabaseSetupConfiguredSnack."
+  },
+  "notificationsTitle": "Notificaciones",
+  "@notificationsTitle": {
+    "description": "Localized message for notificationsTitle."
+  },
+  "notificationsMarkAllRead": "Marcar todas como leídas",
+  "@notificationsMarkAllRead": {
+    "description": "Localized message for notificationsMarkAllRead."
+  },
+  "notificationsMarkedAllReadSnack": "Marcadas como leídas",
+  "@notificationsMarkedAllReadSnack": {
+    "description": "Localized message for notificationsMarkedAllReadSnack."
+  },
+  "notificationsFilterAll": "Todas",
+  "@notificationsFilterAll": {
+    "description": "Localized message for notificationsFilterAll."
+  },
+  "notificationsFilterUnread": "No leídas",
+  "@notificationsFilterUnread": {
+    "description": "Localized message for notificationsFilterUnread."
+  },
+  "notificationsFilterSocial": "Social",
+  "@notificationsFilterSocial": {
+    "description": "Localized message for notificationsFilterSocial."
+  },
+  "notificationsFilterPrayer": "Oración",
+  "@notificationsFilterPrayer": {
+    "description": "Localized message for notificationsFilterPrayer."
+  },
+  "notificationsFilterAlerts": "Alertas",
+  "@notificationsFilterAlerts": {
+    "description": "Localized message for notificationsFilterAlerts."
+  },
+  "notificationsFilterScales": "Escalas",
+  "@notificationsFilterScales": {
+    "description": "Localized message for notificationsFilterScales."
+  },
+  "notificationsSignInToSee": "Inicia sesión para ver notificaciones",
+  "@notificationsSignInToSee": {
+    "description": "Localized message for notificationsSignInToSee."
+  },
+  "notificationsEmptyUnread": "No tienes notificaciones no leídas.",
+  "@notificationsEmptyUnread": {
+    "description": "Localized message for notificationsEmptyUnread."
+  },
+  "notificationsEmptyAll": "Aún no tienes notificaciones.",
+  "@notificationsEmptyAll": {
+    "description": "Localized message for notificationsEmptyAll."
+  },
+  "notificationsCtaViewAll": "Ver todas",
+  "@notificationsCtaViewAll": {
+    "description": "Localized message for notificationsCtaViewAll."
+  },
+  "notificationsHiddenSnack": "Notificación oculta",
+  "@notificationsHiddenSnack": {
+    "description": "Localized message for notificationsHiddenSnack."
+  },
+  "notificationsBucketToday": "Hoy",
+  "@notificationsBucketToday": {
+    "description": "Localized message for notificationsBucketToday."
+  },
+  "notificationsBucketThisWeek": "Esta semana",
+  "@notificationsBucketThisWeek": {
+    "description": "Localized message for notificationsBucketThisWeek."
+  },
+  "notificationsBucketThisMonth": "Este mes",
+  "@notificationsBucketThisMonth": {
+    "description": "Localized message for notificationsBucketThisMonth."
+  },
+  "notificationsBucketEarlier": "Anteriores",
+  "@notificationsBucketEarlier": {
+    "description": "Localized message for notificationsBucketEarlier."
+  },
+  "settingsEmail": "Correo",
+  "@settingsEmail": {
+    "description": "Localized message for settingsEmail."
+  },
+  "settingsChangePassword": "Cambiar contraseña",
+  "@settingsChangePassword": {
+    "description": "Localized message for settingsChangePassword."
+  },
+  "settingsDeactivateAccount": "Desactivar cuenta",
+  "@settingsDeactivateAccount": {
+    "description": "Localized message for settingsDeactivateAccount."
+  },
+  "settingsDeleteAccount": "Eliminar cuenta",
+  "@settingsDeleteAccount": {
+    "description": "Localized message for settingsDeleteAccount."
+  },
+  "communityTitle": "Comunidad",
+  "@communityTitle": {
+    "description": "Localized message for communityTitle."
+  },
+  "communityNotFound": "Comunidad no encontrada",
+  "@communityNotFound": {
+    "description": "Localized message for communityNotFound."
+  },
+  "communityCreatePost": "Crear post",
+  "@communityCreatePost": {
+    "description": "Localized message for communityCreatePost."
+  },
+  "communityJoin": "Unirse",
+  "@communityJoin": {
+    "description": "Localized message for communityJoin."
+  },
+  "communityRequest": "Solicitar",
+  "@communityRequest": {
+    "description": "Localized message for communityRequest."
+  },
+  "communityRequestEntry": "Solicitar acceso",
+  "@communityRequestEntry": {
+    "description": "Localized message for communityRequestEntry."
+  },
+  "communityRequestSent": "Solicitud enviada",
+  "@communityRequestSent": {
+    "description": "Localized message for communityRequestSent."
+  },
+  "communityJoined": "Te uniste",
+  "@communityJoined": {
+    "description": "Localized message for communityJoined."
+  },
+  "communityPrivacyLabel": "Privacidad",
+  "@communityPrivacyLabel": {
+    "description": "Localized message for communityPrivacyLabel."
+  },
+  "communityPrivacyOpen": "Abierta",
+  "@communityPrivacyOpen": {
+    "description": "Localized message for communityPrivacyOpen."
+  },
+  "communityPrivacyClosed": "Cerrada",
+  "@communityPrivacyClosed": {
+    "description": "Localized message for communityPrivacyClosed."
+  },
+  "communityMembersCount": "{count} miembros",
+  "@communityMembersCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    },
+    "description": "Localized message for communityMembersCount."
+  },
+  "communityFeedTitle": "Feed de la comunidad",
+  "@communityFeedTitle": {
+    "description": "Localized message for communityFeedTitle."
+  },
+  "communitySignInToSeeFeed": "Inicia sesión para ver el feed",
+  "@communitySignInToSeeFeed": {
+    "description": "Localized message for communitySignInToSeeFeed."
+  },
+  "communityMembersOnlyFeed": "Solo los miembros pueden ver este feed",
+  "@communityMembersOnlyFeed": {
+    "description": "Localized message for communityMembersOnlyFeed."
+  },
+  "communityMembersOnlyChat": "Solo los miembros pueden abrir el chat",
+  "@communityMembersOnlyChat": {
+    "description": "Localized message for communityMembersOnlyChat."
+  },
+  "communitiesSearchHint": "Buscar comunidades",
+  "@communitiesSearchHint": {
+    "description": "Localized message for communitiesSearchHint."
+  },
+  "communitiesEmpty": "Aún no hay comunidades.",
+  "@communitiesEmpty": {
+    "description": "Localized message for communitiesEmpty."
+  },
+  "communitiesEmptySearch": "Sin resultados\nPrueba otro término.",
+  "@communitiesEmptySearch": {
+    "description": "Localized message for communitiesEmptySearch."
+  },
+  "communitiesGlobalFilterTitle": "Sin filtro (Global)",
+  "@communitiesGlobalFilterTitle": {
+    "description": "Localized message for communitiesGlobalFilterTitle."
+  },
+  "communitiesGlobalFilterSubtitle": "Muestra pedidos públicos",
+  "@communitiesGlobalFilterSubtitle": {
+    "description": "Localized message for communitiesGlobalFilterSubtitle."
+  },
+  "communityStatusPending": "Pendiente",
+  "@communityStatusPending": {
+    "description": "Localized message for communityStatusPending."
+  },
+  "communityStatusMember": "Miembro",
+  "@communityStatusMember": {
+    "description": "Localized message for communityStatusMember."
+  },
+  "communityDescription": "Descripción",
+  "@communityDescription": {
+    "description": "Localized message for communityDescription."
+  },
+  "communityRules": "Reglas",
+  "@communityRules": {
+    "description": "Localized message for communityRules."
+  },
+  "communityNoRulesYet": "Aún no hay reglas.",
+  "@communityNoRulesYet": {
+    "description": "Localized message for communityNoRulesYet."
+  },
+  "communityCreateTitle": "Crear comunidad",
+  "@communityCreateTitle": {
+    "description": "Localized message for communityCreateTitle."
+  },
+  "communityCreateNameLabel": "Nombre",
+  "@communityCreateNameLabel": {
+    "description": "Localized message for communityCreateNameLabel."
+  },
+  "communityCreateNameHint": "Ej.: Intercesores Goiânia",
+  "@communityCreateNameHint": {
+    "description": "Localized message for communityCreateNameHint."
+  },
+  "communityCreateDescriptionHint": "Sobre el propósito de la comunidad…",
+  "@communityCreateDescriptionHint": {
+    "description": "Localized message for communityCreateDescriptionHint."
+  },
+  "communityCreateLocationPathLabel": "Lugar (path)",
+  "@communityCreateLocationPathLabel": {
+    "description": "Localized message for communityCreateLocationPathLabel."
+  },
+  "communityCreateLocationPathHint": "world/sa/br/go/goiania",
+  "@communityCreateLocationPathHint": {
+    "description": "Localized message for communityCreateLocationPathHint."
+  },
+  "communityCreateImageUrlLabel": "Imagen (URL)",
+  "@communityCreateImageUrlLabel": {
+    "description": "Localized message for communityCreateImageUrlLabel."
+  },
+  "communityCreateImageUrlHint": "https://…",
+  "@communityCreateImageUrlHint": {
+    "description": "Localized message for communityCreateImageUrlHint."
+  },
+  "communityCreateJoinModeLabel": "Entrada",
+  "@communityCreateJoinModeLabel": {
+    "description": "Localized message for communityCreateJoinModeLabel."
+  },
+  "communityCreateJoinModePublic": "Acceso público",
+  "@communityCreateJoinModePublic": {
+    "description": "Localized message for communityCreateJoinModePublic."
+  },
+  "communityCreateJoinModeRequest": "Aprobación",
+  "@communityCreateJoinModeRequest": {
+    "description": "Localized message for communityCreateJoinModeRequest."
+  },
+  "communityCreateJoinModeInvite": "Solo invitación",
+  "@communityCreateJoinModeInvite": {
+    "description": "Localized message for communityCreateJoinModeInvite."
+  },
+  "communityCreateVisibilityPublic": "Pública",
+  "@communityCreateVisibilityPublic": {
+    "description": "Localized message for communityCreateVisibilityPublic."
+  },
+  "communityCreateVisibilityPrivate": "Privada",
+  "@communityCreateVisibilityPrivate": {
+    "description": "Localized message for communityCreateVisibilityPrivate."
+  },
+  "communityCreateVisibilityUnlisted": "No listada",
+  "@communityCreateVisibilityUnlisted": {
+    "description": "Localized message for communityCreateVisibilityUnlisted."
+  },
+  "communityCreateTypeLabel": "Tipo",
+  "@communityCreateTypeLabel": {
+    "description": "Localized message for communityCreateTypeLabel."
+  },
+  "communityCreateTypeChurch": "Iglesia",
+  "@communityCreateTypeChurch": {
+    "description": "Localized message for communityCreateTypeChurch."
+  },
+  "communityCreateTypeMinistry": "Ministerio",
+  "@communityCreateTypeMinistry": {
+    "description": "Localized message for communityCreateTypeMinistry."
+  },
+  "communityCreateTypePrayer": "Oración",
+  "@communityCreateTypePrayer": {
+    "description": "Localized message for communityCreateTypePrayer."
+  },
+  "communityJoinedMessage": "Te uniste a la comunidad",
+  "@communityJoinedMessage": {
+    "description": "Localized message for communityJoinedMessage."
+  },
+  "communityCancelRequest": "Cancelar solicitud",
+  "@communityCancelRequest": {
+    "description": "Localized message for communityCancelRequest."
+  },
+  "communityRequestCanceled": "Solicitud cancelada",
+  "@communityRequestCanceled": {
+    "description": "Localized message for communityRequestCanceled."
+  },
+  "communityMessageAdmin": "Enviar mensaje al admin",
+  "@communityMessageAdmin": {
+    "description": "Localized message for communityMessageAdmin."
+  },
+  "communitySignInToMessage": "Inicia sesión para enviar mensaje",
+  "@communitySignInToMessage": {
+    "description": "Localized message for communitySignInToMessage."
+  },
+  "communityAdminUnavailableDemo": "Admin no disponible (demo)",
+  "@communityAdminUnavailableDemo": {
+    "description": "Localized message for communityAdminUnavailableDemo."
+  },
+  "communityNoPostsYet": "Todavía no hay publicaciones en esta comunidad.",
+  "@communityNoPostsYet": {
+    "description": "Localized message for communityNoPostsYet."
+  },
+  "communitySwitch": "Cambiar comunidad",
+  "@communitySwitch": {
+    "description": "Localized message for communitySwitch."
+  },
+  "communityLeave": "Salir de la comunidad",
+  "@communityLeave": {
+    "description": "Localized message for communityLeave."
+  },
+  "communityFeedSectionTitle": "Feed",
+  "@communityFeedSectionTitle": {
+    "description": "Localized message for communityFeedSectionTitle."
+  },
+  "feedEmptyPosts": "Aún no hay publicaciones.",
+  "@feedEmptyPosts": {
+    "description": "Localized message for feedEmptyPosts."
+  },
+  "feedCreatePost": "Crear publicación",
+  "@feedCreatePost": {
+    "description": "Localized message for feedCreatePost."
+  },
+  "communityMembersTitle": "Miembros",
+  "@communityMembersTitle": {
+    "description": "Localized message for communityMembersTitle."
+  },
+  "communityMembersOnly": "Solo los miembros pueden ver esta lista.",
+  "@communityMembersOnly": {
+    "description": "Localized message for communityMembersOnly."
+  },
+  "communityMembersTabMembers": "Miembros",
+  "@communityMembersTabMembers": {
+    "description": "Localized message for communityMembersTabMembers."
+  },
+  "communityMembersTabRequests": "Solicitudes ({count})",
+  "@communityMembersTabRequests": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    },
+    "description": "Localized message for communityMembersTabRequests."
+  },
+  "communityMembersEmptyDemo": "Sin miembros (demo).",
+  "@communityMembersEmptyDemo": {
+    "description": "Localized message for communityMembersEmptyDemo."
+  },
+  "notificationChannelPrayerRunsName": "Escalas",
+  "@notificationChannelPrayerRunsName": {
+    "description": "Notification channel name for prayer schedule reminders."
+  },
+  "notificationChannelPrayerRunsDescription": "Recordatorios de escala",
+  "@notificationChannelPrayerRunsDescription": {
+    "description": "Notification channel description for prayer schedule reminders."
+  },
+  "prayerRunDefaultTitle": "Escala de oración",
+  "@prayerRunDefaultTitle": {
+    "description": "Fallback title for prayer schedule items when no custom title is available."
+  },
+  "prayerRunStatusCancelled": "Cancelada",
+  "prayerRunStatusCompleted": "Cumplida",
+  "prayerRunStatusMissed": "No cumplida",
+  "prayerRunStatusInProgress": "En curso",
+  "prayerRunStatusScheduled": "Programada",
+  "prayerRunDetailsDurationLine": "Duración: {minutes} min",
+  "@prayerRunDetailsDurationLine": {
+    "placeholders": {
+      "minutes": {
+        "type": "int"
+      }
+    }
+  },
+  "prayerRunDetailsCommunityLine": "Comunidad: {community}",
+  "@prayerRunDetailsCommunityLine": {
+    "placeholders": {
+      "community": {
+        "type": "String"
+      }
+    }
+  },
+  "prayerRunDetailsIdLine": "ID: {id}",
+  "@prayerRunDetailsIdLine": {
+    "placeholders": {
+      "id": {
+        "type": "String"
+      }
+    }
+  },
+  "prayerRunDetailsStartPrayer": "Iniciar oración",
+  "notificationPrayerRunReminderTitle": "Recordatorio de escala ({leadTime})",
+  "@notificationPrayerRunReminderTitle": {
+    "placeholders": {
+      "leadTime": {
+        "type": "String"
+      }
+    },
+    "description": "Notification title for a prayer schedule reminder with the lead time placeholder."
+  },
+  "prayerRunsTitleShort": "Escalas",
+  "@prayerRunsTitleShort": {
+    "description": "Localized message for prayerRunsTitleShort."
+  },
+  "prayerRunsTitle": "Escalas de oración",
+  "@prayerRunsTitle": {
+    "description": "Localized message for prayerRunsTitle."
+  },
+  "prayerRunsSubtitle": "Organiza, acompaña y cumple los turnos",
+  "@prayerRunsSubtitle": {
+    "description": "Localized message for prayerRunsSubtitle."
+  },
+  "prayerRunsNew": "Nueva escala",
+  "@prayerRunsNew": {
+    "description": "Localized message for prayerRunsNew."
+  },
+  "prayerRunsCreateSheetTitle": "Crear horario",
+  "prayerRunsCreateTitleLabel": "Título",
+  "prayerRunsCreateTitleHint": "Ej.: Oración de la semana",
+  "prayerRunsCreateWeeklyFixedTitle": "Semanal fija",
+  "prayerRunsCreateWeeklyFixedSubtitle": "Genera automáticamente los próximos horarios semanales",
+  "prayerRunsCreateAssigneeLabel": "Responsable",
+  "prayerRunsCreateStartLabel": "Inicio",
+  "prayerRunsCreateDayLabel": "Día",
+  "prayerRunsCreateTimeLabel": "Hora",
+  "prayerRunsCreateDurationLabel": "Duración",
+  "prayerRunsCreateSelectAssignee": "Selecciona un responsable",
+  "prayerRunsAgendaTitle": "Agenda",
+  "prayerRunsAgendaCommunityLine": "Comunidad: {community}",
+  "@prayerRunsAgendaCommunityLine": {
+    "placeholders": {
+      "community": {
+        "type": "String"
+      }
+    }
+  },
+  "prayerRunsSummaryToday": "Hoy",
+  "prayerRunsSummaryUpcoming": "Próximas",
+  "prayerRunsSummaryCompleted": "Cumplidas",
+  "prayerRunsSummaryPrayedTime": "Tiempo orado",
+  "prayerRunsHighlightMyNextShift": "Tu próximo turno",
+  "prayerRunsEmptyNoSchedules": "Sin horarios por ahora.",
+  "prayerRunsSectionRecentHistory": "Historial reciente",
+  "prayerRunsMyShiftSubtitle": "Tus compromisos en esta comunidad",
+  "prayerRunsMyShiftEmptyAssigned": "Ningún turno asignado para ti.",
+  "prayerRunsSectionUpcomingMyShift": "Próximos",
+  "prayerRunsTabSchedule": "Agenda",
+  "@prayerRunsTabSchedule": {
+    "description": "Localized message for prayerRunsTabSchedule."
+  },
+  "prayerRunsTabMyShift": "Mi turno",
+  "@prayerRunsTabMyShift": {
+    "description": "Localized message for prayerRunsTabMyShift."
+  },
+  "prayerRunsTabReport": "Informe",
+  "@prayerRunsTabReport": {
+    "description": "Localized message for prayerRunsTabReport."
+  },
+  "prayerRunsReportEmpty": "Sin datos de informe.",
+  "prayerRunsReportDashboardTitle": "Panel",
+  "prayerRunsReportPrayedTime": "Tiempo orado",
+  "prayerRunsReportSessions": "Sesiones",
+  "prayerRunsReportCompleted": "Cumplidas",
+  "prayerRunsReportMissed": "Perdidas",
+  "prayerRunsReportByMember": "Por miembro",
+  "prayerRunsReportEmptyByMember": "Sin datos por miembro.",
+  "prayerRunsReportMemberSubtitle": "Tiempo: {minutes} min • Sesiones: {sessions} • Cumplidas: {completed} • Perdidas: {missed}",
+  "@prayerRunsReportMemberSubtitle": {
+    "placeholders": {
+      "minutes": {
+        "type": "int"
+      },
+      "sessions": {
+        "type": "int"
+      },
+      "completed": {
+        "type": "int"
+      },
+      "missed": {
+        "type": "int"
+      }
+    }
+  },
+  "prayerRunsReportByOccurrence": "Por ocurrencia",
+  "prayerRunsReportEmptyByOccurrence": "Sin ocurrencias en el período.",
+  "prayerRunsReportActualEmpty": "Real: —",
+  "prayerRunsReportActualRange": "Real: {start} – {end}",
+  "@prayerRunsReportActualRange": {
+    "placeholders": {
+      "start": {
+        "type": "String"
+      },
+      "end": {
+        "type": "String"
+      }
+    }
+  },
+  "prayerRunsReportStatusCompleted": "Completada",
+  "prayerRunsReportStatusMissed": "Perdida",
+  "prayerRunsReportStatusCancelled": "Cancelada",
+  "prayerRunsReportStatusScheduled": "Programada",
+  "prayerRunsReportActualDurationPart": " • Real: {minutes} min",
+  "@prayerRunsReportActualDurationPart": {
+    "placeholders": {
+      "minutes": {
+        "type": "int"
+      }
+    }
+  },
+  "prayerRunsReportStatusLine": "Estado: {status} • Planificado: {planned} min{actualPart}",
+  "@prayerRunsReportStatusLine": {
+    "placeholders": {
+      "status": {
+        "type": "String"
+      },
+      "planned": {
+        "type": "int"
+      },
+      "actualPart": {
+        "type": "String"
+      }
+    }
+  },
+  "prayerRunsReportNoteLine": "Registro: {note}",
+  "@prayerRunsReportNoteLine": {
+    "placeholders": {
+      "note": {
+        "type": "String"
+      }
+    }
+  },
+  "prayerRunsReportAssigneeLine": "Responsable: {name}",
+  "@prayerRunsReportAssigneeLine": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "prayerRunsMembersOnly": "Solo los miembros pueden ver.",
+  "@prayerRunsMembersOnly": {
+    "description": "Localized message for prayerRunsMembersOnly."
+  },
+  "communityEventsTitle": "Eventos",
+  "@communityEventsTitle": {
+    "description": "Localized message for communityEventsTitle."
+  },
+  "communityEventsTitleWithCommunity": "{community} • Eventos",
+  "@communityEventsTitleWithCommunity": {
+    "placeholders": {
+      "community": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for communityEventsTitleWithCommunity."
+  },
+  "communityEventsEmpty": "Aún no hay eventos.",
+  "@communityEventsEmpty": {
+    "description": "Localized message for communityEventsEmpty."
+  },
+  "communityMapTitle": "Mapa de la comunidad",
+  "@communityMapTitle": {
+    "description": "Localized message for communityMapTitle."
+  },
+  "communityEditTitle": "Editar comunidad",
+  "@communityEditTitle": {
+    "description": "Localized message for communityEditTitle."
+  },
+  "communityEditNoPermission": "No tienes permiso para editar esta comunidad",
+  "@communityEditNoPermission": {
+    "description": "Localized message for communityEditNoPermission."
+  },
+  "communityEventCreateSheetTitle": "Crear evento",
+  "@communityEventCreateSheetTitle": {
+    "description": "Localized message for communityEventCreateSheetTitle."
+  },
+  "communityEventCreateTitleLabel": "Título",
+  "@communityEventCreateTitleLabel": {
+    "description": "Localized message for communityEventCreateTitleLabel."
+  },
+  "communityEventCreateTitleHint": "Ej.: Vigilia de oración",
+  "@communityEventCreateTitleHint": {
+    "description": "Localized message for communityEventCreateTitleHint."
+  },
+  "communityEventCreateDescriptionLabel": "Descripción",
+  "@communityEventCreateDescriptionLabel": {
+    "description": "Localized message for communityEventCreateDescriptionLabel."
+  },
+  "communityEventCreateDescriptionHint": "Detalles del evento…",
+  "@communityEventCreateDescriptionHint": {
+    "description": "Localized message for communityEventCreateDescriptionHint."
+  },
+  "communityEventCreateLocationLabel": "Lugar",
+  "@communityEventCreateLocationLabel": {
+    "description": "Localized message for communityEventCreateLocationLabel."
+  },
+  "communityEventCreateLocationHint": "Dirección / enlace",
+  "@communityEventCreateLocationHint": {
+    "description": "Localized message for communityEventCreateLocationHint."
+  },
+  "communityEventCreateStartLabel": "Inicio",
+  "@communityEventCreateStartLabel": {
+    "description": "Localized message for communityEventCreateStartLabel."
+  },
+  "communityEventCreateEndOptionalLabel": "Fin (opcional)",
+  "@communityEventCreateEndOptionalLabel": {
+    "description": "Localized message for communityEventCreateEndOptionalLabel."
+  },
+  "communityEventCreateSubmit": "Crear",
+  "@communityEventCreateSubmit": {
+    "description": "Localized message for communityEventCreateSubmit."
+  },
+  "communityEditSubtitle": "Editar datos y reglas",
+  "@communityEditSubtitle": {
+    "description": "Localized message for communityEditSubtitle."
+  },
+  "communityEditChangePhoto": "Cambiar foto",
+  "@communityEditChangePhoto": {
+    "description": "Localized message for communityEditChangePhoto."
+  },
+  "communityEditNameHint": "Nombre",
+  "@communityEditNameHint": {
+    "description": "Localized message for communityEditNameHint."
+  },
+  "communityEditDescriptionHint": "Descripción",
+  "@communityEditDescriptionHint": {
+    "description": "Localized message for communityEditDescriptionHint."
+  },
+  "communityEditRulesHint": "Reglas (una por línea)",
+  "@communityEditRulesHint": {
+    "description": "Localized message for communityEditRulesHint."
+  },
+  "commonClose": "Cerrar",
+  "@commonClose": {
+    "description": "Localized message for commonClose."
+  },
+  "alertUrgency": "Urgencia: {label}",
+  "@alertUrgency": {
+    "placeholders": {
+      "label": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for alertUrgency."
+  },
+  "alertExpiresAt": "expira en {time}",
+  "@alertExpiresAt": {
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for alertExpiresAt."
+  },
+  "alertUrgencyLow": "Baja",
+  "@alertUrgencyLow": {
+    "description": "Localized message for alertUrgencyLow."
+  },
+  "alertUrgencyMedium": "Media",
+  "@alertUrgencyMedium": {
+    "description": "Localized message for alertUrgencyMedium."
+  },
+  "alertUrgencyHigh": "Alta",
+  "@alertUrgencyHigh": {
+    "description": "Localized message for alertUrgencyHigh."
+  },
+  "alertUrgencyCritical": "Crítica",
+  "@alertUrgencyCritical": {
+    "description": "Localized message for alertUrgencyCritical."
+  },
+  "alertCategoryPrayer": "Oración",
+  "@alertCategoryPrayer": {
+    "description": "Localized message for alertCategoryPrayer."
+  },
+  "alertCategorySecurity": "Seguridad",
+  "@alertCategorySecurity": {
+    "description": "Localized message for alertCategorySecurity."
+  },
+  "alertCategoryHealth": "Salud",
+  "@alertCategoryHealth": {
+    "description": "Localized message for alertCategoryHealth."
+  },
+  "alertCategoryMissingPerson": "Persona desaparecida",
+  "@alertCategoryMissingPerson": {
+    "description": "Localized message for alertCategoryMissingPerson."
+  },
+  "alertCategorySocialNeed": "Necesidad social",
+  "@alertCategorySocialNeed": {
+    "description": "Localized message for alertCategorySocialNeed."
+  },
+  "alertCategoryTraffic": "Tráfico",
+  "@alertCategoryTraffic": {
+    "description": "Localized message for alertCategoryTraffic."
+  },
+  "alertCategoryPublicUtility": "Servicio público",
+  "@alertCategoryPublicUtility": {
+    "description": "Localized message for alertCategoryPublicUtility."
+  },
+  "alertCategoryEmergency": "Emergencia",
+  "@alertCategoryEmergency": {
+    "description": "Localized message for alertCategoryEmergency."
+  },
+  "notificationActorAndMore": "@{username} y {count} más",
+  "@notificationActorAndMore": {
+    "placeholders": {
+      "username": {
+        "type": "String"
+      },
+      "count": {
+        "type": "int"
+      }
+    },
+    "description": "Localized message for notificationActorAndMore."
+  },
+  "notificationFollowBack": "Seguir de vuelta",
+  "@notificationFollowBack": {
+    "description": "Localized message for notificationFollowBack."
+  },
+  "notificationCtaReply": "Responder",
+  "@notificationCtaReply": {
+    "description": "Localized message for notificationCtaReply."
+  },
+  "notificationCtaView": "Ver",
+  "@notificationCtaView": {
+    "description": "Localized message for notificationCtaView."
+  },
+  "notificationCtaOpen": "Abrir",
+  "@notificationCtaOpen": {
+    "description": "Localized message for notificationCtaOpen."
+  },
+  "notificationFollowOne": "empezó a seguirte",
+  "@notificationFollowOne": {
+    "description": "Localized message for notificationFollowOne."
+  },
+  "notificationFollowMany": "empezaron a seguirte",
+  "@notificationFollowMany": {
+    "description": "Localized message for notificationFollowMany."
+  },
+  "notificationReactionOne": "reaccionó a tu publicación",
+  "@notificationReactionOne": {
+    "description": "Localized message for notificationReactionOne."
+  },
+  "notificationReactionMany": "reaccionaron a tu publicación",
+  "@notificationReactionMany": {
+    "description": "Localized message for notificationReactionMany."
+  },
+  "notificationCommentOneNoBody": "comentó en tu publicación",
+  "@notificationCommentOneNoBody": {
+    "description": "Localized message for notificationCommentOneNoBody."
+  },
+  "notificationCommentManyNoBody": "comentaron en tu publicación",
+  "@notificationCommentManyNoBody": {
+    "description": "Localized message for notificationCommentManyNoBody."
+  },
+  "notificationCommentOneWithBody": "comentó: “{body}”",
+  "@notificationCommentOneWithBody": {
+    "placeholders": {
+      "body": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for notificationCommentOneWithBody."
+  },
+  "notificationCommentManyWithBody": "comentaron: “{body}”",
+  "@notificationCommentManyWithBody": {
+    "placeholders": {
+      "body": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for notificationCommentManyWithBody."
+  },
+  "notificationPrayedRequestOne": "oró por tu pedido",
+  "@notificationPrayedRequestOne": {
+    "description": "Localized message for notificationPrayedRequestOne."
+  },
+  "notificationPrayedRequestMany": "oraron por tu pedido",
+  "@notificationPrayedRequestMany": {
+    "description": "Localized message for notificationPrayedRequestMany."
+  },
+  "notificationPrayedPostOne": "oró por tu publicación",
+  "@notificationPrayedPostOne": {
+    "description": "Localized message for notificationPrayedPostOne."
+  },
+  "notificationPrayedPostMany": "oraron por tu publicación",
+  "@notificationPrayedPostMany": {
+    "description": "Localized message for notificationPrayedPostMany."
+  },
+  "notificationPostNewOneNoBody": "publicó una nueva publicación",
+  "@notificationPostNewOneNoBody": {
+    "description": "Localized message for notificationPostNewOneNoBody."
+  },
+  "notificationPostNewManyNoBody": "publicaron una nueva publicación",
+  "@notificationPostNewManyNoBody": {
+    "description": "Localized message for notificationPostNewManyNoBody."
+  },
+  "notificationPostNewOneWithBody": "publicó una nueva publicación: “{body}”",
+  "@notificationPostNewOneWithBody": {
+    "placeholders": {
+      "body": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for notificationPostNewOneWithBody."
+  },
+  "notificationPostNewManyWithBody": "publicaron una nueva publicación: “{body}”",
+  "@notificationPostNewManyWithBody": {
+    "placeholders": {
+      "body": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for notificationPostNewManyWithBody."
+  },
+  "notificationStoryNew": "publicó una nueva historia",
+  "@notificationStoryNew": {
+    "description": "Localized message for notificationStoryNew."
+  },
+  "notificationAlertNewOneNoBody": "envió una alerta",
+  "@notificationAlertNewOneNoBody": {
+    "description": "Localized message for notificationAlertNewOneNoBody."
+  },
+  "notificationAlertNewManyNoBody": "enviaron una alerta",
+  "@notificationAlertNewManyNoBody": {
+    "description": "Localized message for notificationAlertNewManyNoBody."
+  },
+  "notificationAlertNewOneWithBody": "envió una alerta: “{body}”",
+  "@notificationAlertNewOneWithBody": {
+    "placeholders": {
+      "body": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for notificationAlertNewOneWithBody."
+  },
+  "notificationAlertNewManyWithBody": "enviaron una alerta: “{body}”",
+  "@notificationAlertNewManyWithBody": {
+    "placeholders": {
+      "body": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for notificationAlertNewManyWithBody."
+  },
+  "notificationPrayerRequestOneNoBody": "publicó una petición de oración",
+  "@notificationPrayerRequestOneNoBody": {
+    "description": "Localized message for notificationPrayerRequestOneNoBody."
+  },
+  "notificationPrayerRequestManyNoBody": "publicaron una petición de oración",
+  "@notificationPrayerRequestManyNoBody": {
+    "description": "Localized message for notificationPrayerRequestManyNoBody."
+  },
+  "notificationPrayerRequestOneWithBody": "publicó una petición de oración: “{body}”",
+  "@notificationPrayerRequestOneWithBody": {
+    "placeholders": {
+      "body": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for notificationPrayerRequestOneWithBody."
+  },
+  "notificationPrayerRequestManyWithBody": "publicaron una petición de oración: “{body}”",
+  "@notificationPrayerRequestManyWithBody": {
+    "placeholders": {
+      "body": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for notificationPrayerRequestManyWithBody."
+  },
+  "notificationScaleReminder24hNoBody": "tiene una escala en 24h",
+  "@notificationScaleReminder24hNoBody": {
+    "description": "Localized message for notificationScaleReminder24hNoBody."
+  },
+  "notificationScaleReminder24hWithBody": "recordatorio de escala (24h): “{body}”",
+  "@notificationScaleReminder24hWithBody": {
+    "placeholders": {
+      "body": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for notificationScaleReminder24hWithBody."
+  },
+  "notificationScaleReminder1hNoBody": "tiene una escala en 1h",
+  "@notificationScaleReminder1hNoBody": {
+    "description": "Localized message for notificationScaleReminder1hNoBody."
+  },
+  "notificationScaleReminder1hWithBody": "recordatorio de escala (1h): “{body}”",
+  "@notificationScaleReminder1hWithBody": {
+    "placeholders": {
+      "body": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for notificationScaleReminder1hWithBody."
+  },
+  "notificationScaleReminder5mNoBody": "tiene una escala en 5 min",
+  "@notificationScaleReminder5mNoBody": {
+    "description": "Localized message for notificationScaleReminder5mNoBody."
+  },
+  "notificationScaleReminder5mWithBody": "recordatorio de escala (5 min): “{body}”",
+  "@notificationScaleReminder5mWithBody": {
+    "placeholders": {
+      "body": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for notificationScaleReminder5mWithBody."
+  },
+  "commonPublish": "Publicar",
+  "@commonPublish": {
+    "description": "Localized message for commonPublish."
+  },
+  "commonPublished": "Publicado",
+  "@commonPublished": {
+    "description": "Localized message for commonPublished."
+  },
+  "commonSent": "Enviado",
+  "@commonSent": {
+    "description": "Localized message for commonSent."
+  },
+  "commonCopy": "Copiar",
+  "@commonCopy": {
+    "description": "Localized message for commonCopy."
+  },
+  "commonCopied": "Copiado",
+  "@commonCopied": {
+    "description": "Localized message for commonCopied."
+  },
+  "commonCamera": "Cámara",
+  "@commonCamera": {
+    "description": "Localized message for commonCamera."
+  },
+  "commonGallery": "Galería",
+  "@commonGallery": {
+    "description": "Localized message for commonGallery."
+  },
+  "commonUserFallback": "Usuario",
+  "@commonUserFallback": {
+    "description": "Localized message for commonUserFallback."
+  },
+  "navHome": "Inicio",
+  "@navHome": {
+    "description": "Localized message for navHome."
+  },
+  "navMap": "Mapa",
+  "@navMap": {
+    "description": "Localized message for navMap."
+  },
+  "navDirect": "Direct",
+  "@navDirect": {
+    "description": "Localized message for navDirect."
+  },
+  "navProfile": "Perfil",
+  "@navProfile": {
+    "description": "Localized message for navProfile."
+  },
+  "mainTitleMap": "Mapa",
+  "@mainTitleMap": {
+    "description": "Localized message for mainTitleMap."
+  },
+  "mainTitleMessages": "Mensajes",
+  "@mainTitleMessages": {
+    "description": "Localized message for mainTitleMessages."
+  },
+  "mainTitleProfile": "Perfil",
+  "@mainTitleProfile": {
+    "description": "Localized message for mainTitleProfile."
+  },
+  "mainTitleCommunity": "Comunidad",
+  "@mainTitleCommunity": {
+    "description": "Localized message for mainTitleCommunity."
+  },
+  "mainLeadingFeed": "Feed",
+  "@mainLeadingFeed": {
+    "description": "Localized message for mainLeadingFeed."
+  },
+  "mainLeadingNewMessage": "Nuevo mensaje",
+  "@mainLeadingNewMessage": {
+    "description": "Localized message for mainLeadingNewMessage."
+  },
+  "mainLeadingMoment": "Momento",
+  "@mainLeadingMoment": {
+    "description": "Localized message for mainLeadingMoment."
+  },
+  "mainLeadingCreate": "Crear",
+  "@mainLeadingCreate": {
+    "description": "Localized message for mainLeadingCreate."
+  },
+  "mainActionChat": "Chat",
+  "@mainActionChat": {
+    "description": "Localized message for mainActionChat."
+  },
+  "mainActionNotifications": "Notificaciones",
+  "@mainActionNotifications": {
+    "description": "Localized message for mainActionNotifications."
+  },
+  "mainActionCommunities": "Comunidades",
+  "@mainActionCommunities": {
+    "description": "Localized message for mainActionCommunities."
+  },
+  "mainActionRequests": "Solicitudes",
+  "@mainActionRequests": {
+    "description": "Localized message for mainActionRequests."
+  },
+  "mainActionMenu": "Menú",
+  "@mainActionMenu": {
+    "description": "Localized message for mainActionMenu."
+  },
+  "directSignInToOpen": "Inicia sesión para abrir Direct",
+  "@directSignInToOpen": {
+    "description": "Localized message for directSignInToOpen."
+  },
+  "directSignInToSendMessage": "Inicia sesión para enviar mensajes",
+  "@directSignInToSendMessage": {
+    "description": "Localized message for directSignInToSendMessage."
+  },
+  "directEmpty": "Tu Direct todavía está vacío.\nEnvía un mensaje para empezar.",
+  "@directEmpty": {
+    "description": "Localized message for directEmpty."
+  },
+  "directEmptySearch": "No se encontraron conversaciones.\nPrueba otro término.",
+  "@directEmptySearch": {
+    "description": "Localized message for directEmptySearch."
+  },
+  "directSearchPeopleHint": "Buscar personas",
+  "@directSearchPeopleHint": {
+    "description": "Localized message for directSearchPeopleHint."
+  },
+  "directEmptyPeopleSearch": "No hay resultados para esta búsqueda.",
+  "@directEmptyPeopleSearch": {
+    "description": "Localized message for directEmptyPeopleSearch."
+  },
+  "directCamera": "Cámara",
+  "@directCamera": {
+    "description": "Localized message for directCamera."
+  },
+  "directCameraComingSoon": "Cámara (próximamente)",
+  "@directCameraComingSoon": {
+    "description": "Localized message for directCameraComingSoon."
+  },
+  "chatSignInToChat": "Inicia sesión para conversar",
+  "@chatSignInToChat": {
+    "description": "Localized message for chatSignInToChat."
+  },
+  "directGroupLabel": "Grupo",
+  "@directGroupLabel": {
+    "description": "Localized message for directGroupLabel."
+  },
+  "directDeleteConversationTitle": "¿Eliminar conversación?",
+  "@directDeleteConversationTitle": {
+    "description": "Localized message for directDeleteConversationTitle."
+  },
+  "directDeleteConversationMessage": "Esto elimina la conversación de tu bandeja de entrada (demo).",
+  "@directDeleteConversationMessage": {
+    "description": "Localized message for directDeleteConversationMessage."
+  },
+  "storiesTitleMoments": "Momentos",
+  "@storiesTitleMoments": {
+    "description": "Localized message for storiesTitleMoments."
+  },
+  "storiesYourStory": "Tu story",
+  "@storiesYourStory": {
+    "description": "Localized message for storiesYourStory."
+  },
+  "storiesUserFallback": "Usuario",
+  "@storiesUserFallback": {
+    "description": "Localized message for storiesUserFallback."
+  },
+  "storiesNoStoriesYet": "Aún no hay stories",
+  "@storiesNoStoriesYet": {
+    "description": "Localized message for storiesNoStoriesYet."
+  },
+  "storiesShareSheetTitle": "Story",
+  "@storiesShareSheetTitle": {
+    "description": "Localized message for storiesShareSheetTitle."
+  },
+  "storiesCaptionHintOptional": "Leyenda (opcional)…",
+  "@storiesCaptionHintOptional": {
+    "description": "Localized message for storiesCaptionHintOptional."
+  },
+  "storiesShareIn": "Compartir en",
+  "@storiesShareIn": {
+    "description": "Localized message for storiesShareIn."
+  },
+  "storiesShareTargetMyStory": "Mi story",
+  "@storiesShareTargetMyStory": {
+    "description": "Localized message for storiesShareTargetMyStory."
+  },
+  "storiesShareTargetCurrentRegion": "Región actual",
+  "@storiesShareTargetCurrentRegion": {
+    "description": "Localized message for storiesShareTargetCurrentRegion."
+  },
+  "storiesPublish": "Publicar",
+  "@storiesPublish": {
+    "description": "Localized message for storiesPublish."
+  },
+  "storiesPublishing": "Publicando…",
+  "@storiesPublishing": {
+    "description": "Localized message for storiesPublishing."
+  },
+  "storiesPublished": "Story publicado",
+  "@storiesPublished": {
+    "description": "Localized message for storiesPublished."
+  },
+  "storiesPublishedInPlace": "Story publicado en {place}",
+  "@storiesPublishedInPlace": {
+    "placeholders": {
+      "place": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for storiesPublishedInPlace."
+  },
+  "storiesPublishedWithCommunity": "Story publicado • {community}",
+  "@storiesPublishedWithCommunity": {
+    "placeholders": {
+      "community": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for storiesPublishedWithCommunity."
+  },
+  "storiesPublishedWithCommunityAndPlace": "Story publicado • {community} • {place}",
+  "@storiesPublishedWithCommunityAndPlace": {
+    "placeholders": {
+      "community": {
+        "type": "String"
+      },
+      "place": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for storiesPublishedWithCommunityAndPlace."
+  },
+  "storiesPlaceFallbackCity": "Ciudad",
+  "@storiesPlaceFallbackCity": {
+    "description": "Localized message for storiesPlaceFallbackCity."
+  },
+  "postTitle": "Publicación",
+  "@postTitle": {
+    "description": "Localized message for postTitle."
+  },
+  "postUnavailable": "Esta publicación no está disponible.",
+  "@postUnavailable": {
+    "description": "Localized message for postUnavailable."
+  },
+  "postView": "Ver publicación",
+  "@postView": {
+    "description": "Localized message for postView."
+  },
+  "profileTitle": "Perfil",
+  "@profileTitle": {
+    "description": "Localized message for profileTitle."
+  },
+  "profileSignInToView": "Inicia sesión para ver tu perfil",
+  "@profileSignInToView": {
+    "description": "Localized message for profileSignInToView."
+  },
+  "profileNotFound": "Perfil no encontrado",
+  "@profileNotFound": {
+    "description": "Localized message for profileNotFound."
+  },
+  "profileUnavailable": "Perfil no disponible",
+  "@profileUnavailable": {
+    "description": "Localized message for profileUnavailable."
+  },
+  "profileEditProfile": "Editar perfil",
+  "@profileEditProfile": {
+    "description": "Localized message for profileEditProfile."
+  },
+  "profileEditUpdated": "Perfil actualizado",
+  "@profileEditUpdated": {
+    "description": "Localized message for profileEditUpdated."
+  },
+  "profileEditChangePhoto": "Cambiar foto",
+  "@profileEditChangePhoto": {
+    "description": "Localized message for profileEditChangePhoto."
+  },
+  "profileEditNameLabel": "Nombre",
+  "@profileEditNameLabel": {
+    "description": "Localized message for profileEditNameLabel."
+  },
+  "profileEditNameHint": "Tu nombre",
+  "@profileEditNameHint": {
+    "description": "Localized message for profileEditNameHint."
+  },
+  "profileEditBioLabel": "Bio",
+  "@profileEditBioLabel": {
+    "description": "Localized message for profileEditBioLabel."
+  },
+  "profileEditBioHint": "Cuéntanos un poco sobre ti…",
+  "@profileEditBioHint": {
+    "description": "Localized message for profileEditBioHint."
+  },
+  "profileEditChurchOptionalLabel": "Iglesia (opcional)",
+  "@profileEditChurchOptionalLabel": {
+    "description": "Localized message for profileEditChurchOptionalLabel."
+  },
+  "profileEditChurchHint": "Ej.: Asamblea de Dios",
+  "@profileEditChurchHint": {
+    "description": "Localized message for profileEditChurchHint."
+  },
+  "profileFollow": "Seguir",
+  "@profileFollow": {
+    "description": "Localized message for profileFollow."
+  },
+  "profileFollowing": "Siguiendo",
+  "@profileFollowing": {
+    "description": "Localized message for profileFollowing."
+  },
+  "profileUnfollowed": "Dejaste de seguir",
+  "@profileUnfollowed": {
+    "description": "Localized message for profileUnfollowed."
+  },
+  "profileMessage": "Mensaje",
+  "@profileMessage": {
+    "description": "Localized message for profileMessage."
+  },
+  "profilePosts": "Publicaciones",
+  "@profilePosts": {
+    "description": "Localized message for profilePosts."
+  },
+  "profileFollowers": "Seguidores",
+  "@profileFollowers": {
+    "description": "Localized message for profileFollowers."
+  },
+  "profileFollowingLabel": "Siguiendo",
+  "@profileFollowingLabel": {
+    "description": "Localized message for profileFollowingLabel."
+  },
+  "profilePrayers": "Oraciones",
+  "@profilePrayers": {
+    "description": "Localized message for profilePrayers."
+  },
+  "profilePrayersReceived": "Oraciones recibidas",
+  "@profilePrayersReceived": {
+    "description": "Localized message for profilePrayersReceived."
+  },
+  "profileCopyProfileLink": "Copiar enlace del perfil",
+  "@profileCopyProfileLink": {
+    "description": "Localized message for profileCopyProfileLink."
+  },
+  "profileReport": "Denunciar",
+  "@profileReport": {
+    "description": "Localized message for profileReport."
+  },
+  "profileSettings": "Configuración",
+  "@profileSettings": {
+    "description": "Localized message for profileSettings."
+  },
+  "profileVerification": "Verificación",
+  "@profileVerification": {
+    "description": "Localized message for profileVerification."
+  },
+  "profileLogout": "Cerrar sesión",
+  "@profileLogout": {
+    "description": "Localized message for profileLogout."
+  },
+  "profileFollowToggleSignIn": "Iniciar sesión para continuar",
+  "@profileFollowToggleSignIn": {
+    "description": "Localized message for profileFollowToggleSignIn."
+  },
+  "profileSnackFollowing": "Siguiendo",
+  "@profileSnackFollowing": {
+    "description": "Localized message for profileSnackFollowing."
+  },
+  "profileSnackUnfollowed": "Dejaste de seguir",
+  "@profileSnackUnfollowed": {
+    "description": "Localized message for profileSnackUnfollowed."
+  },
+  "followersSearchHint": "Buscar",
+  "@followersSearchHint": {
+    "description": "Localized message for followersSearchHint."
+  },
+  "followersEmptyFollowers": "Aún no hay seguidores.",
+  "@followersEmptyFollowers": {
+    "description": "Localized message for followersEmptyFollowers."
+  },
+  "followersEmptyFollowing": "Aún no sigues a nadie.",
+  "@followersEmptyFollowing": {
+    "description": "Localized message for followersEmptyFollowing."
+  },
+  "postActionReport": "Denunciar",
+  "@postActionReport": {
+    "description": "Localized message for postActionReport."
+  },
+  "postActionCopyLink": "Copiar enlace",
+  "@postActionCopyLink": {
+    "description": "Localized message for postActionCopyLink."
+  },
+  "postActionHidePost": "Ocultar publicación",
+  "@postActionHidePost": {
+    "description": "Localized message for postActionHidePost."
+  },
+  "postActionUnfollow": "Dejar de seguir",
+  "@postActionUnfollow": {
+    "description": "Localized message for postActionUnfollow."
+  },
+  "postActionEdit": "Editar",
+  "@postActionEdit": {
+    "description": "Localized message for postActionEdit."
+  },
+  "postActionDelete": "Eliminar",
+  "@postActionDelete": {
+    "description": "Localized message for postActionDelete."
+  },
+  "shareSheetExternalShare": "Compartir externamente",
+  "@shareSheetExternalShare": {
+    "description": "Localized message for shareSheetExternalShare."
+  },
+  "shareSheetSendDirect": "Enviar por Direct",
+  "@shareSheetSendDirect": {
+    "description": "Localized message for shareSheetSendDirect."
+  },
+  "shareSheetSharedPost": "Compartió una publicación",
+  "@shareSheetSharedPost": {
+    "description": "Localized message for shareSheetSharedPost."
+  },
+  "postReportSubmit": "Enviar denuncia",
+  "@postReportSubmit": {
+    "description": "Localized message for postReportSubmit."
+  },
+  "postReportExplainHint": "Explica…",
+  "@postReportExplainHint": {
+    "description": "Localized message for postReportExplainHint."
+  },
+  "postReportReasonSpam": "Spam",
+  "@postReportReasonSpam": {
+    "description": "Localized message for postReportReasonSpam."
+  },
+  "postReportReasonInappropriate": "Contenido inapropiado",
+  "@postReportReasonInappropriate": {
+    "description": "Localized message for postReportReasonInappropriate."
+  },
+  "postReportReasonHarassment": "Acoso / amenazas",
+  "@postReportReasonHarassment": {
+    "description": "Localized message for postReportReasonHarassment."
+  },
+  "postReportReasonMisleading": "Falso / engañoso",
+  "@postReportReasonMisleading": {
+    "description": "Localized message for postReportReasonMisleading."
+  },
+  "postReportReasonOther": "Otro",
+  "@postReportReasonOther": {
+    "description": "Localized message for postReportReasonOther."
+  },
+  "postSnackReportSent": "Denuncia enviada",
+  "@postSnackReportSent": {
+    "description": "Localized message for postSnackReportSent."
+  },
+  "postSnackPostHidden": "Publicación oculta",
+  "@postSnackPostHidden": {
+    "description": "Localized message for postSnackPostHidden."
+  },
+  "postSnackPostUnhidden": "Publicación reexhibida",
+  "@postSnackPostUnhidden": {
+    "description": "Localized message for postSnackPostUnhidden."
+  },
+  "postSnackUndo": "Deshacer",
+  "@postSnackUndo": {
+    "description": "Localized message for postSnackUndo."
+  },
+  "postDeleteConfirmTitle": "¿Eliminar publicación?",
+  "@postDeleteConfirmTitle": {
+    "description": "Localized message for postDeleteConfirmTitle."
+  },
+  "postDeleteConfirmMessage": "Esta acción no se puede deshacer.",
+  "@postDeleteConfirmMessage": {
+    "description": "Localized message for postDeleteConfirmMessage."
+  },
+  "postDeleteConfirmLabel": "Eliminar",
+  "@postDeleteConfirmLabel": {
+    "description": "Localized message for postDeleteConfirmLabel."
+  },
+  "postSnackPostDeleted": "Publicación eliminada",
+  "@postSnackPostDeleted": {
+    "description": "Localized message for postSnackPostDeleted."
+  },
+  "postSignInToComment": "Inicia sesión para comentar",
+  "@postSignInToComment": {
+    "description": "Localized message for postSignInToComment."
+  },
+  "postSaveFailedCheckSupabase": "No se pudo guardar. Verifica la conexión de Supabase.",
+  "@postSaveFailedCheckSupabase": {
+    "description": "Localized message for postSaveFailedCheckSupabase."
+  },
+  "postSaveFailedWithMessage": "No se pudo guardar: {message}",
+  "@postSaveFailedWithMessage": {
+    "placeholders": {
+      "message": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for postSaveFailedWithMessage."
+  },
+  "postPublishFailedCheckSupabase": "No se pudo publicar. Verifica la conexión de Supabase.",
+  "@postPublishFailedCheckSupabase": {
+    "description": "Localized message for postPublishFailedCheckSupabase."
+  },
+  "postPublishFailedWithMessage": "No se pudo publicar: {message}",
+  "@postPublishFailedWithMessage": {
+    "placeholders": {
+      "message": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for postPublishFailedWithMessage."
+  },
+  "ctaSignInToCreate": "Inicia sesión para crear",
+  "@ctaSignInToCreate": {
+    "description": "Localized message for ctaSignInToCreate."
+  },
+  "alertsTitle": "Alertas",
+  "@alertsTitle": {
+    "description": "Localized message for alertsTitle."
+  },
+  "alertsTitleWithLocation": "Alertas • {location}",
+  "@alertsTitleWithLocation": {
+    "placeholders": {
+      "location": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for alertsTitleWithLocation."
+  },
+  "alertsTitleWithLocationAndCommunity": "Alertas • {location} • {community}",
+  "@alertsTitleWithLocationAndCommunity": {
+    "placeholders": {
+      "location": {
+        "type": "String"
+      },
+      "community": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for alertsTitleWithLocationAndCommunity."
+  },
+  "alertsCreateAlert": "Crear alerta",
+  "@alertsCreateAlert": {
+    "description": "Localized message for alertsCreateAlert."
+  },
+  "alertsNoAlertsInRegion": "Aún no hay alertas en esta región.",
+  "@alertsNoAlertsInRegion": {
+    "description": "Localized message for alertsNoAlertsInRegion."
+  },
+  "regionIdentifyFailed": "No se pudo identificar la región.",
+  "@regionIdentifyFailed": {
+    "description": "Localized message for regionIdentifyFailed."
+  },
+  "eventLoadFailed": "No se pudo cargar este evento.",
+  "@eventLoadFailed": {
+    "description": "Localized message for eventLoadFailed."
+  },
+  "paymentStartFailed": "No se pudo iniciar el pago",
+  "@paymentStartFailed": {
+    "description": "Localized message for paymentStartFailed."
+  },
+  "prayerSessionStartFailed": "No se pudo iniciar la sesión de oración",
+  "@prayerSessionStartFailed": {
+    "description": "Localized message for prayerSessionStartFailed."
+  },
+  "likeRegisterFailed": "No se pudo registrar el me gusta.",
+  "@likeRegisterFailed": {
+    "description": "Localized message for likeRegisterFailed."
+  },
+  "prayerRegisterFailed": "No se pudo registrar la oración.",
+  "@prayerRegisterFailed": {
+    "description": "Localized message for prayerRegisterFailed."
+  },
+  "participationUpdateFailed": "No se pudo actualizar tu participación.",
+  "@participationUpdateFailed": {
+    "description": "Localized message for participationUpdateFailed."
+  },
+  "prayerSessionStarting": "Iniciando sesión…",
+  "@prayerSessionStarting": {
+    "description": "Localized message for prayerSessionStarting."
+  },
+  "prayerTitle": "Orar",
+  "@prayerTitle": {
+    "description": "Localized message for prayerTitle."
+  },
+  "postPrayAction": "Oré",
+  "@postPrayAction": {
+    "description": "Localized message for postPrayAction."
+  },
+  "postLike": "Me gusta",
+  "@postLike": {
+    "description": "Localized message for postLike."
+  },
+  "postComment": "Comentar",
+  "@postComment": {
+    "description": "Localized message for postComment."
+  },
+  "postShare": "Compartir",
+  "@postShare": {
+    "description": "Localized message for postShare."
+  },
+  "postMore": "Más",
+  "@postMore": {
+    "description": "Localized message for postMore."
+  },
+  "commentAddLabel": "Añadir un comentario",
+  "@commentAddLabel": {
+    "description": "Localized message for commentAddLabel."
+  },
+  "commentNoCommentsYet": "Aún no hay comentarios.",
+  "@commentNoCommentsYet": {
+    "description": "Localized message for commentNoCommentsYet."
+  },
+  "commentBeFirst": "Sé el primero en comentar.",
+  "@commentBeFirst": {
+    "description": "Localized message for commentBeFirst."
+  },
+  "prayerStart": "Iniciar oración",
+  "@prayerStart": {
+    "description": "Localized message for prayerStart."
+  },
+  "prayerRegisteredSnack": "Oración registrada",
+  "@prayerRegisteredSnack": {
+    "description": "Localized message for prayerRegisteredSnack."
+  },
+  "prayerRequestActionOpen": "Abrir pedido",
+  "@prayerRequestActionOpen": {
+    "description": "Localized message for prayerRequestActionOpen."
+  },
+  "prayerRequestActionPray": "Orar",
+  "@prayerRequestActionPray": {
+    "description": "Localized message for prayerRequestActionPray."
+  },
+  "prayerRequestCopyId": "Copiar ID del pedido",
+  "@prayerRequestCopyId": {
+    "description": "Localized message for prayerRequestCopyId."
+  },
+  "reportsTitle": "Denuncias",
+  "@reportsTitle": {
+    "description": "Localized message for reportsTitle."
+  },
+  "reportsViewCount": "Ver denuncias ({count})",
+  "@reportsViewCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    },
+    "description": "Localized message for reportsViewCount."
+  },
+  "reportsNoReason": "Sin motivo",
+  "@reportsNoReason": {
+    "description": "Localized message for reportsNoReason."
+  },
+  "reportsStatusOpen": "abierta",
+  "@reportsStatusOpen": {
+    "description": "Localized message for reportsStatusOpen."
+  },
+  "reportsStatusReviewing": "en revisión",
+  "@reportsStatusReviewing": {
+    "description": "Localized message for reportsStatusReviewing."
+  },
+  "reportsStatusResolved": "resuelta",
+  "@reportsStatusResolved": {
+    "description": "Localized message for reportsStatusResolved."
+  },
+  "reportsStatusDismissed": "descartada",
+  "@reportsStatusDismissed": {
+    "description": "Localized message for reportsStatusDismissed."
+  },
+  "reportsStatus": "Estado: {label}",
+  "@reportsStatus": {
+    "placeholders": {
+      "label": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for reportsStatus."
+  },
+  "commentDeleteConfirmTitle": "¿Eliminar comentario?",
+  "@commentDeleteConfirmTitle": {
+    "description": "Localized message for commentDeleteConfirmTitle."
+  },
+  "commentDeletedSnack": "Comentario eliminado",
+  "@commentDeletedSnack": {
+    "description": "Localized message for commentDeletedSnack."
+  },
+  "messageStatusSending": "Enviando",
+  "@messageStatusSending": {
+    "description": "Localized message for messageStatusSending."
+  },
+  "messageStatusFailed": "Falló",
+  "@messageStatusFailed": {
+    "description": "Localized message for messageStatusFailed."
+  },
+  "chatDetailsAction": "Detalles",
+  "@chatDetailsAction": {
+    "description": "Localized message for chatDetailsAction."
+  },
+  "chatDetailsUiPlaceholder": "Detalles (UI)",
+  "@chatDetailsUiPlaceholder": {
+    "description": "Localized message for chatDetailsUiPlaceholder."
+  },
+  "chatAttachmentImageAttached": "Imagen adjunta",
+  "@chatAttachmentImageAttached": {
+    "description": "Localized message for chatAttachmentImageAttached."
+  },
+  "chatAttachmentRemove": "Quitar adjunto",
+  "@chatAttachmentRemove": {
+    "description": "Localized message for chatAttachmentRemove."
+  },
+  "chatAttachmentAddPhoto": "Adjuntar foto",
+  "@chatAttachmentAddPhoto": {
+    "description": "Localized message for chatAttachmentAddPhoto."
+  },
+  "chatComposerHint": "Mensaje…",
+  "@chatComposerHint": {
+    "description": "Localized message for chatComposerHint."
+  },
+  "chatSendMessage": "Enviar mensaje",
+  "@chatSendMessage": {
+    "description": "Localized message for chatSendMessage."
+  },
+  "chatOpenLinkUi": "Abrir enlace (UI): {url}",
+  "@chatOpenLinkUi": {
+    "placeholders": {
+      "url": {}
+    },
+    "description": "Localized message for chatOpenLinkUi."
+  },
+  "uploadSupabaseOnly": "Subida disponible solo con Supabase configurado",
+  "@uploadSupabaseOnly": {
+    "description": "Localized message for uploadSupabaseOnly."
+  },
+  "uploadFailedWithCode": "Falló la subida{code}: {message}",
+  "@uploadFailedWithCode": {
+    "placeholders": {
+      "code": {
+        "type": "String"
+      },
+      "message": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for uploadFailedWithCode."
+  },
+  "mediaSelectedReadFailed": "No se pudo leer el contenido seleccionado",
+  "@mediaSelectedReadFailed": {
+    "description": "Localized message for mediaSelectedReadFailed."
+  },
+  "mediaSendFailed": "No se pudo subir el contenido",
+  "@mediaSendFailed": {
+    "description": "Localized message for mediaSendFailed."
+  },
+  "photoUpdated": "Foto actualizada",
+  "@photoUpdated": {
+    "description": "Localized message for photoUpdated."
+  },
+  "composerFileExtensionUnsupported": "Extensión de archivo no compatible",
+  "@composerFileExtensionUnsupported": {
+    "description": "Localized message for composerFileExtensionUnsupported."
+  },
+  "composerImageTooLargeMax5mb": "Imagen demasiado grande (máx. 5MB)",
+  "@composerImageTooLargeMax5mb": {
+    "description": "Localized message for composerImageTooLargeMax5mb."
+  },
+  "composerVideoTooLargeMax30mb": "Vídeo demasiado grande (máx. 30MB)",
+  "@composerVideoTooLargeMax30mb": {
+    "description": "Localized message for composerVideoTooLargeMax30mb."
+  },
+  "composerUnsupportedImageFormat": "Formato de imagen no compatible. Usa JPG, PNG o WEBP.",
+  "@composerUnsupportedImageFormat": {
+    "description": "Localized message for composerUnsupportedImageFormat."
+  },
+  "composerUnsupportedVideoFormat": "Formato de vídeo no compatible. Usa MP4, MOV, WEBM o M4V.",
+  "@composerUnsupportedVideoFormat": {
+    "description": "Localized message for composerUnsupportedVideoFormat."
+  },
+  "imageReadFailed": "No se pudo leer la imagen",
+  "@imageReadFailed": {
+    "description": "Localized message for imageReadFailed."
+  },
+  "photoTooLargeMax10mb": "Foto demasiado grande (máx. 10MB)",
+  "@photoTooLargeMax10mb": {
+    "description": "Localized message for photoTooLargeMax10mb."
+  },
+  "imageInvalid": "Imagen no válida",
+  "@imageInvalid": {
+    "description": "Localized message for imageInvalid."
+  },
+  "postPrayedByOnePerson": "Orado por 1 persona",
+  "@postPrayedByOnePerson": {
+    "description": "Localized message for postPrayedByOnePerson."
+  },
+  "postPrayedByName": "Orado por {name}",
+  "@postPrayedByName": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for postPrayedByName."
+  },
+  "postPrayedByTwoPeople": "Orado por 2 personas",
+  "@postPrayedByTwoPeople": {
+    "description": "Localized message for postPrayedByTwoPeople."
+  },
+  "postPrayedByNameAndOneOther": "Orado por {name} y otra persona",
+  "@postPrayedByNameAndOneOther": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for postPrayedByNameAndOneOther."
+  },
+  "postPrayedByNameAndOthers": "Orado por {name} y otras personas",
+  "@postPrayedByNameAndOthers": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    },
+    "description": "Localized message for postPrayedByNameAndOthers."
+  },
+  "postPrayedByManyPeople": "Orado por {count} personas",
+  "@postPrayedByManyPeople": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    },
+    "description": "Localized message for postPrayedByManyPeople."
+  },
+  "commonCreate": "Crear",
+  "commonWeekdaySunday": "Domingo",
+  "commonWeekdayMonday": "Lunes",
+  "commonWeekdayTuesday": "Martes",
+  "commonWeekdayWednesday": "Miércoles",
+  "commonWeekdayThursday": "Jueves",
+  "commonWeekdayFriday": "Viernes",
+  "commonWeekdaySaturday": "Sábado",
+  "commonSomethingWentWrongWithReason": "Algo salió mal: {reason}",
+  "@commonSomethingWentWrongWithReason": {
+    "placeholders": {
+      "reason": {
+        "type": "String"
+      }
+    }
+  },
+  "commonDescription": "Descripción",
+  "onboardingSkip": "Omitir",
+  "onboardingPrayerRegionsTitle": "Ora por personas y regiones",
+  "onboardingRequestOrTestifyTitle": "Pide oración o comparte un testimonio",
+  "onboardingMapWorldTitle": "Conéctate en el mapa del mundo",
+  "onboardingNext": "Siguiente",
+  "onboardingStart": "Comenzar",
+  "reportEntityTypePost": "Post",
+  "reportEntityTypeStory": "Story",
+  "reportEntityTypeAlert": "Alerta",
+  "reportEntityTypeComment": "Comentario",
+  "reportEntityTypeUser": "Usuario",
+  "reportsEmpty": "Ningún reporte",
+  "moderationMarkAs": "Marcar como \"{status}\"",
+  "@moderationMarkAs": {
+    "placeholders": {
+      "status": {
+        "type": "String"
+      }
+    }
+  },
+  "moderationRemoveContent": "Eliminar contenido",
+  "moderationWarnUser": "Advertir usuario",
+  "moderationSuspendDays": "Suspender {days} días",
+  "@moderationSuspendDays": {
+    "placeholders": {
+      "days": {
+        "type": "int"
+      }
+    }
+  },
+  "moderationCopyReportId": "Copiar ID del reporte",
+  "moderationReportMarkedReviewing": "Reporte marcado como en revisión",
+  "moderationReportResolved": "Reporte resuelto",
+  "moderationReportDismissed": "Reporte descartado",
+  "moderationRemoveContentConfirmTitle": "¿Eliminar contenido?",
+  "moderationContentRemoved": "Contenido eliminado",
+  "moderationWarningRegistered": "Advertencia registrada",
+  "moderationSuspendUserConfirmTitle": "¿Suspender usuario?",
+  "moderationSuspendConfirmLabel": "Suspender",
+  "moderationSuspensionRegistered": "Suspensión registrada",
+  "moderationTarget": "Objetivo: {target}",
+  "@moderationTarget": {
+    "placeholders": {
+      "target": {
+        "type": "String"
+      }
+    }
+  },
+  "moderationReporter": "Reportero: {reporter}",
+  "@moderationReporter": {
+    "placeholders": {
+      "reporter": {
+        "type": "String"
+      }
+    }
+  },
+  "moderationCommentNotFoundLocally": "Comentario no encontrado localmente",
+  "moderationStoryUiPlaceholder": "Story (UI)",
+  "verificationBadgeTitle": "Sello verificado",
+  "verificationBadgeDescription": "Destaca tu perfil con un sello de verificación.",
+  "verificationBenefitCredibility": "Más credibilidad",
+  "verificationBenefitHighlight": "Más destaque en los resultados",
+  "verificationBenefitProtection": "Protección contra perfiles falsos",
+  "verificationPlansTitle": "Planes",
+  "verificationSubjectPerson": "Persona",
+  "verificationSubjectChurch": "Iglesia",
+  "verificationBillingMonthly": "Mensual",
+  "verificationBillingYearly": "Anual",
+  "verificationPriceMonthly": "R$ 14,90",
+  "verificationPriceYearly": "R$ 149,90",
+  "verificationSubscribe": "Suscribirse",
+  "verificationRestorePurchase": "Restaurar compra",
+  "verificationRestorePhase2": "Restaurar compra (fase 2)",
+  "verificationTerms": "Términos",
+  "verificationSubscriptionActive": "Suscripción activa",
+  "campaignsTitle": "Campañas — {location}",
+  "@campaignsTitle": {
+    "placeholders": {
+      "location": {
+        "type": "String"
+      }
+    }
+  },
+  "campaignSortNearby": "Cerca",
+  "campaignSortPopular": "Populares",
+  "campaignEmptyHere": "Todavía no hay campañas aquí.",
+  "campaignCreateTitle": "Crear campaña",
+  "campaignUnavailable": "Esta campaña no está disponible.",
+  "campaignTitle": "Campaña",
+  "campaignInvalidAmount": "Ingresa un valor válido",
+  "campaignPixGeneratedDemo": "Pago PIX generado (demo)",
+  "campaignDonationRecorded": "Donación registrada",
+  "campaignUpdatePublished": "Actualización publicada",
+  "campaignGoalAmount": "meta {amount}",
+  "@campaignGoalAmount": {
+    "placeholders": {
+      "amount": {
+        "type": "String"
+      }
+    }
+  },
+  "campaignRaisedAmount": "{amount} recaudados",
+  "@campaignRaisedAmount": {
+    "placeholders": {
+      "amount": {
+        "type": "String"
+      }
+    }
+  },
+  "campaignDeadlineAt": "Plazo: {time}",
+  "@campaignDeadlineAt": {
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "mapCampaignsTitle": "Campañas",
+  "mapAlertsTitle": "Alertas",
+  "mapCampaignsActiveCount": "{count} activas",
+  "@mapCampaignsActiveCount": {
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
+  "mapAlertsActiveCount": "{count} activos",
+  "@mapAlertsActiveCount": {
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
+  "mapActiveTitle": "Atalaya activa",
+  "mapMomentsCount": "{count} momentos",
+  "@mapMomentsCount": {
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
+  "mapRequestsCount": "{count} peticiones",
+  "@mapRequestsCount": {
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
+  "mapAlertsCount": "{count} alertas",
+  "@mapAlertsCount": {
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
+  "mapNewsCount": "{count} novedades",
+  "@mapNewsCount": {
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
+  "campaignDonationsCount": "{count} donaciones",
+  "@campaignDonationsCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "campaignDonateTitle": "Donar",
+  "paymentMethodPix": "PIX",
+  "paymentMethodCard": "Tarjeta",
+  "campaignAmountLabel": "Valor",
+  "campaignConfirmDonation": "Confirmar donación",
+  "campaignSignInToDonate": "Inicia sesión para donar",
+  "campaignPixPendingInfo": "En PIX, el estado comienza como pendiente y luego se confirma (demo).",
+  "campaignUpdatesTitle": "Actualizaciones",
+  "campaignOnlyCreatorPublishes": "Solo el creador publica",
+  "campaignWriteUpdate": "Escribe una actualización",
+  "campaignNoUpdatesYet": "Todavía no hay actualizaciones.",
+  "campaignCommentsTitle": "Comentarios ({count})",
+  "@campaignCommentsTitle": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "campaignLocationWorld": "Mundo",
+  "campaignLocationBrazil": "Brasil",
+  "campaignLocationGoiania": "Goiânia, GO",
+  "campaignLocationSaoPaulo": "São Paulo, SP",
+  "campaignChooseLocation": "Elegir ubicación",
+  "campaignEnterTitle": "Ingresa un título",
+  "campaignEnterDescription": "Ingresa una descripción",
+  "campaignEnterValidGoal": "Ingresa una meta válida",
+  "campaignCreated": "Campaña creada",
+  "campaignFieldTitle": "Título",
+  "campaignGoalLabel": "Meta (R$)",
+  "campaignCategoryFieldLabel": "Categoría",
+  "campaignSetDeadlineOptional": "Definir plazo (opcional)",
+  "campaignImageUrlLabel": "Imagen (URL)",
+  "campaignDonationsStoredInfo": "Las donaciones por PIX y tarjeta quedan registradas en \"donations\".",
+  "campaignPublishCta": "Publicar campaña",
+  "prayerChallengesTitle": "Desafíos de oración",
+  "prayerChallengesFilterActive": "Activos",
+  "prayerChallengesFilterAll": "Todos",
+  "prayerChallengesEmptyActive": "No hay desafíos activos ahora.",
+  "prayerChallengesEmptyAll": "No se encontraron desafíos.",
+  "prayerChallengeStartsIn": "Comienza en {duration}",
+  "@prayerChallengeStartsIn": {
+    "placeholders": {
+      "duration": {
+        "type": "String"
+      }
+    }
+  },
+  "prayerChallengeEnded": "Finalizado",
+  "prayerChallengeEndsIn": "Termina en {duration}",
+  "@prayerChallengeEndsIn": {
+    "placeholders": {
+      "duration": {
+        "type": "String"
+      }
+    }
+  },
+  "prayerChallengeNoDescription": "Sin descripción",
+  "prayerChallengeParticipating": "Participando",
+  "prayerChallengeParticipantsCount": "{count} participantes",
+  "@prayerChallengeParticipantsCount": {
+    "placeholders": {
+      "count": {
+        "type": "String"
+      }
+    }
+  },
+  "prayerChallengeRegionUnavailable": "La región del desafío no está disponible",
+  "prayerChallengeRegionFallback": "Región",
+  "prayerChallengeShareText": "Estoy participando en el desafío de oración: \"{title}\".",
+  "@prayerChallengeShareText": {
+    "placeholders": {
+      "title": {
+        "type": "String"
+      }
+    }
+  },
+  "prayerChallengeShareCopied": "Texto copiado para compartir",
+  "prayerChallengeTitle": "Desafío",
+  "prayerChallengeNotFound": "Desafío no encontrado.",
+  "prayerChallengeShare": "Compartir",
+  "prayerChallengeLeaveAction": "Salir del desafío",
+  "prayerChallengeJoinAction": "Participar en el desafío",
+  "prayerChallengeProgressTitle": "Progreso",
+  "prayerChallengeParticipantsProgress": "Participantes: {current}{goal}",
+  "@prayerChallengeParticipantsProgress": {
+    "placeholders": {
+      "current": {
+        "type": "String"
+      },
+      "goal": {
+        "type": "String"
+      }
+    }
+  },
+  "prayerChallengeTimeProgress": "Tiempo: {current}{goal}",
+  "@prayerChallengeTimeProgress": {
+    "placeholders": {
+      "current": {
+        "type": "String"
+      },
+      "goal": {
+        "type": "String"
+      }
+    }
+  },
+  "prayerChallengeTopIntercessors": "Top intercesores",
+  "prayerChallengeRankSessions": "{duration} • {sessions} sesiones",
+  "@prayerChallengeRankSessions": {
+    "placeholders": {
+      "duration": {
+        "type": "String"
+      },
+      "sessions": {
+        "type": "String"
+      }
+    }
+  },
+  "prayerChallengeTopCommunities": "Top comunidades",
+  "prayerChallengeTopCountries": "Top países"
 }

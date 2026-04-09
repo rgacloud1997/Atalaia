@@ -19,9 +19,11 @@ import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
+import 'package:youtube_player_flutter/youtube_player_flutter.dart' as ypf;
 
 import 'design_tokens.dart';
 import 'l10n/app_localizations.dart';
+import 'youtube_embed.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -48,10 +50,26 @@ bool _supportsLocalNotifications() {
   return defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS;
 }
 
-String _profileDisplayLabel(ProfileModel p) {
-  final name = _displayNameForProfile(p).trim();
+String _authErrorText(BuildContext context, String? codeOrMessage, {String? fallback}) {
+  final l10n = t(context);
+  final v = codeOrMessage?.trim();
+  if (v == null || v.isEmpty) return fallback ?? l10n.authErrorInvalidCredentials;
+  if (v == DemoRepository._authErrNoConnection) return l10n.commonNoConnection;
+  if (v == DemoRepository._authErrInvalidCredentials) return l10n.authErrorInvalidCredentials;
+  if (v == DemoRepository._authErrLoginFailed) return l10n.authErrorLoginFailed;
+  if (v == DemoRepository._authErrCreateAccountFailed) return l10n.authErrorCreateAccountFailed;
+  if (v == DemoRepository._authErrAccountCreatedNoSession) return l10n.authErrorAccountCreatedNoSession;
+  if (v == DemoRepository._authErrRateLimit) return l10n.authErrorRateLimit;
+  if (v == DemoRepository._authErrEmailAlreadyRegistered) return l10n.authErrorEmailAlreadyRegistered;
+  if (v == DemoRepository._authErrUsernameUnavailable) return l10n.authErrorUsernameUnavailable;
+  if (v == DemoRepository._authErrSupabaseNotConfigured) return l10n.authSupabaseNotConfigured;
+  return v;
+}
+
+String _profileDisplayLabel(ProfileModel p, {String userFallback = ''}) {
+  final name = _displayNameForProfile(p, userFallback: userFallback).trim();
   final username = _usernameForProfile(p, userId: p.userId).trim();
-  if (name.isEmpty && username.isEmpty) return 'Usuário';
+  if (name.isEmpty && username.isEmpty) return userFallback;
   if (username.isEmpty) return name;
   if (name.isEmpty) return '@$username';
   if (name == username || name == '@$username') return name;
@@ -135,16 +153,16 @@ final class _LocalNotifications {
     return allowed;
   }
 
-  NotificationDetails reminderDetails() {
-    const android = AndroidNotificationDetails(
+  NotificationDetails reminderDetails(AppLocalizations l10n) {
+    final android = AndroidNotificationDetails(
       'prayer_run_reminders',
-      'Escalas',
-      channelDescription: 'Lembretes de escalas',
+      l10n.notificationChannelPrayerRunsName,
+      channelDescription: l10n.notificationChannelPrayerRunsDescription,
       importance: Importance.max,
       priority: Priority.high,
     );
     const ios = DarwinNotificationDetails(presentAlert: true, presentSound: true);
-    return const NotificationDetails(android: android, iOS: ios);
+    return NotificationDetails(android: android, iOS: ios);
   }
 }
 
@@ -272,7 +290,7 @@ Future<void> showSupabaseSetupDialog(BuildContext context) async {
     context: context,
     builder: (context) {
       return AlertDialog(
-        title: const Text('Configurar Supabase'),
+        title: Text(t(context).supabaseSetupTitle),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -289,15 +307,15 @@ Future<void> showSupabaseSetupDialog(BuildContext context) async {
         ),
         actions: [
           AtalaiaTextButton(
-            label: 'Cancelar',
+            label: t(context).commonCancel,
             onPressed: () => Navigator.of(context).pop('cancel'),
           ),
           AtalaiaTextButton(
-            label: 'Resetar',
+            label: t(context).commonReset,
             onPressed: () => Navigator.of(context).pop('reset'),
           ),
           PrimaryButton(
-            label: 'Salvar',
+            label: t(context).commonSave,
             onPressed: () => Navigator.of(context).pop('save'),
           ),
         ],
@@ -318,7 +336,7 @@ Future<void> showSupabaseSetupDialog(BuildContext context) async {
     if (!context.mounted) return;
     showAtalaiaSnackBar(
       context,
-      'Configuração local do Supabase resetada. Reinicie o app.',
+      t(context).supabaseSetupResetLocalConfigSnack,
       kind: AtalaiaSnackKind.warning,
     );
     return;
@@ -327,7 +345,7 @@ Future<void> showSupabaseSetupDialog(BuildContext context) async {
   if (action != 'save') return;
   if (url.isEmpty || key.isEmpty) {
     if (!context.mounted) return;
-    showAtalaiaSnackBar(context, 'Informe URL e ANON KEY', kind: AtalaiaSnackKind.warning);
+    showAtalaiaSnackBar(context, t(context).supabaseSetupMissingUrlKeySnack, kind: AtalaiaSnackKind.warning);
     return;
   }
 
@@ -336,7 +354,7 @@ Future<void> showSupabaseSetupDialog(BuildContext context) async {
   await _initSupabase(_SupabaseConfig(url: url, anonKey: key));
   _supabaseConfigVersion.value++;
   if (!context.mounted) return;
-  showAtalaiaSnackBar(context, 'Supabase configurado', kind: AtalaiaSnackKind.success);
+  showAtalaiaSnackBar(context, t(context).supabaseSetupConfiguredSnack, kind: AtalaiaSnackKind.success);
 }
 
 AppLocalizations t(BuildContext context) => AppLocalizations.of(context)!;
@@ -414,11 +432,11 @@ String _formatRelativeTimeForUser(BuildContext context, DateTime dt) {
   final local = _toUserTime(dt, prefs.timezoneName);
   final now = _toUserTime(DateTime.now(), prefs.timezoneName);
   final diff = now.difference(local);
-  if (diff.inSeconds.abs() <= 10) return 'agora';
+  if (diff.inSeconds.abs() <= 10) return t(context).timeNow;
   if (diff.isNegative) return _formatTimestamp(local);
-  if (diff.inMinutes < 60) return 'há ${diff.inMinutes}min';
-  if (diff.inHours < 24) return 'há ${diff.inHours}h';
-  if (diff.inDays < 7) return 'há ${diff.inDays}d';
+  if (diff.inMinutes < 60) return t(context).timeAgoMinutes(diff.inMinutes);
+  if (diff.inHours < 24) return t(context).timeAgoHours(diff.inHours);
+  if (diff.inDays < 7) return t(context).timeAgoDays(diff.inDays);
   return _formatTimestamp(local);
 }
 
@@ -596,25 +614,27 @@ String _paymentMethodToDb(PaymentMethod value) {
   };
 }
 
-String _campaignCategoryLabel(CampaignCategory value) {
+String _campaignCategoryLabel(BuildContext context, CampaignCategory value) {
+  final l10n = t(context);
   return switch (value) {
-    CampaignCategory.medical => 'Saúde',
-    CampaignCategory.emergency => 'Emergência',
-    CampaignCategory.social => 'Ação social',
-    CampaignCategory.church => 'Igreja',
-    CampaignCategory.mission => 'Missão',
-    CampaignCategory.education => 'Educação',
-    CampaignCategory.disaster => 'Desastre',
-    CampaignCategory.communityProject => 'Projeto comunitário',
+    CampaignCategory.medical => l10n.campaignCategoryMedical,
+    CampaignCategory.emergency => l10n.campaignCategoryEmergency,
+    CampaignCategory.social => l10n.campaignCategorySocial,
+    CampaignCategory.church => l10n.campaignCategoryChurch,
+    CampaignCategory.mission => l10n.campaignCategoryMission,
+    CampaignCategory.education => l10n.campaignCategoryEducation,
+    CampaignCategory.disaster => l10n.campaignCategoryDisaster,
+    CampaignCategory.communityProject => l10n.campaignCategoryCommunityProject,
   };
 }
 
-String _campaignStatusLabel(CampaignStatus value) {
+String _campaignStatusLabel(BuildContext context, CampaignStatus value) {
+  final l10n = t(context);
   return switch (value) {
-    CampaignStatus.draft => 'Rascunho',
-    CampaignStatus.active => 'Ativa',
-    CampaignStatus.closed => 'Encerrada',
-    CampaignStatus.cancelled => 'Cancelada',
+    CampaignStatus.draft => l10n.campaignStatusDraft,
+    CampaignStatus.active => l10n.campaignStatusActive,
+    CampaignStatus.closed => l10n.campaignStatusClosed,
+    CampaignStatus.cancelled => l10n.campaignStatusCancelled,
   };
 }
 
@@ -629,6 +649,16 @@ bool _looksLikeUuid(String? value) {
   final v = value?.trim();
   if (v == null || v.isEmpty) return false;
   return RegExp(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$').hasMatch(v);
+}
+
+String _uuidV4() {
+  final rnd = math.Random.secure();
+  final bytes = List<int>.generate(16, (_) => rnd.nextInt(256), growable: false);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  String hex(int b) => b.toRadixString(16).padLeft(2, '0');
+  final s = bytes.map(hex).join();
+  return '${s.substring(0, 8)}-${s.substring(8, 12)}-${s.substring(12, 16)}-${s.substring(16, 20)}-${s.substring(20)}';
 }
 
 bool _looksLikeEmail(String? value) {
@@ -651,12 +681,12 @@ String _normalizeDisplayUsername(String? value, {String fallback = ''}) {
   return v;
 }
 
-String _displayNameForProfile(ProfileModel profile) {
+String _displayNameForProfile(ProfileModel profile, {String userFallback = ''}) {
   final displayName = profile.name.trim();
   if (displayName.isNotEmpty && !_looksLikeEmail(displayName)) return displayName;
   final fullName = profile.fullName.trim();
   if (fullName.isNotEmpty && !_looksLikeEmail(fullName)) return fullName;
-  return 'Usuário';
+  return userFallback;
 }
 
 String _fallbackUsernameForUserId(String userId) {
@@ -679,9 +709,10 @@ String _usernameForProfile(ProfileModel? profile, {required String userId}) {
   DemoRepository repo,
   String userId, {
   bool legacyVerified = false,
+  String userFallback = '',
 }) {
   final profile = repo.profileForUserId(userId);
-  final displayName = profile == null ? 'Usuário' : _displayNameForProfile(profile);
+  final displayName = profile == null ? userFallback : _displayNameForProfile(profile, userFallback: userFallback);
   final username = _usernameForProfile(profile, userId: userId);
   final avatarName = displayName;
   final avatarUrl = profile?.avatarUrl;
@@ -1412,14 +1443,15 @@ VerificationType _parseVerificationType(String? raw) {
   };
 }
 
-String _verificationTypeLabel(VerificationType value) {
+String _verificationTypeLabel(BuildContext context, VerificationType value) {
+  final l10n = t(context);
   return switch (value) {
-    VerificationType.none => 'Sem verificação',
-    VerificationType.communityLeader => 'Líder comunitário',
-    VerificationType.church => 'Igreja',
-    VerificationType.organization => 'Organização',
-    VerificationType.moderator => 'Moderador',
-    VerificationType.admin => 'Admin',
+    VerificationType.none => l10n.verificationTypeNone,
+    VerificationType.communityLeader => l10n.verificationTypeCommunityLeader,
+    VerificationType.church => l10n.verificationTypeChurch,
+    VerificationType.organization => l10n.verificationTypeOrganization,
+    VerificationType.moderator => l10n.verificationTypeModerator,
+    VerificationType.admin => l10n.verificationTypeAdmin,
   };
 }
 
@@ -1665,16 +1697,17 @@ AlertCategory _parseAlertCategory(String? raw) {
   };
 }
 
-String _alertCategoryLabel(AlertCategory value) {
+String _alertCategoryLabel(BuildContext context, AlertCategory value) {
+  final l10n = t(context);
   return switch (value) {
-    AlertCategory.prayer => 'Oração',
-    AlertCategory.security => 'Segurança',
-    AlertCategory.health => 'Saúde',
-    AlertCategory.missingPerson => 'Pessoa desaparecida',
-    AlertCategory.socialNeed => 'Necessidade social',
-    AlertCategory.traffic => 'Trânsito',
-    AlertCategory.publicUtility => 'Serviço público',
-    AlertCategory.emergency => 'Emergência',
+    AlertCategory.prayer => l10n.alertCategoryPrayer,
+    AlertCategory.security => l10n.alertCategorySecurity,
+    AlertCategory.health => l10n.alertCategoryHealth,
+    AlertCategory.missingPerson => l10n.alertCategoryMissingPerson,
+    AlertCategory.socialNeed => l10n.alertCategorySocialNeed,
+    AlertCategory.traffic => l10n.alertCategoryTraffic,
+    AlertCategory.publicUtility => l10n.alertCategoryPublicUtility,
+    AlertCategory.emergency => l10n.alertCategoryEmergency,
   };
 }
 
@@ -1699,12 +1732,13 @@ AlertUrgency _parseAlertUrgency(String? raw) {
   };
 }
 
-String _alertUrgencyLabel(AlertUrgency value) {
+String _alertUrgencyLabel(BuildContext context, AlertUrgency value) {
+  final l10n = t(context);
   return switch (value) {
-    AlertUrgency.low => 'Baixa',
-    AlertUrgency.medium => 'Média',
-    AlertUrgency.high => 'Alta',
-    AlertUrgency.critical => 'Crítica',
+    AlertUrgency.low => l10n.alertUrgencyLow,
+    AlertUrgency.medium => l10n.alertUrgencyMedium,
+    AlertUrgency.high => l10n.alertUrgencyHigh,
+    AlertUrgency.critical => l10n.alertUrgencyCritical,
   };
 }
 
@@ -1899,6 +1933,17 @@ String _reportEntityTypeToDb(ReportEntityType value) {
   };
 }
 
+String _reportEntityTypeLabel(BuildContext context, ReportEntityType value) {
+  final l10n = t(context);
+  return switch (value) {
+    ReportEntityType.post => l10n.reportEntityTypePost,
+    ReportEntityType.story => l10n.reportEntityTypeStory,
+    ReportEntityType.alert => l10n.reportEntityTypeAlert,
+    ReportEntityType.comment => l10n.reportEntityTypeComment,
+    ReportEntityType.user => l10n.reportEntityTypeUser,
+  };
+}
+
 ReportEntityType _parseReportEntityType(String? raw) {
   final v = (raw ?? '').trim().toLowerCase();
   return switch (v) {
@@ -2054,6 +2099,88 @@ final class MessageModel {
       post: post ?? this.post,
     );
   }
+}
+
+enum PlaylistVisibility { private, unlisted, public }
+
+enum PlaylistItemType { audio, youtube, spotify }
+
+final class PlaylistItemModel {
+  const PlaylistItemModel({
+    required this.id,
+    required this.mediaItemId,
+    required this.title,
+    this.subtitle,
+    required this.type,
+    required this.mediaUrl,
+    this.thumbnailUrl,
+    this.durationSeconds,
+    this.position = 0,
+  });
+
+  final String id;
+  final String mediaItemId;
+  final String title;
+  final String? subtitle;
+  final PlaylistItemType type;
+  final String mediaUrl;
+  final String? thumbnailUrl;
+  final int? durationSeconds;
+  final int position;
+}
+
+final class MediaLibraryItemModel {
+  const MediaLibraryItemModel({
+    required this.id,
+    required this.ownerId,
+    required this.title,
+    this.subtitle,
+    required this.type,
+    required this.mediaUrl,
+    this.thumbnailUrl,
+    this.durationSeconds,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String ownerId;
+  final String title;
+  final String? subtitle;
+  final PlaylistItemType type;
+  final String mediaUrl;
+  final String? thumbnailUrl;
+  final int? durationSeconds;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+}
+
+final class PlaylistModel {
+  const PlaylistModel({
+    required this.id,
+    required this.ownerId,
+    required this.title,
+    this.description = '',
+    this.coverUrl,
+    this.visibility = PlaylistVisibility.public,
+    this.communityId,
+    this.items = const <PlaylistItemModel>[],
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  final String id;
+  final String ownerId;
+  final String title;
+  final String description;
+  final String? coverUrl;
+  final PlaylistVisibility visibility;
+  final String? communityId;
+  final List<PlaylistItemModel> items;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  bool get isPublic => visibility == PlaylistVisibility.public;
 }
 
 final class _EmailAuthAccount {
@@ -2755,6 +2882,7 @@ class DemoRepository extends ChangeNotifier {
     _joinedPrayerChallengeIds.addAll({'ch1'});
     _userBadgesByUserId[_u1.userId] = ['intercessor_global', 'intercessor_fiel'];
     _userBadgesLoadedFor.add(_u1.userId);
+    _seedPlaylistData();
   }
 
   final SupabaseClient? supabase;
@@ -2802,6 +2930,9 @@ class DemoRepository extends ChangeNotifier {
   final Map<String, List<MessageModel>> _communityMessagesById = <String, List<MessageModel>>{};
   final Set<String> _communityMessagesLoadedFor = <String>{};
   final Map<String, RealtimeChannel> _communityChatChannelsById = <String, RealtimeChannel>{};
+  final Map<String, RealtimeChannel> _directChatChannelsByThreadId = <String, RealtimeChannel>{};
+  final Set<String> _directMessagesLoadedFor = <String>{};
+  String? _lastDirectSendError;
   late List<NotificationModel> _notifications;
   late List<StoryModel> _stories;
   Timer? _storyExpiryTimer;
@@ -2830,6 +2961,9 @@ class DemoRepository extends ChangeNotifier {
   final Map<String, List<String>> _userBadgesByUserId = <String, List<String>>{};
   final Set<String> _userBadgesLoadedFor = <String>{};
   late List<ReportModel> _reports;
+  late List<PlaylistModel> _playlists;
+  late List<MediaLibraryItemModel> _mediaLibraryItems;
+  final Map<String, Set<String>> _savedPlaylistIdsByUserId = <String, Set<String>>{};
   final Set<String> _followedAlertIds = <String>{};
   String _alertsLoadedKey = '';
   String _lastFeedScope = 'world';
@@ -2846,6 +2980,8 @@ class DemoRepository extends ChangeNotifier {
   RealtimeChannel? _alertsRealtimeChannel;
   late Map<String, Set<String>> _followersByUserId;
   late Map<String, Set<String>> _followingByUserId;
+  final Set<String> _followToggleInFlight = <String>{};
+  String? _lastFollowToggleError;
   late Map<String, _EmailAuthAccount> _authByEmail;
   late Map<String, String> _churchIdByUserId;
   late Map<String, String> _verificationPlanByUserId;
@@ -2855,6 +2991,7 @@ class DemoRepository extends ChangeNotifier {
   var _profileSearchResults = const <ProfileModel>[];
   var _profileSearchQuery = '';
   var _notificationsLoadedForViewerId = '';
+  var _mediaLibraryLoadedForViewerId = '';
   var _viewerUserId = 'u1';
   var _viewerSessionKey = 'anon';
   var _adSessionToken = 0;
@@ -2889,12 +3026,16 @@ class DemoRepository extends ChangeNotifier {
   bool? _storiesHasCommunityIdColumn;
   Timer? _directPersistDebounce;
   String _directCacheLoadedForSessionKey = '';
+  Timer? _mediaLibraryPersistDebounce;
+  String _mediaLibraryCacheLoadedForSessionKey = '';
 
   bool get isOffline => _isOffline;
   bool get directIsLoading => _directIsLoading;
   String? get activeCommunityFilterId => _activeCommunityFilterId;
   String get lastFeedLocationPath => _lastFeedLocationPath;
   String? get lastStoryCreateError => _lastStoryCreateError;
+  String? get lastFollowToggleError => _lastFollowToggleError;
+  String? get lastDirectSendError => _lastDirectSendError;
 
   void setActiveCommunityFilterId(String? communityId) {
     final next = _looksLikeUuid(communityId) ? communityId : null;
@@ -2948,6 +3089,12 @@ class DemoRepository extends ChangeNotifier {
       unawaited(ch.unsubscribe());
     }
     _communityChatChannelsById.clear();
+    _directMessagesLoadedFor.clear();
+    for (final ch in _directChatChannelsByThreadId.values) {
+      unawaited(ch.unsubscribe());
+    }
+    _directChatChannelsByThreadId.clear();
+    _lastDirectSendError = null;
     _notifications = const <NotificationModel>[];
     _stories = const <StoryModel>[];
     _alerts = const <AlertModel>[];
@@ -2974,6 +3121,9 @@ class DemoRepository extends ChangeNotifier {
     _userBadgesByUserId.clear();
     _userBadgesLoadedFor.clear();
     _reports = const <ReportModel>[];
+    _playlists = const <PlaylistModel>[];
+    _mediaLibraryItems = const <MediaLibraryItemModel>[];
+    _savedPlaylistIdsByUserId.clear();
     _followedAlertIds.clear();
     _alertsLoadedKey = '';
     _lastFeedScope = 'world';
@@ -3002,6 +3152,618 @@ class DemoRepository extends ChangeNotifier {
     _viewerSessionKey = 'anon';
   }
 
+  void _seedPlaylistData() {
+    final now = DateTime.now();
+    _mediaLibraryItems = [
+      MediaLibraryItemModel(
+        id: 'mi_1',
+        ownerId: _u2.userId,
+        title: 'Louvor de entrega',
+        subtitle: 'Ministração',
+        type: PlaylistItemType.youtube,
+        mediaUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        durationSeconds: 228,
+        createdAt: now.subtract(const Duration(days: 8)),
+        updatedAt: now.subtract(const Duration(days: 1)),
+      ),
+      MediaLibraryItemModel(
+        id: 'mi_2',
+        ownerId: _u2.userId,
+        title: 'Instrumental para oração',
+        subtitle: 'Ambient',
+        type: PlaylistItemType.spotify,
+        mediaUrl: 'https://open.spotify.com/track/7GhIk7Il098yCjg4BQjzvb',
+        durationSeconds: 184,
+        createdAt: now.subtract(const Duration(days: 7)),
+        updatedAt: now.subtract(const Duration(hours: 8)),
+      ),
+      MediaLibraryItemModel(
+        id: 'mi_3',
+        ownerId: _u1.userId,
+        title: 'Declarações em fé',
+        subtitle: 'Áudio guiado',
+        type: PlaylistItemType.audio,
+        mediaUrl: 'https://atalaia.app/audio/warfare-intro.mp3',
+        durationSeconds: 420,
+        createdAt: now.subtract(const Duration(days: 4)),
+        updatedAt: now.subtract(const Duration(hours: 9)),
+      ),
+      MediaLibraryItemModel(
+        id: 'mi_4',
+        ownerId: _u1.userId,
+        title: 'Louvor de batalha',
+        subtitle: 'Adoração',
+        type: PlaylistItemType.youtube,
+        mediaUrl: 'https://www.youtube.com/watch?v=9bZkp7q19f0',
+        durationSeconds: 280,
+        createdAt: now.subtract(const Duration(days: 4)),
+        updatedAt: now.subtract(const Duration(hours: 9)),
+      ),
+      MediaLibraryItemModel(
+        id: 'mi_5',
+        ownerId: _u2.userId,
+        title: 'Devocional em áudio',
+        subtitle: 'Reflexão da manhã',
+        type: PlaylistItemType.audio,
+        mediaUrl: 'https://atalaia.app/audio/devocional-manha.mp3',
+        durationSeconds: 512,
+        createdAt: now.subtract(const Duration(days: 3)),
+        updatedAt: now.subtract(const Duration(hours: 2)),
+      ),
+      MediaLibraryItemModel(
+        id: 'mi_6',
+        ownerId: _u2.userId,
+        title: 'Adoração profunda',
+        subtitle: 'Spotify',
+        type: PlaylistItemType.spotify,
+        mediaUrl: 'https://open.spotify.com/track/3n3Ppam7vgaVa1iaRUc9Lp',
+        durationSeconds: 301,
+        createdAt: now.subtract(const Duration(days: 2)),
+        updatedAt: now.subtract(const Duration(hours: 1)),
+      ),
+    ];
+    _playlists = [
+      PlaylistModel(
+        id: 'pl_intercession',
+        ownerId: _u2.userId,
+        title: 'Intercessão da manhã',
+        description: 'Sequência para começar o dia em oração.',
+        visibility: PlaylistVisibility.public,
+        createdAt: now.subtract(const Duration(days: 5)),
+        updatedAt: now.subtract(const Duration(hours: 3)),
+        items: const [
+          PlaylistItemModel(
+            id: 'pli_1',
+            mediaItemId: 'mi_1',
+            title: 'Louvor de entrega',
+            subtitle: 'Ministração',
+            type: PlaylistItemType.youtube,
+            mediaUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+            durationSeconds: 228,
+            position: 1,
+          ),
+          PlaylistItemModel(
+            id: 'pli_2',
+            mediaItemId: 'mi_2',
+            title: 'Instrumental para oração',
+            subtitle: 'Ambient',
+            type: PlaylistItemType.spotify,
+            mediaUrl: 'https://open.spotify.com/track/7GhIk7Il098yCjg4BQjzvb',
+            durationSeconds: 184,
+            position: 2,
+          ),
+        ],
+      ),
+      PlaylistModel(
+        id: 'pl_warfare',
+        ownerId: _u1.userId,
+        title: 'Guerra espiritual',
+        description: 'Faixas para momentos de clamor e autoridade.',
+        visibility: PlaylistVisibility.unlisted,
+        createdAt: now.subtract(const Duration(days: 2)),
+        updatedAt: now.subtract(const Duration(hours: 9)),
+        items: const [
+          PlaylistItemModel(
+            id: 'pli_3',
+            mediaItemId: 'mi_3',
+            title: 'Declarações em fé',
+            subtitle: 'Áudio guiado',
+            type: PlaylistItemType.audio,
+            mediaUrl: 'https://atalaia.app/audio/warfare-intro.mp3',
+            durationSeconds: 420,
+            position: 1,
+          ),
+          PlaylistItemModel(
+            id: 'pli_4',
+            mediaItemId: 'mi_4',
+            title: 'Louvor de batalha',
+            subtitle: 'Adoração',
+            type: PlaylistItemType.youtube,
+            mediaUrl: 'https://www.youtube.com/watch?v=9bZkp7q19f0',
+            durationSeconds: 280,
+            position: 2,
+          ),
+        ],
+      ),
+      PlaylistModel(
+        id: 'pl_community',
+        ownerId: _u2.userId,
+        title: 'Playlist da comunidade',
+        description: 'Seleção para oração coletiva.',
+        visibility: PlaylistVisibility.public,
+        communityId: _communityId,
+        createdAt: now.subtract(const Duration(days: 1)),
+        updatedAt: now.subtract(const Duration(hours: 1)),
+        items: const [
+          PlaylistItemModel(
+            id: 'pli_5',
+            mediaItemId: 'mi_5',
+            title: 'Devocional em áudio',
+            subtitle: 'Reflexão da manhã',
+            type: PlaylistItemType.audio,
+            mediaUrl: 'https://atalaia.app/audio/devocional-manha.mp3',
+            durationSeconds: 512,
+            position: 1,
+          ),
+          PlaylistItemModel(
+            id: 'pli_6',
+            mediaItemId: 'mi_6',
+            title: 'Adoração profunda',
+            subtitle: 'Spotify',
+            type: PlaylistItemType.spotify,
+            mediaUrl: 'https://open.spotify.com/track/3n3Ppam7vgaVa1iaRUc9Lp',
+            durationSeconds: 301,
+            position: 2,
+          ),
+        ],
+      ),
+    ];
+    _savedPlaylistIdsByUserId[_u1.userId] = {'pl_intercession', 'pl_warfare'};
+  }
+
+  PlaylistModel? findPlaylist(String playlistId) {
+    for (final playlist in _playlists) {
+      if (playlist.id == playlistId) return playlist;
+    }
+    return null;
+  }
+
+  bool canManagePlaylist({required PlaylistModel playlist, required String userId}) {
+    if (playlist.ownerId == userId) return true;
+    return playlist.ownerId.startsWith('u_');
+  }
+
+  List<PlaylistModel> playlistsForUser(SessionState session, {String? communityId}) {
+    final userId = session is AuthSession ? session.userId : null;
+    final savedIds = userId == null ? const <String>{} : (_savedPlaylistIdsByUserId[userId] ?? const <String>{});
+    final items = _playlists.where((playlist) {
+      final communityOk = communityId == null || playlist.communityId == null || playlist.communityId == communityId;
+      if (!communityOk) return false;
+      if (playlist.isPublic) return true;
+      if (userId == null) return false;
+      if (playlist.ownerId == userId) return true;
+      return savedIds.contains(playlist.id);
+    }).toList(growable: false);
+    items.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return items;
+  }
+
+  bool isPlaylistSaved({required String userId, required String playlistId}) {
+    return _savedPlaylistIdsByUserId[userId]?.contains(playlistId) ?? false;
+  }
+
+  MediaLibraryItemModel? findMediaLibraryItem(String mediaItemId) {
+    for (final item in _mediaLibraryItems) {
+      if (item.id == mediaItemId) return item;
+    }
+    return null;
+  }
+
+  List<MediaLibraryItemModel> mediaItemsForUser(AuthSession session) {
+    final items = _mediaLibraryItems.where((i) => i.ownerId == session.userId).toList(growable: false);
+    items.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return items;
+  }
+
+  List<MediaLibraryItemModel> mediaItemsForSession(SessionState session, {String? communityId}) {
+    final userId = session is AuthSession ? session.userId : null;
+    final visiblePlaylists = playlistsForUser(session, communityId: communityId);
+    final mediaIds = <String>{};
+    for (final playlist in visiblePlaylists) {
+      for (final item in playlist.items) {
+        mediaIds.add(item.mediaItemId);
+      }
+    }
+    final items = _mediaLibraryItems.where((i) => i.ownerId == userId || mediaIds.contains(i.id)).toList(growable: false);
+    items.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return items;
+  }
+
+  String createPlaylist({
+    required String ownerId,
+    required String title,
+    required String description,
+    String? coverUrl,
+    required PlaylistVisibility visibility,
+    String? communityId,
+  }) {
+    final now = DateTime.now();
+    final id = 'pl_${now.microsecondsSinceEpoch}';
+    final next = PlaylistModel(
+      id: id,
+      ownerId: ownerId,
+      title: title.trim(),
+      description: description.trim(),
+      coverUrl: coverUrl?.trim().isEmpty ?? true ? null : coverUrl!.trim(),
+      visibility: visibility,
+      communityId: communityId,
+      createdAt: now,
+      updatedAt: now,
+    );
+    _playlists = [next, ..._playlists];
+    notifyListeners();
+    return id;
+  }
+
+  bool updatePlaylist({
+    required String playlistId,
+    required String userId,
+    required String title,
+    required String description,
+    String? coverUrl,
+    required PlaylistVisibility visibility,
+  }) {
+    final index = _playlists.indexWhere((p) => p.id == playlistId);
+    if (index < 0) return false;
+    final current = _playlists[index];
+    if (!canManagePlaylist(playlist: current, userId: userId)) return false;
+    _playlists[index] = PlaylistModel(
+      id: current.id,
+      ownerId: current.ownerId,
+      title: title.trim(),
+      description: description.trim(),
+      coverUrl: coverUrl?.trim().isEmpty ?? true ? current.coverUrl : coverUrl!.trim(),
+      visibility: visibility,
+      communityId: current.communityId,
+      items: current.items,
+      createdAt: current.createdAt,
+      updatedAt: DateTime.now(),
+    );
+    notifyListeners();
+    return true;
+  }
+
+  bool deletePlaylist({required String playlistId, required String userId}) {
+    final current = findPlaylist(playlistId);
+    if (current == null || !canManagePlaylist(playlist: current, userId: userId)) return false;
+    _playlists = _playlists.where((p) => p.id != playlistId).toList(growable: false);
+    for (final entry in _savedPlaylistIdsByUserId.entries) {
+      entry.value.remove(playlistId);
+    }
+    notifyListeners();
+    return true;
+  }
+
+  bool toggleSavePlaylist({required String playlistId, required String userId}) {
+    final current = findPlaylist(playlistId);
+    if (current == null || current.ownerId == userId) return false;
+    final set = _savedPlaylistIdsByUserId.putIfAbsent(userId, () => <String>{});
+    if (set.contains(playlistId)) {
+      set.remove(playlistId);
+      notifyListeners();
+      return false;
+    }
+    set.add(playlistId);
+    notifyListeners();
+    return true;
+  }
+
+  String createMediaLibraryItem({
+    required String ownerId,
+    required String title,
+    required String subtitle,
+    required PlaylistItemType type,
+    required String mediaUrl,
+    String? thumbnailUrl,
+    int? durationSeconds,
+  }) {
+    final now = DateTime.now();
+    final item = MediaLibraryItemModel(
+      id: supabase != null && _looksLikeUuid(ownerId) ? _uuidV4() : 'mi_${now.microsecondsSinceEpoch}',
+      ownerId: ownerId,
+      title: title.trim(),
+      subtitle: subtitle.trim().isEmpty ? null : subtitle.trim(),
+      type: type,
+      mediaUrl: mediaUrl.trim(),
+      thumbnailUrl: thumbnailUrl?.trim().isEmpty ?? true ? null : thumbnailUrl!.trim(),
+      durationSeconds: durationSeconds,
+      createdAt: now,
+      updatedAt: now,
+    );
+    _mediaLibraryItems = [item, ..._mediaLibraryItems];
+    notifyListeners();
+    if (ownerId == _viewerUserId) _schedulePersistMediaLibrary();
+    if (supabase != null && !isOffline && ownerId == _viewerUserId && _looksLikeUuid(ownerId)) {
+      unawaited(_createMediaLibraryItemSupabase(item));
+    }
+    return item.id;
+  }
+
+  bool updateMediaLibraryItem({
+    required String mediaItemId,
+    required String userId,
+    required String title,
+    required String subtitle,
+    required PlaylistItemType type,
+    required String mediaUrl,
+    String? thumbnailUrl,
+    int? durationSeconds,
+  }) {
+    final index = _mediaLibraryItems.indexWhere((i) => i.id == mediaItemId);
+    if (index < 0) return false;
+    final current = _mediaLibraryItems[index];
+    if (current.ownerId != userId) return false;
+    final updated = MediaLibraryItemModel(
+      id: current.id,
+      ownerId: current.ownerId,
+      title: title.trim(),
+      subtitle: subtitle.trim().isEmpty ? null : subtitle.trim(),
+      type: type,
+      mediaUrl: mediaUrl.trim(),
+      thumbnailUrl: thumbnailUrl?.trim().isEmpty ?? true ? null : thumbnailUrl!.trim(),
+      durationSeconds: durationSeconds,
+      createdAt: current.createdAt,
+      updatedAt: DateTime.now(),
+    );
+    _mediaLibraryItems[index] = updated;
+    _playlists = _playlists
+        .map(
+          (playlist) => PlaylistModel(
+            id: playlist.id,
+            ownerId: playlist.ownerId,
+            title: playlist.title,
+            description: playlist.description,
+            coverUrl: playlist.coverUrl,
+            visibility: playlist.visibility,
+            communityId: playlist.communityId,
+            items: playlist.items
+                .map(
+                  (item) => item.mediaItemId != mediaItemId
+                      ? item
+                      : PlaylistItemModel(
+                          id: item.id,
+                          mediaItemId: item.mediaItemId,
+                          title: updated.title,
+                          subtitle: updated.subtitle,
+                          type: updated.type,
+                          mediaUrl: updated.mediaUrl,
+                          thumbnailUrl: updated.thumbnailUrl,
+                          durationSeconds: updated.durationSeconds,
+                          position: item.position,
+                        ),
+                )
+                .toList(growable: false),
+            createdAt: playlist.createdAt,
+            updatedAt: playlist.updatedAt,
+          ),
+        )
+        .toList(growable: false);
+    notifyListeners();
+    if (userId == _viewerUserId) _schedulePersistMediaLibrary();
+    if (supabase != null && !isOffline && userId == _viewerUserId && _looksLikeUuid(userId) && _looksLikeUuid(mediaItemId)) {
+      unawaited(_updateMediaLibraryItemSupabase(updated));
+    }
+    return true;
+  }
+
+  bool deleteMediaLibraryItem({required String mediaItemId, required String userId}) {
+    final current = findMediaLibraryItem(mediaItemId);
+    if (current == null || current.ownerId != userId) return false;
+    _mediaLibraryItems = _mediaLibraryItems.where((item) => item.id != mediaItemId).toList(growable: false);
+    _playlists = _playlists
+        .map(
+          (playlist) => PlaylistModel(
+            id: playlist.id,
+            ownerId: playlist.ownerId,
+            title: playlist.title,
+            description: playlist.description,
+            coverUrl: playlist.coverUrl,
+            visibility: playlist.visibility,
+            communityId: playlist.communityId,
+            items: _normalizePlaylistItems(
+              playlist.items.where((item) => item.mediaItemId != mediaItemId).toList(growable: false),
+            ),
+            createdAt: playlist.createdAt,
+            updatedAt: playlist.updatedAt,
+          ),
+        )
+        .toList(growable: false);
+    notifyListeners();
+    if (userId == _viewerUserId) _schedulePersistMediaLibrary();
+    if (supabase != null && !isOffline && userId == _viewerUserId && _looksLikeUuid(userId) && _looksLikeUuid(mediaItemId)) {
+      unawaited(_deleteMediaLibraryItemSupabase(mediaItemId: mediaItemId));
+    }
+    return true;
+  }
+
+  bool addMediaItemToPlaylist({
+    required String playlistId,
+    required String userId,
+    required String mediaItemId,
+  }) {
+    final playlistIndex = _playlists.indexWhere((p) => p.id == playlistId);
+    if (playlistIndex < 0) return false;
+    final playlist = _playlists[playlistIndex];
+    if (!canManagePlaylist(playlist: playlist, userId: userId)) return false;
+    final mediaItem = findMediaLibraryItem(mediaItemId);
+    if (mediaItem == null) return false;
+    final now = DateTime.now();
+    final newItem = PlaylistItemModel(
+      id: 'pli_${now.microsecondsSinceEpoch}',
+      mediaItemId: mediaItem.id,
+      title: mediaItem.title,
+      subtitle: mediaItem.subtitle,
+      type: mediaItem.type,
+      mediaUrl: mediaItem.mediaUrl,
+      thumbnailUrl: mediaItem.thumbnailUrl,
+      durationSeconds: mediaItem.durationSeconds,
+      position: playlist.items.length + 1,
+    );
+    _playlists[playlistIndex] = PlaylistModel(
+      id: playlist.id,
+      ownerId: playlist.ownerId,
+      title: playlist.title,
+      description: playlist.description,
+      coverUrl: playlist.coverUrl,
+      visibility: playlist.visibility,
+      communityId: playlist.communityId,
+      items: [...playlist.items, newItem],
+      createdAt: playlist.createdAt,
+      updatedAt: now,
+    );
+    notifyListeners();
+    return true;
+  }
+
+  bool addPlaylistItem({
+    required String playlistId,
+    required String userId,
+    required String title,
+    String subtitle = '',
+    required PlaylistItemType type,
+    required String mediaUrl,
+    String? thumbnailUrl,
+    int? durationSeconds,
+  }) {
+    final mediaItemId = createMediaLibraryItem(
+      ownerId: userId,
+      title: title,
+      subtitle: subtitle,
+      type: type,
+      mediaUrl: mediaUrl,
+      thumbnailUrl: thumbnailUrl,
+      durationSeconds: durationSeconds,
+    );
+    return addMediaItemToPlaylist(playlistId: playlistId, userId: userId, mediaItemId: mediaItemId);
+  }
+
+  bool removePlaylistItem({
+    required String playlistId,
+    required String itemId,
+    required String userId,
+  }) {
+    final index = _playlists.indexWhere((p) => p.id == playlistId);
+    if (index < 0) return false;
+    final playlist = _playlists[index];
+    if (!canManagePlaylist(playlist: playlist, userId: userId)) return false;
+    final items = playlist.items.where((i) => i.id != itemId).toList(growable: false);
+    if (items.length == playlist.items.length) return false;
+    final normalized = <PlaylistItemModel>[];
+    for (var i = 0; i < items.length; i++) {
+      final item = items[i];
+      normalized.add(
+        PlaylistItemModel(
+          id: item.id,
+          mediaItemId: item.mediaItemId,
+          title: item.title,
+          subtitle: item.subtitle,
+          type: item.type,
+          mediaUrl: item.mediaUrl,
+          thumbnailUrl: item.thumbnailUrl,
+          durationSeconds: item.durationSeconds,
+          position: i + 1,
+        ),
+      );
+    }
+    _playlists[index] = PlaylistModel(
+      id: playlist.id,
+      ownerId: playlist.ownerId,
+      title: playlist.title,
+      description: playlist.description,
+      coverUrl: playlist.coverUrl,
+      visibility: playlist.visibility,
+      communityId: playlist.communityId,
+      items: normalized,
+      createdAt: playlist.createdAt,
+      updatedAt: DateTime.now(),
+    );
+    notifyListeners();
+    return true;
+  }
+
+  bool reorderPlaylistItems({
+    required String playlistId,
+    required String userId,
+    required int oldIndex,
+    required int newIndex,
+  }) {
+    final index = _playlists.indexWhere((p) => p.id == playlistId);
+    if (index < 0) return false;
+    final playlist = _playlists[index];
+    if (!canManagePlaylist(playlist: playlist, userId: userId)) return false;
+    if (oldIndex < 0 || oldIndex >= playlist.items.length) return false;
+    if (newIndex < 0 || newIndex > playlist.items.length) return false;
+    var targetIndex = newIndex;
+    final mutable = [...playlist.items];
+    if (targetIndex > oldIndex) {
+      targetIndex -= 1;
+    }
+    final item = mutable.removeAt(oldIndex);
+    mutable.insert(targetIndex, item);
+    final normalized = <PlaylistItemModel>[];
+    for (var i = 0; i < mutable.length; i++) {
+      final current = mutable[i];
+      normalized.add(
+        PlaylistItemModel(
+          id: current.id,
+          mediaItemId: current.mediaItemId,
+          title: current.title,
+          subtitle: current.subtitle,
+          type: current.type,
+          mediaUrl: current.mediaUrl,
+          thumbnailUrl: current.thumbnailUrl,
+          durationSeconds: current.durationSeconds,
+          position: i + 1,
+        ),
+      );
+    }
+    _playlists[index] = PlaylistModel(
+      id: playlist.id,
+      ownerId: playlist.ownerId,
+      title: playlist.title,
+      description: playlist.description,
+      coverUrl: playlist.coverUrl,
+      visibility: playlist.visibility,
+      communityId: playlist.communityId,
+      items: normalized,
+      createdAt: playlist.createdAt,
+      updatedAt: DateTime.now(),
+    );
+    notifyListeners();
+    return true;
+  }
+
+  List<PlaylistItemModel> _normalizePlaylistItems(List<PlaylistItemModel> items) {
+    final normalized = <PlaylistItemModel>[];
+    for (var i = 0; i < items.length; i++) {
+      final item = items[i];
+      normalized.add(
+        PlaylistItemModel(
+          id: item.id,
+          mediaItemId: item.mediaItemId,
+          title: item.title,
+          subtitle: item.subtitle,
+          type: item.type,
+          mediaUrl: item.mediaUrl,
+          thumbnailUrl: item.thumbnailUrl,
+          durationSeconds: item.durationSeconds,
+          position: i + 1,
+        ),
+      );
+    }
+    return normalized;
+  }
+
   void _upsertProfile(ProfileModel profile) {
     final i = _profiles.indexWhere((p) => p.userId == profile.userId);
     if (i >= 0) {
@@ -3019,12 +3781,17 @@ class DemoRepository extends ChangeNotifier {
   }
 
   void setViewer(SessionState session) {
+    final prevViewerId = _viewerUserId;
     final nextUserId = session is AuthSession ? session.userId : (supabase != null ? '' : _u1.userId);
     final nextSessionKey = session is AuthSession ? 'auth:${session.userId}' : 'anon';
     final sessionChanged = _viewerSessionKey != nextSessionKey;
     final viewerChanged = _viewerUserId != nextUserId;
     _viewerUserId = nextUserId;
     _viewerSessionKey = nextSessionKey;
+    if (supabase != null && viewerChanged && prevViewerId.trim().isNotEmpty) {
+      _mediaLibraryItems =
+          _mediaLibraryItems.where((i) => i.ownerId != prevViewerId).toList(growable: false);
+    }
     if (sessionChanged) {
       _adSessionToken++;
       _hiddenAdSlotIds.clear();
@@ -3033,6 +3800,8 @@ class DemoRepository extends ChangeNotifier {
       _adSlotsById.clear();
     }
     if (sessionChanged || viewerChanged) {
+      _mediaLibraryCacheLoadedForSessionKey = '';
+      unawaited(_loadMediaLibraryCacheIfNeeded());
       final viewerId = _viewerUserId;
       _communities = _communities
           .map((c) {
@@ -3053,18 +3822,130 @@ class DemoRepository extends ChangeNotifier {
       _communityEventsLoadedFor.clear();
       _communityMessagesLoadedFor.clear();
       _directCacheLoadedForSessionKey = '';
+      _mediaLibraryLoadedForViewerId = '';
       for (final ch in _communityChatChannelsById.values) {
         unawaited(ch.unsubscribe());
       }
       _communityChatChannelsById.clear();
+      _directMessagesLoadedFor.clear();
+      for (final ch in _directChatChannelsByThreadId.values) {
+        unawaited(ch.unsubscribe());
+      }
+      _directChatChannelsByThreadId.clear();
+      _lastDirectSendError = null;
       unawaited(refreshFeedForCurrentSession());
       unawaited(refreshCommunitiesForViewer(force: true));
       unawaited(_loadDirectCacheIfNeeded());
       if (session is AuthSession) {
         unawaited(_refreshViewerFollowing(session.userId));
+        unawaited(refreshDirectForViewer(session.userId, force: true));
+        unawaited(refreshMediaLibraryForViewer(force: true));
       }
     }
     if (sessionChanged || viewerChanged) notifyListeners();
+  }
+
+  Future<void> refreshMediaLibraryForViewer({bool force = false}) async {
+    final sb = supabase;
+    if (sb == null) return;
+    if (isOffline) return;
+    final viewerId = sb.auth.currentUser?.id;
+    if (viewerId == null || viewerId.trim().isEmpty) return;
+    if (!force && _mediaLibraryLoadedForViewerId == viewerId) return;
+    _mediaLibraryLoadedForViewerId = viewerId;
+    try {
+      final rows = await sb
+          .from('media_library_items')
+          .select('id, owner_id, title, subtitle, type, media_url, thumbnail_url, duration_seconds, created_at, updated_at')
+          .eq('owner_id', viewerId)
+          .order('updated_at', ascending: false);
+      final loaded = <MediaLibraryItemModel>[];
+      for (final raw in rows) {
+        final id = raw['id']?.toString() ?? '';
+        final ownerId = raw['owner_id']?.toString() ?? '';
+        final title = raw['title']?.toString() ?? '';
+        final mediaUrl = raw['media_url']?.toString() ?? '';
+        final createdAt = DateTime.tryParse(raw['created_at']?.toString() ?? '')?.toLocal();
+        final updatedAt = DateTime.tryParse(raw['updated_at']?.toString() ?? '')?.toLocal();
+        if (id.isEmpty || ownerId.isEmpty || title.isEmpty || mediaUrl.isEmpty || createdAt == null || updatedAt == null) {
+          continue;
+        }
+        final typeRaw = raw['type']?.toString() ?? '';
+        final type = PlaylistItemType.values.firstWhere((t) => t.name == typeRaw, orElse: () => PlaylistItemType.audio);
+        loaded.add(
+          MediaLibraryItemModel(
+            id: id,
+            ownerId: ownerId,
+            title: title,
+            subtitle: raw['subtitle']?.toString(),
+            type: type,
+            mediaUrl: mediaUrl,
+            thumbnailUrl: raw['thumbnail_url']?.toString(),
+            durationSeconds: (raw['duration_seconds'] as num?)?.toInt(),
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+          ),
+        );
+      }
+      final kept = _mediaLibraryItems.where((i) => i.ownerId != viewerId).toList(growable: true);
+      final byId = <String, MediaLibraryItemModel>{for (final m in kept) m.id: m};
+      for (final m in loaded) {
+        byId[m.id] = m;
+      }
+      final next = byId.values.toList(growable: false);
+      next.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      _mediaLibraryItems = List.unmodifiable(next);
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> _createMediaLibraryItemSupabase(MediaLibraryItemModel item) async {
+    final sb = supabase;
+    if (sb == null) return;
+    if (isOffline) return;
+    final viewerId = sb.auth.currentUser?.id;
+    if (viewerId == null || viewerId != item.ownerId) return;
+    try {
+      await sb.from('media_library_items').insert(<String, Object?>{
+        'id': item.id,
+        'owner_id': item.ownerId,
+        'title': item.title,
+        'subtitle': item.subtitle,
+        'type': item.type.name,
+        'media_url': item.mediaUrl,
+        'thumbnail_url': item.thumbnailUrl,
+        'duration_seconds': item.durationSeconds,
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _updateMediaLibraryItemSupabase(MediaLibraryItemModel item) async {
+    final sb = supabase;
+    if (sb == null) return;
+    if (isOffline) return;
+    final viewerId = sb.auth.currentUser?.id;
+    if (viewerId == null || viewerId != item.ownerId) return;
+    try {
+      await sb.from('media_library_items').update(<String, Object?>{
+        'title': item.title,
+        'subtitle': item.subtitle,
+        'type': item.type.name,
+        'media_url': item.mediaUrl,
+        'thumbnail_url': item.thumbnailUrl,
+        'duration_seconds': item.durationSeconds,
+      }).match(<String, Object>{'id': item.id, 'owner_id': item.ownerId});
+    } catch (_) {}
+  }
+
+  Future<void> _deleteMediaLibraryItemSupabase({required String mediaItemId}) async {
+    final sb = supabase;
+    if (sb == null) return;
+    if (isOffline) return;
+    final viewerId = sb.auth.currentUser?.id;
+    if (viewerId == null) return;
+    try {
+      await sb.from('media_library_items').delete().match(<String, Object>{'id': mediaItemId, 'owner_id': viewerId});
+    } catch (_) {}
   }
 
   void _schedulePersistDirect() {
@@ -3145,6 +4026,113 @@ class DemoRepository extends ChangeNotifier {
       };
       await sp.setString('direct_cache_v1:$_viewerSessionKey', jsonEncode(data));
     } catch (_) {}
+  }
+
+  void _schedulePersistMediaLibrary() {
+    final key = _mediaLibraryCacheKey();
+    if (key == null) return;
+    _mediaLibraryPersistDebounce?.cancel();
+    _mediaLibraryPersistDebounce = Timer(const Duration(milliseconds: 300), () {
+      unawaited(_saveMediaLibraryCache());
+    });
+  }
+
+  String? _mediaLibraryCacheKey() {
+    final viewerId = _viewerUserId.trim();
+    if (viewerId.isEmpty) return null;
+    final sessionKey = _viewerSessionKey.trim();
+    if (sessionKey.isEmpty) return null;
+    return 'media_library_v1:$sessionKey:$viewerId';
+  }
+
+  Future<void> _loadMediaLibraryCacheIfNeeded() async {
+    final key = _mediaLibraryCacheKey();
+    if (key == null) return;
+    if (_mediaLibraryCacheLoadedForSessionKey == key) return;
+    _mediaLibraryCacheLoadedForSessionKey = key;
+    final viewerId = _viewerUserId.trim();
+    if (viewerId.isEmpty) return;
+    try {
+      final sp = await SharedPreferences.getInstance();
+      final raw = sp.getString(key);
+      if (raw == null || raw.trim().isEmpty) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return;
+      final loaded = <MediaLibraryItemModel>[];
+      for (final item in decoded) {
+        final m = _mediaLibraryItemFromJson(item);
+        if (m == null) continue;
+        if (m.ownerId != viewerId) continue;
+        loaded.add(m);
+      }
+      if (loaded.isEmpty) return;
+
+      final kept = _mediaLibraryItems.where((i) => i.ownerId != viewerId).toList(growable: true);
+      final byId = <String, MediaLibraryItemModel>{};
+      for (final m in loaded) {
+        byId[m.id] = m;
+      }
+      kept.addAll(byId.values);
+      kept.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      _mediaLibraryItems = List.unmodifiable(kept);
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> _saveMediaLibraryCache() async {
+    final key = _mediaLibraryCacheKey();
+    if (key == null) return;
+    final viewerId = _viewerUserId.trim();
+    if (viewerId.isEmpty) return;
+    try {
+      final sp = await SharedPreferences.getInstance();
+      final owned = _mediaLibraryItems.where((i) => i.ownerId == viewerId).toList(growable: false);
+      owned.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      final data = owned.map(_mediaLibraryItemToJson).toList(growable: false);
+      await sp.setString(key, jsonEncode(data));
+    } catch (_) {}
+  }
+
+  Map<String, Object?> _mediaLibraryItemToJson(MediaLibraryItemModel item) {
+    return <String, Object?>{
+      'id': item.id,
+      'ownerId': item.ownerId,
+      'title': item.title,
+      'subtitle': item.subtitle,
+      'type': item.type.name,
+      'mediaUrl': item.mediaUrl,
+      'thumbnailUrl': item.thumbnailUrl,
+      'durationSeconds': item.durationSeconds,
+      'createdAt': item.createdAt.toIso8601String(),
+      'updatedAt': item.updatedAt.toIso8601String(),
+    };
+  }
+
+  MediaLibraryItemModel? _mediaLibraryItemFromJson(Object? raw) {
+    if (raw is! Map) return null;
+    final id = raw['id']?.toString() ?? '';
+    final ownerId = raw['ownerId']?.toString() ?? '';
+    final title = raw['title']?.toString() ?? '';
+    final mediaUrl = raw['mediaUrl']?.toString() ?? '';
+    final createdAt = DateTime.tryParse(raw['createdAt']?.toString() ?? '')?.toLocal();
+    final updatedAt = DateTime.tryParse(raw['updatedAt']?.toString() ?? '')?.toLocal();
+    if (id.isEmpty || ownerId.isEmpty || title.isEmpty || mediaUrl.isEmpty || createdAt == null || updatedAt == null) {
+      return null;
+    }
+    final typeRaw = raw['type']?.toString() ?? '';
+    final type = PlaylistItemType.values.firstWhere((t) => t.name == typeRaw, orElse: () => PlaylistItemType.audio);
+    return MediaLibraryItemModel(
+      id: id,
+      ownerId: ownerId,
+      title: title,
+      subtitle: raw['subtitle']?.toString(),
+      type: type,
+      mediaUrl: mediaUrl,
+      thumbnailUrl: raw['thumbnailUrl']?.toString(),
+      durationSeconds: (raw['durationSeconds'] as num?)?.toInt(),
+      createdAt: createdAt,
+      updatedAt: updatedAt,
+    );
   }
 
   Map<String, Object?> _threadToJson(ThreadModel t) {
@@ -3239,16 +4227,29 @@ class DemoRepository extends ChangeNotifier {
       row = await sb
           .from('profiles')
           .select(
-            'username,display_name,full_name,bio,church_id,is_verified,avatar_url',
+            'username,display_name,full_name,bio,church_id,is_verified,avatar_url,is_active,deactivated_at,deleted_at',
           )
           .eq('id', user.id)
           .maybeSingle();
     } on PostgrestException catch (e) {
+      if (_postgrestMissingColumn(e, 'is_active') || _postgrestMissingColumn(e, 'deleted_at') || _postgrestMissingColumn(e, 'deactivated_at')) {
+        try {
+          row = await sb
+              .from('profiles')
+              .select(
+                'username,display_name,full_name,bio,church_id,is_verified,avatar_url',
+              )
+              .eq('id', user.id)
+              .maybeSingle();
+        } catch (_) {
+          row = null;
+        }
+      } else
       if (_postgrestMissingColumn(e, 'full_name')) {
         try {
           row = await sb
               .from('profiles')
-              .select('username,display_name,bio,church_id,is_verified,avatar_url')
+              .select('username,display_name,bio,church_id,is_verified,avatar_url,is_active,deactivated_at,deleted_at')
               .eq('id', user.id)
               .maybeSingle();
         } catch (_) {
@@ -3259,6 +4260,15 @@ class DemoRepository extends ChangeNotifier {
       }
     } catch (_) {
       row = null;
+    }
+    final isActive = row?['is_active'];
+    final deletedAt = DateTime.tryParse(row?['deleted_at']?.toString() ?? '')?.toLocal();
+    if (isActive == false || deletedAt != null) {
+      _lastAuthError = 'Conta desativada.';
+      try {
+        await sb.auth.signOut();
+      } catch (_) {}
+      return null;
     }
     final username = (row?['username'] as String?)?.trim() ?? '';
     final displayName = (row?['display_name'] as String?)?.trim() ?? '';
@@ -3295,18 +4305,12 @@ class DemoRepository extends ChangeNotifier {
     if (ids.isEmpty) return const <String, ProfileModel>{};
     List<dynamic> rows = const <dynamic>[];
     try {
-      rows = await sb
-          .from('profiles')
-          .select('id,username,display_name,full_name,bio,is_verified,avatar_url')
-          .inFilter('id', ids.toList(growable: false));
-    } on PostgrestException catch (e) {
-      if (_postgrestMissingColumn(e, 'full_name')) {
-        try {
-          rows = await sb
-              .from('profiles')
-              .select('id,username,display_name,bio,is_verified,avatar_url')
-              .inFilter('id', ids.toList(growable: false));
-        } catch (_) {}
+      final select = 'id,username,display_name,bio,is_verified,avatar_url';
+      if (ids.length == 1) {
+        final only = ids.first;
+        rows = await sb.from('profiles').select(select).eq('id', only);
+      } else {
+        rows = await sb.from('profiles').select(select).inFilter('id', ids.toList(growable: false));
       }
     } catch (_) {}
     final map = <String, ProfileModel>{};
@@ -5157,8 +6161,59 @@ class DemoRepository extends ChangeNotifier {
         set.add(id);
       }
       _followingByUserId[viewerId] = set;
+      await _fetchProfilesByIds(set);
       notifyListeners();
     } catch (_) {}
+  }
+
+  Future<void> _refreshFollowersForUser(String userId) async {
+    final sb = supabase;
+    if (sb == null) return;
+    if (isOffline) return;
+    final id = userId.trim();
+    if (id.isEmpty) return;
+    try {
+      final rows = await sb.from('follows').select('follower_id').eq('following_id', id);
+      final set = <String>{};
+      for (final raw in (rows as List<dynamic>)) {
+        final r = raw as Map<String, dynamic>;
+        final followerId = r['follower_id']?.toString();
+        if (followerId == null || followerId.isEmpty) continue;
+        set.add(followerId);
+      }
+      _followersByUserId[id] = set;
+      await _fetchProfilesByIds(set);
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> _refreshFollowingForUser(String userId) async {
+    final sb = supabase;
+    if (sb == null) return;
+    if (isOffline) return;
+    final id = userId.trim();
+    if (id.isEmpty) return;
+    try {
+      final rows = await sb.from('follows').select('following_id').eq('follower_id', id);
+      final set = <String>{};
+      for (final raw in (rows as List<dynamic>)) {
+        final r = raw as Map<String, dynamic>;
+        final followingId = r['following_id']?.toString();
+        if (followingId == null || followingId.isEmpty) continue;
+        set.add(followingId);
+      }
+      _followingByUserId[id] = set;
+      await _fetchProfilesByIds(set);
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> refreshFollowsForUser(String userId) async {
+    if (supabase == null) return;
+    if (isOffline) return;
+    await _refreshFollowersForUser(userId);
+    await _refreshFollowingForUser(userId);
+    unawaited(_refreshFollowCountsForUser(userId));
   }
 
   Future<void> _refreshFollowCountsForUser(String userId) async {
@@ -5454,6 +6509,16 @@ class DemoRepository extends ChangeNotifier {
     );
   }
 
+  static const String _authErrNoConnection = 'no_connection';
+  static const String _authErrInvalidCredentials = 'invalid_credentials';
+  static const String _authErrLoginFailed = 'login_failed';
+  static const String _authErrCreateAccountFailed = 'create_account_failed';
+  static const String _authErrAccountCreatedNoSession = 'account_created_no_session';
+  static const String _authErrRateLimit = 'rate_limit';
+  static const String _authErrEmailAlreadyRegistered = 'email_already_registered';
+  static const String _authErrUsernameUnavailable = 'username_unavailable';
+  static const String _authErrSupabaseNotConfigured = 'supabase_not_configured';
+
   String? _lastAuthError;
   String? get lastAuthError => _lastAuthError;
   String? _lastPostCreateError;
@@ -5514,21 +6579,22 @@ class DemoRepository extends ChangeNotifier {
     final sb = supabase;
     if (sb != null) {
       if (isOffline) {
-        _lastAuthError = 'Sem conexão';
+        _lastAuthError = _authErrNoConnection;
         return null;
       }
       try {
         final e = email.trim().toLowerCase();
         final res = await sb.auth.signInWithPassword(email: e, password: password);
         if (res.user == null) {
-          _lastAuthError = 'Email ou senha inválidos';
+          _lastAuthError = _authErrInvalidCredentials;
           return null;
         }
         final user = res.user!;
         var session = AuthSession(userId: user.id, username: user.id, churchId: null);
         try {
           final enriched = await sessionFromSupabaseAuth();
-          if (enriched != null) session = enriched;
+          if (enriched == null) return null;
+          session = enriched;
         } catch (e) {
           assert(() {
             debugPrint('[auth] sessionFromSupabaseAuth error=$e');
@@ -5556,14 +6622,14 @@ class DemoRepository extends ChangeNotifier {
           _lastAuthError = raw;
           return null;
         }
-        _lastAuthError = 'Email ou senha inválidos';
+        _lastAuthError = _authErrInvalidCredentials;
         return null;
       } catch (e) {
         assert(() {
           debugPrint('[auth] signIn error=$e');
           return true;
         }());
-        _lastAuthError = debugMode ? e.toString() : 'Falha no login';
+        _lastAuthError = debugMode ? e.toString() : _authErrLoginFailed;
         return null;
       }
     }
@@ -5594,7 +6660,7 @@ class DemoRepository extends ChangeNotifier {
     final sb = supabase;
     if (sb != null) {
       if (isOffline) {
-        _lastAuthError = 'Sem conexão';
+        _lastAuthError = _authErrNoConnection;
         return null;
       }
       final e = email.trim().toLowerCase();
@@ -5605,23 +6671,44 @@ class DemoRepository extends ChangeNotifier {
         final res = await sb.auth.signUp(email: e, password: password);
         final user = res.user;
         if (user == null) {
-          _lastAuthError = 'Falha ao criar conta';
+          _lastAuthError = _authErrCreateAccountFailed;
           return null;
         }
-
-        await sb.from('profiles').insert(<String, Object?>{
-          'id': user.id,
-          'username': u,
-          'display_name': name.trim(),
-          'bio': '',
-        });
-
-        final session = await sessionFromSupabaseAuth();
+        var session = res.session ?? sb.auth.currentSession;
         if (session == null) {
-          _lastAuthError = 'Conta criada, mas sem sessão';
+          try {
+            await sb.auth.signInWithPassword(email: e, password: password);
+          } catch (e) {
+            assert(() {
+              debugPrint('[auth] post-signUp signIn error=$e');
+              return true;
+            }());
+          }
+          session = sb.auth.currentSession;
+        }
+        if (session == null) {
+          _lastAuthError =
+              'Conta criada, mas o Supabase está exigindo confirmação por e-mail. Desative a confirmação de e-mail em Authentication → Providers → Email para entrar automaticamente.';
           return null;
         }
-        return session;
+
+        try {
+          await sb.from('profiles').upsert(<String, Object?>{
+            'id': user.id,
+            'username': u,
+            'display_name': name.trim(),
+            'bio': '',
+          });
+        } catch (e) {
+          final short = _shortSupabaseError(e).trim();
+          _lastAuthError = short.isEmpty
+              ? 'Falha ao criar perfil. Verifique a policy de INSERT da tabela profiles (RLS) permitindo auth.uid() = id.'
+              : 'Falha ao criar perfil: $short';
+          return null;
+        }
+
+        final enriched = await sessionFromSupabaseAuth();
+        return enriched ?? AuthSession(userId: user.id, username: u, churchId: null);
       } on AuthException catch (e) {
         assert(() {
           debugPrint('[auth] signUp AuthException message=${e.message}');
@@ -5630,14 +6717,14 @@ class DemoRepository extends ChangeNotifier {
         final raw = e.message.trim();
         final lower = raw.toLowerCase();
         if (lower.contains('rate limit')) {
-          _lastAuthError = 'Limite de envio de email atingido. Aguarde alguns minutos e tente novamente.';
+          _lastAuthError = _authErrRateLimit;
           return null;
         }
         if (debugMode && raw.isNotEmpty) {
           _lastAuthError = raw;
           return null;
         }
-        _lastAuthError = lower.contains('already') ? 'Email já cadastrado' : 'Falha ao criar conta';
+        _lastAuthError = lower.contains('already') ? _authErrEmailAlreadyRegistered : _authErrCreateAccountFailed;
         return null;
       } on PostgrestException catch (e) {
         assert(() {
@@ -5656,14 +6743,14 @@ class DemoRepository extends ChangeNotifier {
           return null;
         }
         final msg = e.message.toLowerCase();
-        _lastAuthError = msg.contains('username') ? 'Username indisponível' : 'Falha ao criar conta';
+        _lastAuthError = msg.contains('username') ? _authErrUsernameUnavailable : _authErrCreateAccountFailed;
         return null;
       } catch (e) {
         assert(() {
           debugPrint('[auth] signUp error=$e');
           return true;
         }());
-        _lastAuthError = debugMode ? e.toString() : 'Falha ao criar conta';
+        _lastAuthError = debugMode ? e.toString() : _authErrCreateAccountFailed;
         return null;
       }
     }
@@ -5692,6 +6779,74 @@ class DemoRepository extends ChangeNotifier {
     } catch (_) {}
   }
 
+  Future<bool> deactivateMyAccount() async {
+    final sb = supabase;
+    if (sb == null) return false;
+    if (isOffline) return false;
+    final userId = sb.auth.currentUser?.id;
+    if (userId == null || userId.trim().isEmpty) return false;
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    try {
+      await sb.from('profiles').update(<String, Object?>{
+        'is_active': false,
+        'deactivated_at': nowIso,
+      }).eq('id', userId);
+    } catch (_) {
+      return false;
+    }
+    try {
+      await sb.auth.signOut();
+    } catch (_) {}
+    return true;
+  }
+
+  Future<bool> deleteMyAccount() async {
+    final sb = supabase;
+    if (sb == null) return false;
+    if (isOffline) return false;
+    final userId = sb.auth.currentUser?.id;
+    if (userId == null || userId.trim().isEmpty) return false;
+    final nowIso = DateTime.now().toUtc().toIso8601String();
+    try {
+      await sb.from('follows').delete().eq('follower_id', userId);
+    } catch (_) {}
+    try {
+      await sb.from('community_members').delete().eq('user_id', userId);
+    } catch (_) {}
+    try {
+      await sb.from('comments').delete().eq('user_id', userId);
+    } catch (_) {}
+    try {
+      await sb.from('reactions').delete().eq('user_id', userId);
+    } catch (_) {}
+    try {
+      await sb.from('prayers').delete().eq('user_id', userId);
+    } catch (_) {}
+    try {
+      await sb.from('posts').delete().eq('user_id', userId);
+    } catch (_) {}
+    try {
+      await sb.from('media_library_items').delete().eq('owner_id', userId);
+    } catch (_) {}
+    try {
+      await sb.from('profiles').update(<String, Object?>{
+        'is_active': false,
+        'deleted_at': nowIso,
+        'username': null,
+        'display_name': null,
+        'full_name': null,
+        'bio': null,
+        'avatar_url': null,
+      }).eq('id', userId);
+    } catch (_) {
+      return false;
+    }
+    try {
+      await sb.auth.signOut();
+    } catch (_) {}
+    return true;
+  }
+
   Future<void> requestPasswordReset(String email) async {
     final sb = supabase;
     if (sb == null) return;
@@ -5704,11 +6859,21 @@ class DemoRepository extends ChangeNotifier {
   bool isFollowingUser(String userId) =>
       (_followingByUserId[_viewerUserId] ?? const <String>{}).contains(userId);
 
-  void toggleFollowUser(String userId, {required bool isAuthenticated}) {
-    if (!isAuthenticated) return;
+  bool isFollowTogglingUser(String userId) => _followToggleInFlight.contains(userId);
+
+  Future<bool> toggleFollowUser(String userId, {required bool isAuthenticated}) async {
+    if (!isAuthenticated) return false;
+    if (_followToggleInFlight.contains(userId)) return false;
     if (supabase != null) {
-      unawaited(_toggleFollowSupabase(userId));
-      return;
+      _followToggleInFlight.add(userId);
+      _lastFollowToggleError = null;
+      notifyListeners();
+      try {
+        return await _toggleFollowSupabase(userId);
+      } finally {
+        _followToggleInFlight.remove(userId);
+        notifyListeners();
+      }
     }
     final viewerId = _viewerUserId;
     final following = _followingByUserId.putIfAbsent(viewerId, () => <String>{});
@@ -5719,32 +6884,45 @@ class DemoRepository extends ChangeNotifier {
       _followersByUserId.putIfAbsent(userId, () => <String>{}).add(viewerId);
     }
     notifyListeners();
+    return true;
   }
 
-  Future<void> _toggleFollowSupabase(String userId) async {
+  Future<bool> _toggleFollowSupabase(String userId) async {
     final sb = supabase;
-    if (sb == null) return;
-    if (isOffline) return;
+    if (sb == null) return false;
+    if (isOffline) return false;
     final viewerId = sb.auth.currentUser?.id;
-    if (viewerId == null) return;
+    if (viewerId == null) return false;
     final set = _followingByUserId.putIfAbsent(viewerId, () => <String>{});
-    final isFollowing = set.contains(userId);
-    if (isFollowing) {
+    final wasFollowing = set.contains(userId);
+    final nextFollowing = !wasFollowing;
+    if (wasFollowing) {
       set.remove(userId);
     } else {
       set.add(userId);
     }
     notifyListeners();
     try {
-      if (isFollowing) {
+      if (wasFollowing) {
         await sb.from('follows').delete().match(<String, Object>{'follower_id': viewerId, 'following_id': userId});
       } else {
         await sb.from('follows').insert(<String, Object>{'follower_id': viewerId, 'following_id': userId});
       }
-    } catch (_) {}
+    } catch (e) {
+      _lastFollowToggleError = _shortSupabaseError(e).trim().isEmpty ? 'Falha ao atualizar follow.' : _shortSupabaseError(e);
+      if (nextFollowing) {
+        set.remove(userId);
+      } else {
+        set.add(userId);
+      }
+      notifyListeners();
+      return false;
+    }
     unawaited(_refreshViewerFollowing(viewerId));
     unawaited(_refreshFollowCountsForUser(viewerId));
     unawaited(_refreshFollowCountsForUser(userId));
+    _lastFollowToggleError = null;
+    return true;
   }
 
   int followersCountForUser(String userId) {
@@ -5768,7 +6946,17 @@ class DemoRepository extends ChangeNotifier {
   }
 
   List<ProfileModel> followersForUser(String userId, {String query = ''}) {
-    final ids = _followersByUserId[userId] ?? const <String>{};
+    final cachedIds = _followersByUserId[userId];
+    if (supabase != null && !isOffline) {
+      final cachedCount = _followersCountByUserId[userId] ?? 0;
+      if (cachedIds == null || (cachedIds.isEmpty && cachedCount > 0)) {
+        unawaited(_refreshFollowersForUser(userId));
+      }
+      if (_followersCountByUserId[userId] == null) {
+        unawaited(_refreshFollowCountsForUser(userId));
+      }
+    }
+    final ids = cachedIds ?? const <String>{};
     final q = query.trim().toLowerCase();
     final list = ids
         .map(profileForUserId)
@@ -5782,7 +6970,17 @@ class DemoRepository extends ChangeNotifier {
   }
 
   List<ProfileModel> followingForUser(String userId, {String query = ''}) {
-    final ids = _followingByUserId[userId] ?? const <String>{};
+    final cachedIds = _followingByUserId[userId];
+    if (supabase != null && !isOffline) {
+      final cachedCount = _followingCountByUserId[userId] ?? 0;
+      if (cachedIds == null || (cachedIds.isEmpty && cachedCount > 0)) {
+        unawaited(_refreshFollowingForUser(userId));
+      }
+      if (_followingCountByUserId[userId] == null) {
+        unawaited(_refreshFollowCountsForUser(userId));
+      }
+    }
+    final ids = cachedIds ?? const <String>{};
     final q = query.trim().toLowerCase();
     final list = ids
         .map(profileForUserId)
@@ -6678,7 +7876,7 @@ class DemoRepository extends ChangeNotifier {
     try {
       final rows = await sb
           .from('notifications')
-          .select('id,user_id,actor_id,type,title,body,entity_id,entity_type,location_id,is_read,read_at,created_at')
+          .select('id,user_id,actor_id,type,kind,title,body,entity_id,entity_type,location_id,is_read,read_at,created_at')
           .eq('user_id', viewerId)
           .order('created_at', ascending: false)
           .limit(60);
@@ -8757,7 +9955,7 @@ class DemoRepository extends ChangeNotifier {
         final pool = <String>[];
         for (var i = 0; i < _profiles.length && pool.length < limit; i++) {
           final p = _profiles[(base + i) % _profiles.length];
-          final n = _displayNameForProfile(p).trim();
+          final n = _displayNameForProfile(p, userFallback: _normalizeDisplayUsername(p.username, fallback: p.userId)).trim();
           if (n.isEmpty) continue;
           if (!pool.contains(n)) pool.add(n);
         }
@@ -8799,7 +9997,7 @@ class DemoRepository extends ChangeNotifier {
       for (final id in ids) {
         final p = profilesById[id];
         if (p == null) continue;
-        final n = _displayNameForProfile(p).trim();
+        final n = _displayNameForProfile(p, userFallback: _normalizeDisplayUsername(p.username, fallback: p.userId)).trim();
         if (n.isEmpty) continue;
         if (!names.contains(n)) names.add(n);
       }
@@ -9683,18 +10881,42 @@ class DemoRepository extends ChangeNotifier {
   List<ThreadModel> threadsFor(SessionState session, {String query = ''}) {
     if (!session.isAuthenticated) return const [];
     final q = query.trim().toLowerCase();
+    final viewerId = session is AuthSession ? session.userId : '';
     final visible = _threads.where((t) {
+      if (supabase != null && !t.isGroup && !t.id.startsWith('dm:')) return false;
       if (!t.isGroup) return true;
       final communityId = t.communityId;
       if (communityId == null) return false;
       final c = findCommunity(communityId);
       if (c == null) return true;
-      return c.viewerStatus != CommunityViewerStatus.none;
+      return c.viewerStatus == CommunityViewerStatus.approved;
     });
     final filtered = q.isEmpty
         ? visible.toList(growable: false)
         : visible.where((t) {
-            return t.peerName.toLowerCase().contains(q) || t.peerUsername.toLowerCase().contains(q);
+            var name = t.peerName;
+            var username = t.peerUsername;
+            if (t.isGroup) {
+              final c = t.communityId == null ? null : findCommunity(t.communityId!);
+              name = c?.name ?? name;
+            } else {
+              var peerId = t.peerUserId;
+              if (peerId == viewerId) {
+                final messages = _messagesByThread[t.id] ?? const <MessageModel>[];
+                for (final m in messages) {
+                  if (m.senderId != viewerId) {
+                    peerId = m.senderId;
+                    break;
+                  }
+                }
+              }
+              final p = profileForUserId(peerId);
+              if (p != null) {
+                name = _displayNameForProfile(p, userFallback: _normalizeDisplayUsername(p.username, fallback: p.userId));
+                username = _usernameForProfile(p, userId: p.userId);
+              }
+            }
+            return name.toLowerCase().contains(q) || username.toLowerCase().contains(q);
           }).toList(growable: false);
     return List.unmodifiable(filtered);
   }
@@ -9733,6 +10955,35 @@ class DemoRepository extends ChangeNotifier {
   }
 
   ThreadModel openOrCreateThreadWith(ProfileModel peer) {
+    final viewerId = _viewerUserId.trim();
+    if (supabase != null && !isOffline && _looksLikeUuid(viewerId) && _looksLikeUuid(peer.userId)) {
+      if (viewerId == peer.userId) {
+        final now = DateTime.now();
+        return ThreadModel(
+          id: _directDmThreadIdForUsers(viewerId, peer.userId),
+          peerUserId: peer.userId,
+          peerName: _displayNameForProfile(peer, userFallback: _normalizeDisplayUsername(peer.username, fallback: peer.userId)),
+          peerUsername: _usernameForProfile(peer, userId: peer.userId),
+          peerIsVerified: peer.isVerified,
+          lastMessage: '',
+          lastAt: now,
+        );
+      }
+      final threadId = _directDmThreadIdForUsers(viewerId, peer.userId);
+      for (final t in _threads) {
+        if (t.id == threadId) return t;
+      }
+      final now = DateTime.now();
+      return ThreadModel(
+        id: threadId,
+        peerUserId: peer.userId,
+        peerName: _displayNameForProfile(peer, userFallback: _normalizeDisplayUsername(peer.username, fallback: peer.userId)),
+        peerUsername: _usernameForProfile(peer, userId: peer.userId),
+        peerIsVerified: peer.isVerified,
+        lastMessage: '',
+        lastAt: now,
+      );
+    }
     for (final t in _threads) {
       if (t.peerUserId == peer.userId) return t;
     }
@@ -9740,7 +10991,7 @@ class DemoRepository extends ChangeNotifier {
     final thread = ThreadModel(
       id: 't${now.microsecondsSinceEpoch}',
       peerUserId: peer.userId,
-      peerName: _displayNameForProfile(peer),
+      peerName: _displayNameForProfile(peer, userFallback: _normalizeDisplayUsername(peer.username, fallback: peer.userId)),
       peerUsername: _usernameForProfile(peer, userId: peer.userId),
       peerIsVerified: peer.isVerified,
       lastMessage: '',
@@ -9753,7 +11004,7 @@ class DemoRepository extends ChangeNotifier {
     return thread;
   }
 
-  ThreadModel openOrCreateCommunityThread(String communityId) {
+  ThreadModel openOrCreateCommunityThread(String communityId, {String? nameFallback, String? usernameFallback}) {
     for (final t in _threads) {
       if (t.isGroup && t.communityId == communityId) return t;
     }
@@ -9762,8 +11013,8 @@ class DemoRepository extends ChangeNotifier {
     final thread = ThreadModel(
       id: 'tg_$communityId',
       peerUserId: 'community:$communityId',
-      peerName: c?.name ?? 'Comunidade',
-      peerUsername: 'grupo',
+      peerName: c?.name ?? nameFallback ?? communityId,
+      peerUsername: usernameFallback ?? 'group',
       peerIsVerified: false,
       lastMessage: '',
       lastAt: now,
@@ -9786,7 +11037,12 @@ class DemoRepository extends ChangeNotifier {
     if (i < 0) return;
     final t = _threads[i];
     if (t.unreadCount == 0) return;
-    _threads[i] = t.copyWith(unreadCount: 0);
+    final updated = t.copyWith(unreadCount: 0);
+    _threads = [
+      ..._threads.take(i),
+      updated,
+      ..._threads.skip(i + 1),
+    ];
     notifyListeners();
     _schedulePersistDirect();
   }
@@ -9795,7 +11051,12 @@ class DemoRepository extends ChangeNotifier {
     final i = _threads.indexWhere((t) => t.id == threadId);
     if (i < 0) return;
     final t = _threads[i];
-    _threads[i] = t.copyWith(isMuted: !t.isMuted);
+    final updated = t.copyWith(isMuted: !t.isMuted);
+    _threads = [
+      ..._threads.take(i),
+      updated,
+      ..._threads.skip(i + 1),
+    ];
     notifyListeners();
     _schedulePersistDirect();
   }
@@ -9812,6 +11073,10 @@ class DemoRepository extends ChangeNotifier {
     if (supabase != null && t?.isGroup == true && t?.communityId != null) {
       await _sendCommunityTextMessage(t!.communityId!, senderId, text);
       return;
+    }
+    if (supabase != null && !isOffline && (t?.isGroup != true)) {
+      final ok = await _sendDirectTextMessage(threadId: threadId, senderId: senderId, text: text);
+      if (ok) return;
     }
     final now = DateTime.now();
     final next = MessageModel(
@@ -9831,6 +11096,360 @@ class DemoRepository extends ChangeNotifier {
     _schedulePersistDirect();
 
     await _resolveSend(threadId, next.id);
+  }
+
+  String _directDmThreadIdForUsers(String a, String b) {
+    final aa = a.trim();
+    final bb = b.trim();
+    if (aa.compareTo(bb) <= 0) return 'dm:$aa:$bb';
+    return 'dm:$bb:$aa';
+  }
+
+  String? _directPeerIdFromDmThreadId(String threadId, {required String viewerId}) {
+    final raw = threadId.trim();
+    if (!raw.startsWith('dm:')) return null;
+    final parts = raw.split(':');
+    if (parts.length != 3) return null;
+    final a = parts[1].trim();
+    final b = parts[2].trim();
+    if (a.isEmpty || b.isEmpty) return null;
+    if (a == viewerId) return b;
+    if (b == viewerId) return a;
+    return null;
+  }
+
+  Future<void> refreshDirectForViewer(String viewerId, {bool force = false}) async {
+    final sb = supabase;
+    if (sb == null) return;
+    if (isOffline) return;
+    final id = viewerId.trim();
+    if (!_looksLikeUuid(id)) return;
+    try {
+      final rows = await sb.from('direct_thread_members').select('thread_id').eq('user_id', id);
+      final threadIds = <String>[];
+      for (final raw in (rows as List<dynamic>)) {
+        final r = raw as Map<String, dynamic>;
+        final tid = r['thread_id']?.toString().trim();
+        if (tid == null || tid.isEmpty) continue;
+        threadIds.add(tid);
+      }
+      if (threadIds.isEmpty) return;
+
+      final lastRows = await sb
+          .from('direct_messages')
+          .select('thread_id,sender_id,body,created_at')
+          .inFilter('thread_id', threadIds)
+          .order('created_at', ascending: false)
+          .limit(240);
+      final lastByThread = <String, Map<String, dynamic>>{};
+      for (final raw in (lastRows as List<dynamic>)) {
+        final r = raw as Map<String, dynamic>;
+        final tid = r['thread_id']?.toString().trim();
+        if (tid == null || tid.isEmpty) continue;
+        lastByThread.putIfAbsent(tid, () => r);
+      }
+
+      final peerIds = <String>{};
+      for (final tid in threadIds) {
+        final peerId = _directPeerIdFromDmThreadId(tid, viewerId: id);
+        if (peerId != null && _looksLikeUuid(peerId)) peerIds.add(peerId);
+      }
+      if (peerIds.isNotEmpty) {
+        final profilesById = await _fetchProfilesByIds(peerIds);
+        for (final p in profilesById.values) {
+          _upsertProfile(p);
+        }
+      }
+
+      final byId = <String, ThreadModel>{for (final t in _threads) t.id: t};
+      for (final tid in threadIds) {
+        if (!tid.startsWith('dm:')) continue;
+        final peerId = _directPeerIdFromDmThreadId(tid, viewerId: id) ?? '';
+        if (peerId.isEmpty) continue;
+        final p = profileForUserId(peerId);
+        final fallback = _normalizeDisplayUsername(p?.username ?? '', fallback: peerId);
+        final name = p == null ? fallback : _displayNameForProfile(p, userFallback: fallback);
+        final username = p == null ? '' : _usernameForProfile(p, userId: peerId);
+        final last = lastByThread[tid];
+        if (last == null) continue;
+        final lastAt = DateTime.tryParse(last['created_at']?.toString() ?? '')?.toLocal() ?? DateTime.now();
+        final lastBody = last['body']?.toString() ?? '';
+        byId[tid] = ThreadModel(
+          id: tid,
+          peerUserId: peerId,
+          peerName: name,
+          peerUsername: username,
+          peerIsVerified: p?.isVerified ?? false,
+          lastMessage: lastBody,
+          lastAt: lastAt,
+        );
+      }
+      final next = byId.values.where((t) => t.isGroup || t.id.startsWith('dm:')).toList(growable: false)
+        ..sort((a, b) => b.lastAt.compareTo(a.lastAt));
+      _threads = List.unmodifiable(next);
+      notifyListeners();
+      _schedulePersistDirect();
+    } catch (_) {}
+  }
+
+  Future<void> refreshDirectMessages(String threadId, {bool force = false}) async {
+    final sb = supabase;
+    if (sb == null) return;
+    if (isOffline) return;
+    final tid = threadId.trim();
+    if (tid.isEmpty) return;
+    if (!tid.startsWith('dm:')) return;
+    if (!force && _directMessagesLoadedFor.contains(tid)) return;
+    _directMessagesLoadedFor.add(tid);
+    await _ensureDirectChatSubscribed(tid);
+    try {
+      final rows = await sb
+          .from('direct_messages')
+          .select('id,thread_id,sender_id,body,created_at')
+          .eq('thread_id', tid)
+          .order('created_at', ascending: false)
+          .limit(80);
+      final raw = (rows as List<dynamic>).cast<Map<String, dynamic>>();
+      final userIds = raw.map((r) => r['sender_id']?.toString()).whereType<String>().where((v) => v.isNotEmpty).toSet();
+      if (userIds.isNotEmpty) {
+        final profilesById = await _fetchProfilesByIds(userIds);
+        for (final p in profilesById.values) {
+          _upsertProfile(p);
+        }
+      }
+      final serverList = <MessageModel>[];
+      for (final r in raw.reversed) {
+        final id = r['id']?.toString();
+        final senderId = r['sender_id']?.toString();
+        if (id == null || id.isEmpty) continue;
+        if (senderId == null || senderId.isEmpty) continue;
+        serverList.add(
+          MessageModel(
+            id: id,
+            threadId: tid,
+            senderId: senderId,
+            kind: MessageKind.text,
+            sentAt: DateTime.tryParse(r['created_at']?.toString() ?? '')?.toLocal() ?? DateTime.now(),
+            sendStatus: MessageSendStatus.sent,
+            text: (r['body'] as String?) ?? '',
+          ),
+        );
+      }
+      final local = (_messagesByThread[tid] ?? const <MessageModel>[]);
+      bool looksSame(MessageModel a, MessageModel b) {
+        if (a.senderId != b.senderId) return false;
+        if (a.kind != b.kind) return false;
+        final ta = (a.text ?? '').trim();
+        final tb = (b.text ?? '').trim();
+        if (ta.isEmpty || tb.isEmpty) return false;
+        if (ta != tb) return false;
+        final dt = a.sentAt.difference(b.sentAt).inSeconds.abs();
+        return dt <= 180;
+      }
+
+      if (serverList.isEmpty && local.isNotEmpty) {
+        notifyListeners();
+        return;
+      }
+
+      final merged = <MessageModel>[...serverList];
+      for (final m in local) {
+        final isLocalTemp = m.id.startsWith('tmp:');
+        final isPending = m.sendStatus != MessageSendStatus.sent;
+        if (!isLocalTemp && !isPending) continue;
+        final matched = serverList.any((s) => looksSame(m, s));
+        if (matched) continue;
+        merged.add(m);
+      }
+      merged.sort((a, b) => a.sentAt.compareTo(b.sentAt));
+
+      _lastDirectSendError = null;
+      _messagesByThread[tid] = List.unmodifiable(merged);
+      final last = merged.isEmpty ? null : merged.last;
+      if (last != null) {
+        _bumpThread(tid, preview: last.text ?? '', at: last.sentAt);
+      }
+      notifyListeners();
+      _schedulePersistDirect();
+    } catch (e) {
+      final msg = _shortSupabaseError(e).trim();
+      _lastDirectSendError = msg.isEmpty ? 'Falha ao carregar mensagens.' : msg;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _ensureDirectChatSubscribed(String threadId) async {
+    final sb = supabase;
+    if (sb == null) return;
+    if (isOffline) return;
+    if (_directChatChannelsByThreadId.containsKey(threadId)) return;
+    final channel = sb.channel('realtime:direct_messages:$threadId');
+    channel.onPostgresChanges(
+      event: PostgresChangeEvent.all,
+      schema: 'public',
+      table: 'direct_messages',
+      filter: PostgresChangeFilter(
+        type: PostgresChangeFilterType.eq,
+        column: 'thread_id',
+        value: threadId,
+      ),
+      callback: (_) {
+        if (isOffline) return;
+        _directMessagesLoadedFor.remove(threadId);
+        unawaited(refreshDirectMessages(threadId, force: true));
+        final viewerId = _viewerUserId.trim();
+        if (viewerId.isNotEmpty) {
+          unawaited(refreshDirectForViewer(viewerId, force: true));
+        }
+      },
+    );
+    channel.subscribe();
+    _directChatChannelsByThreadId[threadId] = channel;
+  }
+
+  Future<void> _ensureDirectDmThread({
+    required String threadId,
+    required String viewerId,
+    required String peerId,
+  }) async {
+    final sb = supabase;
+    if (sb == null) return;
+    if (isOffline) return;
+    if (!_looksLikeUuid(viewerId) || !_looksLikeUuid(peerId)) return;
+    if (viewerId == peerId) return;
+    try {
+      await sb.from('direct_threads').upsert(
+        <String, Object?>{
+        'id': threadId,
+        'kind': 'dm',
+        'created_by': viewerId,
+        },
+        onConflict: 'id',
+        ignoreDuplicates: true,
+      );
+    } catch (_) {}
+    try {
+      await sb.from('direct_thread_members').upsert(
+        <String, Object?>{
+          'thread_id': threadId,
+          'user_id': viewerId,
+        },
+        onConflict: 'thread_id,user_id',
+        ignoreDuplicates: true,
+      );
+    } catch (_) {}
+    try {
+      await sb.from('direct_thread_members').upsert(
+        <String, Object?>{
+          'thread_id': threadId,
+          'user_id': peerId,
+        },
+        onConflict: 'thread_id,user_id',
+        ignoreDuplicates: true,
+      );
+    } catch (_) {}
+  }
+
+  Future<void> ensureDirectDmMembershipForThread(String threadId, {required String viewerId}) async {
+    if (supabase == null) return;
+    if (isOffline) return;
+    final tid = threadId.trim();
+    final v = viewerId.trim();
+    if (!tid.startsWith('dm:')) return;
+    if (!_looksLikeUuid(v)) return;
+    final peerId = _directPeerIdFromDmThreadId(tid, viewerId: v);
+    if (peerId == null) return;
+    await _ensureDirectDmThread(threadId: tid, viewerId: v, peerId: peerId);
+    await _fetchProfilesByIds({peerId});
+    notifyListeners();
+  }
+
+  Future<bool> _sendDirectTextMessage({
+    required String threadId,
+    required String senderId,
+    required String text,
+  }) async {
+    final sb = supabase;
+    if (sb == null) return false;
+    if (isOffline) return false;
+    final viewerId = sb.auth.currentUser?.id;
+    if (viewerId == null || viewerId != senderId) return false;
+    final tid = threadId.trim();
+    if (!tid.startsWith('dm:')) return false;
+    final peerId = _directPeerIdFromDmThreadId(tid, viewerId: senderId);
+    if (peerId == null) return false;
+    if (peerId == senderId) {
+      _lastDirectSendError = 'Você não pode mandar mensagem para si mesmo.';
+      final now = DateTime.now();
+      final tempId = 'tmp:${now.microsecondsSinceEpoch}';
+      final next = MessageModel(
+        id: tempId,
+        threadId: tid,
+        senderId: senderId,
+        kind: MessageKind.text,
+        sentAt: now,
+        sendStatus: MessageSendStatus.failed,
+        text: text,
+      );
+      final list = (_messagesByThread[tid] ?? const <MessageModel>[]).toList()..add(next);
+      _messagesByThread[tid] = List.unmodifiable(list);
+      notifyListeners();
+      _schedulePersistDirect();
+      return true;
+    }
+
+    _lastDirectSendError = null;
+    final now = DateTime.now();
+    final tempId = 'tmp:${now.microsecondsSinceEpoch}';
+    final next = MessageModel(
+      id: tempId,
+      threadId: tid,
+      senderId: senderId,
+      kind: MessageKind.text,
+      sentAt: now,
+      sendStatus: MessageSendStatus.sending,
+      text: text,
+    );
+    final list = (_messagesByThread[tid] ?? const <MessageModel>[]).toList()..add(next);
+    _messagesByThread[tid] = List.unmodifiable(list);
+    _bumpThread(tid, preview: text, at: now);
+    notifyListeners();
+    _schedulePersistDirect();
+
+    try {
+      await _ensureDirectDmThread(threadId: tid, viewerId: senderId, peerId: peerId);
+      await _ensureDirectChatSubscribed(tid);
+      await sb.from('direct_messages').insert(<String, Object?>{
+        'thread_id': tid,
+        'sender_id': senderId,
+        'body': text,
+      });
+      _lastDirectSendError = null;
+      final cur = (_messagesByThread[tid] ?? const <MessageModel>[]).toList();
+      final i = cur.indexWhere((m) => m.id == tempId);
+      if (i >= 0) {
+        cur[i] = cur[i].copyWith(sendStatus: MessageSendStatus.sent);
+        _messagesByThread[tid] = List.unmodifiable(cur);
+        notifyListeners();
+        _schedulePersistDirect();
+      }
+      _directMessagesLoadedFor.remove(tid);
+      await refreshDirectMessages(tid, force: true);
+      unawaited(refreshDirectForViewer(senderId, force: true));
+      return true;
+    } catch (e) {
+      final msg = _shortSupabaseError(e).trim();
+      _lastDirectSendError = msg.isEmpty ? 'Falha ao enviar mensagem.' : msg;
+      final cur = (_messagesByThread[tid] ?? const <MessageModel>[]).toList();
+      final i = cur.indexWhere((m) => m.id == tempId);
+      if (i >= 0) {
+        cur[i] = cur[i].copyWith(sendStatus: MessageSendStatus.failed);
+        _messagesByThread[tid] = List.unmodifiable(cur);
+      }
+      notifyListeners();
+      _schedulePersistDirect();
+      return true;
+    }
   }
 
   Future<void> sendImageMessage(String threadId, String senderId,
@@ -9893,6 +11512,53 @@ class DemoRepository extends ChangeNotifier {
     if (i < 0) return;
     final m = list[i];
     if (m.sendStatus != MessageSendStatus.failed) return;
+    if (supabase != null && !isOffline && threadId.trim().startsWith('dm:')) {
+      final sb = supabase!;
+      final viewerId = sb.auth.currentUser?.id;
+      if (viewerId != null && viewerId == m.senderId) {
+        final body = (m.text ?? '').trim();
+        if (body.isNotEmpty) {
+          list[i] = m.copyWith(sendStatus: MessageSendStatus.sending);
+          _messagesByThread[threadId] = list;
+          notifyListeners();
+          _schedulePersistDirect();
+          try {
+            _lastDirectSendError = null;
+            await ensureDirectDmMembershipForThread(threadId.trim(), viewerId: viewerId);
+            await sb.from('direct_messages').insert(<String, Object?>{
+              'thread_id': threadId.trim(),
+              'sender_id': viewerId,
+              'body': body,
+            });
+            _lastDirectSendError = null;
+            final cur2 = (_messagesByThread[threadId] ?? []).toList();
+            final ii2 = cur2.indexWhere((x) => x.id == messageId);
+            if (ii2 >= 0) {
+              cur2[ii2] = cur2[ii2].copyWith(sendStatus: MessageSendStatus.sent);
+              _messagesByThread[threadId] = cur2;
+              notifyListeners();
+              _schedulePersistDirect();
+            }
+            _directMessagesLoadedFor.remove(threadId.trim());
+            await refreshDirectMessages(threadId.trim(), force: true);
+            unawaited(refreshDirectForViewer(viewerId, force: true));
+            return;
+          } catch (e) {
+            final msg = _shortSupabaseError(e).trim();
+            _lastDirectSendError = msg.isEmpty ? 'Falha ao enviar mensagem.' : msg;
+            final cur = (_messagesByThread[threadId] ?? []).toList();
+            final ii = cur.indexWhere((x) => x.id == messageId);
+            if (ii >= 0) {
+              cur[ii] = cur[ii].copyWith(sendStatus: MessageSendStatus.failed);
+              _messagesByThread[threadId] = cur;
+            }
+            notifyListeners();
+            _schedulePersistDirect();
+            return;
+          }
+        }
+      }
+    }
     list[i] = m.copyWith(sendStatus: MessageSendStatus.sending);
     _messagesByThread[threadId] = list;
     notifyListeners();
@@ -9918,9 +11584,9 @@ class DemoRepository extends ChangeNotifier {
     final i = _threads.indexWhere((t) => t.id == threadId);
     if (i < 0) return;
     final t = _threads[i];
-    _threads[i] = t.copyWith(lastMessage: preview, lastAt: at);
+    final updated = t.copyWith(lastMessage: preview, lastAt: at);
     _threads = [
-      _threads[i],
+      updated,
       ..._threads.where((x) => x.id != threadId),
     ];
     _schedulePersistDirect();
@@ -10906,6 +12572,7 @@ class _AtalaiaAppState extends State<AtalaiaApp> {
     }
     loc ??= tz.local;
 
+    final l10n = t(context);
     final nowUtc = DateTime.now().toUtc();
     final runs = await _repo.fetchUpcomingAssignedPrayerRuns(
       userId: session.userId,
@@ -10913,7 +12580,7 @@ class _AtalaiaAppState extends State<AtalaiaApp> {
       toUtc: nowUtc.add(const Duration(days: 60)),
     );
 
-    final details = _LocalNotifications.instance.reminderDetails();
+    final details = _LocalNotifications.instance.reminderDetails(l10n);
     final nowLocal = tz.TZDateTime.now(loc);
     final nextIds = <int>{};
 
@@ -10921,7 +12588,7 @@ class _AtalaiaAppState extends State<AtalaiaApp> {
       final runId = r.runId;
       final startsAtUtc = r.startsAtUtc;
       final startLocal = tz.TZDateTime.from(startsAtUtc, loc);
-      final title = (r.title ?? '').trim().isEmpty ? 'Escala de oração' : r.title!.trim();
+      final title = (r.title ?? '').trim().isEmpty ? l10n.prayerRunDefaultTitle : r.title!.trim();
       final communityName = r.communityName;
 
       final items = <({Duration before, String label})>[
@@ -10938,7 +12605,7 @@ class _AtalaiaAppState extends State<AtalaiaApp> {
         final body = communityName == null || communityName.trim().isEmpty ? title : '$title • ${communityName.trim()}';
         await _LocalNotifications.instance.plugin.zonedSchedule(
           id,
-          'Lembrete de escala (${it.label})',
+          l10n.notificationPrayerRunReminderTitle(it.label),
           body,
           scheduleAt,
           details,
@@ -11240,6 +12907,9 @@ class _AtalaiaAppState extends State<AtalaiaApp> {
                   return MaterialPageRoute(builder: (_) => const AccountSettingsScreen());
                 case Routes.settingsPrivacy:
                   return MaterialPageRoute(builder: (_) => const PrivacySettingsScreen());
+                case Routes.legal:
+                  final args = settings.arguments as LegalScreenArgs?;
+                  return MaterialPageRoute(builder: (_) => LegalScreen(args: args));
                 case Routes.settingsLocale:
                   return MaterialPageRoute(builder: (_) => const LocaleSettingsScreen());
                 case Routes.verificationPaywall:
@@ -11341,6 +13011,8 @@ class _AtalaiaAppState extends State<AtalaiaApp> {
                 case Routes.regionPrayer:
                   final args = settings.arguments as RegionPrayerArgs;
                   return MaterialPageRoute(builder: (_) => PrayerSessionScreen(args: args));
+                case Routes.playlistLibrary:
+                  return MaterialPageRoute(builder: (_) => const PlaylistLibraryScreen());
               }
               return null;
                     },
@@ -11383,6 +13055,7 @@ abstract final class Routes {
   static const settings = '/settings';
   static const settingsAccount = '/settings/account';
   static const settingsPrivacy = '/settings/privacy';
+  static const legal = '/legal';
   static const settingsLocale = '/settings/locale';
   static const moderation = '/moderation';
   static const adminAds = '/admin/ads';
@@ -11416,6 +13089,7 @@ abstract final class Routes {
   static const regionDetail = '/map/region/detail';
   static const regionPrayerHistory = '/map/region/prayers';
   static const regionPrayer = '/map/region/pray';
+  static const playlistLibrary = '/playlists';
   static const shofarIconPreview = '/icons/shofar';
 }
 
@@ -11425,6 +13099,7 @@ final class ChatArgs {
     required this.peerName,
     required this.peerUsername,
     required this.peerIsVerified,
+    this.peerAvatarUrl,
     this.communityId,
   });
 
@@ -11432,15 +13107,17 @@ final class ChatArgs {
   final String peerName;
   final String peerUsername;
   final bool peerIsVerified;
+  final String? peerAvatarUrl;
   final String? communityId;
 
   bool get isGroup => communityId != null;
 }
 
 final class DirectInboxArgs {
-  const DirectInboxArgs({this.selectForPostId});
+  const DirectInboxArgs({this.selectForPostId, this.selectForSharedText});
 
   final String? selectForPostId;
+  final String? selectForSharedText;
 }
 
 final class PostDetailArgs {
@@ -11632,30 +13309,34 @@ final class RegionPrayerArgs {
 }
 
 void showPermissionSnackBar(BuildContext context) {
+  final l10n = t(context);
   showAtalaiaSnackBar(
     context,
-    'Você não tem permissão',
+    l10n.commonNoPermission,
     kind: AtalaiaSnackKind.warning,
-    actionLabel: 'Voltar',
+    actionLabel: l10n.commonBack,
     onAction: () => Navigator.of(context).maybePop(),
   );
 }
 
-void showErrorSnackBar(BuildContext context, {String message = 'Algo deu errado', required VoidCallback onRetry}) {
+void showErrorSnackBar(BuildContext context, {String? message, required VoidCallback onRetry}) {
+  final l10n = t(context);
+  final msg = (message ?? '').trim().isEmpty ? l10n.commonSomethingWentWrong : message!.trim();
   showAtalaiaSnackBar(
     context,
-    message,
+    msg,
     kind: AtalaiaSnackKind.error,
-    actionLabel: 'Tentar',
+    actionLabel: l10n.commonRetry,
     onAction: onRetry,
   );
 }
 
 void showCtaSnackBar(BuildContext context) {
+  final l10n = t(context);
   showAtalaiaSnackBar(
     context,
-    'Entre para continuar',
-    actionLabel: 'Entrar',
+    l10n.profileFollowToggleSignIn,
+    actionLabel: l10n.commonSignIn,
     onAction: () => showAuthGate(context),
   );
 }
@@ -11665,10 +13346,11 @@ void showInfoSnackBar(BuildContext context, String message) {
 }
 
 void showLoginSnackBar(BuildContext context, {required String message}) {
+  final l10n = t(context);
   showAtalaiaSnackBar(
     context,
     message,
-    actionLabel: 'Entrar',
+    actionLabel: l10n.commonSignIn,
     onAction: () => showAuthGate(context),
   );
 }
@@ -11680,10 +13362,11 @@ class OfflineBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = t(context);
     return MaterialBanner(
-      content: const Text('Sem conexão'),
+      content: Text(l10n.commonNoConnection),
       actions: [
-        AtalaiaTextButton(label: 'Tentar novamente', onPressed: onRetry),
+        AtalaiaTextButton(label: l10n.commonRetry, onPressed: onRetry),
       ],
     );
   }
@@ -11883,8 +13566,8 @@ Future<void> showLogoutConfirmDialog(BuildContext context) async {
   final repo = RepoScope.of(context);
   final result = await showAtalaiaConfirmDialog(
     context,
-    title: 'Sair do Atalaia?',
-    confirmLabel: 'Sair',
+    title: t(context).logoutConfirmTitle,
+    confirmLabel: t(context).settingsLogout,
     isDestructive: true,
   );
 
@@ -11942,6 +13625,7 @@ class _AuthGateScreenState extends State<AuthGateScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final l10n = t(context);
     return Scaffold(
       body: SafeArea(
         child: Padding(
@@ -11962,26 +13646,26 @@ class _AuthGateScreenState extends State<AuthGateScreen> {
                 ),
               ),
               const SizedBox(height: 14),
-              const Text(
-                'Entre para orar, comentar e participar',
+              Text(
+                l10n.authGateTitle,
                 textAlign: TextAlign.center,
-                style: TextStyle(fontWeight: FontWeight.w900, fontSize: 20),
+                style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 20),
               ),
               const SizedBox(height: 8),
               Text(
-                'Para continuar, entre ou crie uma conta.',
+                l10n.authGateSubtitle,
                 textAlign: TextAlign.center,
                 style: TextStyle(color: cs.outline),
               ),
               const SizedBox(height: 18),
               PrimaryButton(
-                label: 'Entrar',
+                label: l10n.commonSignIn,
                 loading: _navigating,
                 onPressed: _navigating ? null : () => unawaited(_openAuthFlow(Routes.login)),
               ),
               const SizedBox(height: 10),
               SecondaryButton(
-                label: 'Criar conta',
+                label: l10n.authCreateAccount,
                 onPressed: _navigating ? null : () => unawaited(_openAuthFlow(Routes.signup)),
               ),
               const Spacer(),
@@ -12003,6 +13687,7 @@ class StartupScreen extends StatefulWidget {
 class _StartupScreenState extends State<StartupScreen> {
   var _seenOnboarding = false;
   var _loading = true;
+  var _acceptedLegal = false;
   var _authBootWait = true;
   Timer? _authBootWaitTimer;
 
@@ -12013,6 +13698,7 @@ class _StartupScreenState extends State<StartupScreen> {
       if (!mounted) return;
       setState(() {
         _seenOnboarding = prefs.getBool('seen_onboarding') ?? false;
+        _acceptedLegal = prefs.getBool(_legalAcceptedKeyV1) ?? false;
         _loading = false;
       });
     });
@@ -12054,6 +13740,19 @@ class _StartupScreenState extends State<StartupScreen> {
         onFinish: () => unawaited(_finishAndOpenAuthGate()),
       );
     }
+    if (!_acceptedLegal) {
+      return LegalAcceptanceScreen(
+        onOpenTermsPrivacy: (tab) async {
+          await Navigator.of(context).pushNamed(Routes.legal, arguments: LegalScreenArgs(initialTab: tab));
+        },
+        onAccept: () async {
+          final sp = await SharedPreferences.getInstance();
+          await sp.setBool(_legalAcceptedKeyV1, true);
+          if (!mounted) return;
+          setState(() => _acceptedLegal = true);
+        },
+      );
+    }
     final session = SessionScope.of(context).value;
     if (session is! AuthSession) {
       final repo = RepoScope.of(context);
@@ -12091,11 +13790,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final l10n = t(context);
 
     return Scaffold(
       appBar: AppBar(
         actions: [
-          AtalaiaTextButton(label: 'Pular', onPressed: widget.onFinish),
+          AtalaiaTextButton(label: l10n.onboardingSkip, onPressed: widget.onFinish),
         ],
       ),
       body: SafeArea(
@@ -12105,17 +13805,17 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               child: PageView(
                 controller: _controller,
                 onPageChanged: (i) => setState(() => _index = i),
-                children: const [
+                children: [
                   _OnboardingSlide(
-                    title: 'Ore por pessoas e regiões',
+                    title: l10n.onboardingPrayerRegionsTitle,
                     icon: Icons.volunteer_activism_outlined,
                   ),
                   _OnboardingSlide(
-                    title: 'Peça oração ou testemunhe',
+                    title: l10n.onboardingRequestOrTestifyTitle,
                     icon: Icons.forum_outlined,
                   ),
                   _OnboardingSlide(
-                    title: 'Conecte-se no mapa do mundo',
+                    title: l10n.onboardingMapWorldTitle,
                     icon: Icons.public_outlined,
                   ),
                 ],
@@ -12145,7 +13845,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   SizedBox(
                     width: double.infinity,
                     child: PrimaryButton(
-                      label: _index < 2 ? 'Próximo' : 'Começar',
+                      label: _index < 2 ? l10n.onboardingNext : l10n.onboardingStart,
                       onPressed: () {
                         if (_index < 2) {
                           _controller.nextPage(
@@ -12243,16 +13943,16 @@ class _LoginScreenState extends State<LoginScreen> {
     if (repo.isOffline) {
       setState(() {
         _loading = false;
-        _error = 'Sem conexão';
+        _error = DemoRepository._authErrNoConnection;
       });
       return;
     }
     if (repo.supabase == null) {
       setState(() {
         _loading = false;
-        _error = 'Supabase não configurado';
+        _error = DemoRepository._authErrSupabaseNotConfigured;
       });
-      showAtalaiaSnackBar(context, 'Supabase não configurado', kind: AtalaiaSnackKind.error);
+      showAtalaiaSnackBar(context, t(context).authSupabaseNotConfigured, kind: AtalaiaSnackKind.error);
       return;
     }
 
@@ -12265,7 +13965,7 @@ class _LoginScreenState extends State<LoginScreen> {
     if (s == null) {
       setState(() {
         _loading = false;
-        _error = repo.lastAuthError ?? 'Email ou senha inválidos';
+        _error = repo.lastAuthError ?? DemoRepository._authErrInvalidCredentials;
       });
       return;
     }
@@ -12309,7 +14009,7 @@ class _LoginScreenState extends State<LoginScreen> {
           appBar: AppBar(
             leading: AtalaiaIconButton(
               icon: Icons.arrow_back,
-              label: 'Voltar',
+              label: t(context).commonBack,
               onPressed: _loading ? null : () => Navigator.of(context).maybePop(),
             ),
           ),
@@ -12335,7 +14035,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             child: Icon(Icons.volunteer_activism, color: cs.onSecondaryContainer, size: 34),
                           ),
                           const SizedBox(height: 10),
-                          const Text('Bem-vindo', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 22)),
+                          Text(t(context).authWelcomeTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 22)),
                         ],
                       ),
                     ),
@@ -12344,29 +14044,31 @@ class _LoginScreenState extends State<LoginScreen> {
                       controller: _email,
                       keyboardType: TextInputType.emailAddress,
                       autofillHints: const [AutofillHints.email],
-                      labelText: 'Email',
+                      labelText: t(context).authEmailLabel,
                       onChanged: (_) => setState(() {}),
                     ),
                     const SizedBox(height: 12),
                     PasswordField(
                       controller: _password,
-                      labelText: 'Senha',
+                      labelText: t(context).authPasswordLabel,
+                      showPasswordLabel: t(context).authShowPassword,
+                      hidePasswordLabel: t(context).authHidePassword,
                       onChanged: (_) => setState(() {}),
                     ),
                     if (_error != null) ...[
                       const SizedBox(height: 10),
-                      Text(_error!, style: TextStyle(color: cs.error, fontWeight: FontWeight.w700)),
+                      Text(_authErrorText(context, _error), style: TextStyle(color: cs.error, fontWeight: FontWeight.w700)),
                     ],
                     const SizedBox(height: 16),
                     SizedBox(
                       width: double.infinity,
-                      child: PrimaryButton(label: 'Entrar', loading: _loading, onPressed: canSubmit ? _submit : null),
+                      child: PrimaryButton(label: t(context).commonSignIn, loading: _loading, onPressed: canSubmit ? _submit : null),
                     ),
                     const SizedBox(height: 12),
                     Align(
                       alignment: Alignment.centerLeft,
                       child: AtalaiaTextButton(
-                        label: 'Esqueci minha senha',
+                        label: t(context).authForgotPassword,
                         onPressed: _loading ? null : () => Navigator.of(context).pushNamed(Routes.resetPassword),
                       ),
                     ),
@@ -12374,7 +14076,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     SizedBox(
                       width: double.infinity,
                       child: SecondaryButton(
-                        label: 'Criar conta',
+                        label: t(context).authCreateAccount,
                         onPressed: _loading ? null : () => Navigator.of(context).pushNamed(Routes.signup),
                       ),
                     ),
@@ -12382,7 +14084,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       const SizedBox(height: 10),
                       Center(
                         child: AtalaiaTextButton(
-                          label: 'Configurar Supabase',
+                          label: t(context).authConfigureSupabase,
                           onPressed: _loading ? null : () => unawaited(showSupabaseSetupDialog(context)),
                         ),
                       ),
@@ -12459,23 +14161,25 @@ class _SignupScreenState extends State<SignupScreen> {
   }
 
   String? _validateUsername(DemoRepository repo, String value) {
+    final l10n = t(context);
     final v = value.trim();
-    if (v.length < 3) return 'Min 3 caracteres';
+    if (v.length < 3) return l10n.authUsernameMin3;
     final lower = v.toLowerCase();
     final ok = RegExp(r'^[a-z0-9._]+$').hasMatch(lower);
-    if (!ok) return 'Use apenas a-z, 0-9, . e _';
-    if (lower.contains(' ')) return 'Sem espaços';
-    if (repo.isUsernameTaken(lower)) return 'Username indisponível';
+    if (!ok) return l10n.authUsernameAllowedChars;
+    if (lower.contains(' ')) return l10n.authUsernameNoSpaces;
+    if (repo.isUsernameTaken(lower)) return l10n.authErrorUsernameUnavailable;
     return null;
   }
 
   void _revalidate() {
     final repo = RepoScope.of(context);
+    final l10n = t(context);
     setState(() {
-      _nameError = _name.text.trim().length < 2 ? 'Informe seu nome' : null;
+      _nameError = _name.text.trim().length < 2 ? l10n.authNameRequired : null;
       _usernameError = _validateUsername(repo, _username.text);
-      _emailError = _email.text.trim().contains('@') ? null : 'Email inválido';
-      _passwordError = _password.text.length >= 8 ? null : 'Senha min 8';
+      _emailError = _email.text.trim().contains('@') ? null : l10n.authEmailInvalid;
+      _passwordError = _password.text.length >= 8 ? null : l10n.authPasswordMin8;
     });
   }
 
@@ -12504,9 +14208,9 @@ class _SignupScreenState extends State<SignupScreen> {
     if (repo.supabase == null) {
       setState(() {
         _loading = false;
-        _emailError = 'Supabase não configurado';
+        _emailError = _authErrorText(context, DemoRepository._authErrSupabaseNotConfigured);
       });
-      showAtalaiaSnackBar(context, 'Supabase não configurado', kind: AtalaiaSnackKind.error);
+      showAtalaiaSnackBar(context, t(context).authSupabaseNotConfigured, kind: AtalaiaSnackKind.error);
       return;
     }
 
@@ -12518,24 +14222,37 @@ class _SignupScreenState extends State<SignupScreen> {
       password: _password.text,
     );
     if (s == null) {
-      final msg = repo.lastAuthError;
-      if (msg != null && msg.trim().isNotEmpty) {
-        final lower = msg.toLowerCase();
-        if (lower.contains('limite de envio de email') || lower.contains('rate limit')) {
+      final msg = repo.lastAuthError?.trim();
+      if (msg != null && msg.isNotEmpty) {
+        if (msg == DemoRepository._authErrRateLimit) {
           _startCooldown(const Duration(minutes: 2));
         }
-        if (lower.contains('username')) {
-          _usernameError = msg;
-        } else if (lower.contains('email')) {
-          _emailError = msg;
+        if (msg == DemoRepository._authErrUsernameUnavailable) {
+          _usernameError = _authErrorText(context, msg);
+        } else if (msg == DemoRepository._authErrEmailAlreadyRegistered) {
+          _emailError = _authErrorText(context, msg);
+        } else if (msg == DemoRepository._authErrNoConnection) {
+          _emailError = _authErrorText(context, msg);
+        } else if (msg == DemoRepository._authErrCreateAccountFailed) {
+          _emailError = _authErrorText(context, msg);
         } else {
-          _emailError = msg;
+          final lower = msg.toLowerCase();
+          if (lower.contains('rate limit')) {
+            _startCooldown(const Duration(minutes: 2));
+          }
+          if (lower.contains('username')) {
+            _usernameError = msg;
+          } else if (lower.contains('email')) {
+            _emailError = msg;
+          } else {
+            _emailError = msg;
+          }
         }
       }
       setState(() {
         _loading = false;
-        _emailError = repo.isEmailTaken(_email.text) ? 'Email já cadastrado' : _emailError;
-        _usernameError = repo.isUsernameTaken(_username.text) ? 'Username indisponível' : _usernameError;
+        _emailError = repo.isEmailTaken(_email.text) ? _authErrorText(context, DemoRepository._authErrEmailAlreadyRegistered) : _emailError;
+        _usernameError = repo.isUsernameTaken(_username.text) ? _authErrorText(context, DemoRepository._authErrUsernameUnavailable) : _usernameError;
       });
       return;
     }
@@ -12548,7 +14265,7 @@ class _SignupScreenState extends State<SignupScreen> {
     redirect.value = null;
 
     if (target?.routeName == null) {
-      Navigator.of(context).popUntil((r) => r.settings.name != Routes.signup);
+      Navigator.of(context).pushNamedAndRemoveUntil(Routes.root, (r) => false);
       return;
     }
 
@@ -12571,8 +14288,9 @@ class _SignupScreenState extends State<SignupScreen> {
     final repo = RepoScope.of(context);
     final canSubmit = _isValid() && !_loading;
     final cooldown = _cooldownRemaining;
+    final l10n = t(context);
     final submitLabel =
-        (cooldown != null && cooldown > Duration.zero) ? 'Aguarde ${cooldown.inSeconds}s' : 'Criar conta';
+        (cooldown != null && cooldown > Duration.zero) ? l10n.authWaitSeconds(cooldown.inSeconds) : l10n.authCreateAccount;
 
     return AnimatedBuilder(
       animation: repo,
@@ -12581,10 +14299,10 @@ class _SignupScreenState extends State<SignupScreen> {
           appBar: AppBar(
             leading: AtalaiaIconButton(
               icon: Icons.arrow_back,
-              label: 'Voltar',
+              label: t(context).commonBack,
               onPressed: _loading ? null : () => Navigator.of(context).maybePop(),
             ),
-            title: const Text('Criar conta', style: TextStyle(fontWeight: FontWeight.w800)),
+            title: Text(l10n.authCreateAccount, style: const TextStyle(fontWeight: FontWeight.w800)),
           ),
           body: Column(
             children: [
@@ -12596,7 +14314,7 @@ class _SignupScreenState extends State<SignupScreen> {
                   children: [
                     AtalaiaTextField(
                       controller: _name,
-                      labelText: 'Nome',
+                      labelText: l10n.authNameLabel,
                       errorText: _nameError,
                       textCapitalization: TextCapitalization.words,
                       onChanged: (_) => _revalidate(),
@@ -12604,7 +14322,7 @@ class _SignupScreenState extends State<SignupScreen> {
                     const SizedBox(height: 12),
                     AtalaiaTextField(
                       controller: _username,
-                      labelText: '@username',
+                      labelText: l10n.authUsernameLabel,
                       errorText: _usernameError,
                       onChanged: (_) => _revalidate(),
                     ),
@@ -12613,14 +14331,16 @@ class _SignupScreenState extends State<SignupScreen> {
                       controller: _email,
                       keyboardType: TextInputType.emailAddress,
                       autofillHints: const [AutofillHints.email],
-                      labelText: 'Email',
+                      labelText: l10n.authEmailLabel,
                       errorText: _emailError,
                       onChanged: (_) => _revalidate(),
                     ),
                     const SizedBox(height: 12),
                     PasswordField(
                       controller: _password,
-                      labelText: 'Senha',
+                      labelText: l10n.authPasswordLabel,
+                      showPasswordLabel: l10n.authShowPassword,
+                      hidePasswordLabel: l10n.authHidePassword,
                       errorText: _passwordError,
                       onChanged: (_) => _revalidate(),
                     ),
@@ -12629,8 +14349,19 @@ class _SignupScreenState extends State<SignupScreen> {
                       contentPadding: EdgeInsets.zero,
                       value: _accepted,
                       onChanged: _loading ? null : (v) => setState(() => _accepted = v ?? false),
-                      title: const Text('Aceito termos'),
+                      title: Text(l10n.authAcceptTerms),
                       controlAffinity: ListTileControlAffinity.leading,
+                    ),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: AtalaiaTextButton(
+                        label: l10n.settingsTermsPrivacy,
+                        onPressed: _loading
+                            ? null
+                            : () => unawaited(
+                                  Navigator.of(context).pushNamed(Routes.legal, arguments: const LegalScreenArgs(initialTab: LegalTab.terms)),
+                                ),
+                      ),
                     ),
                     const SizedBox(height: 10),
                     SizedBox(
@@ -12645,14 +14376,14 @@ class _SignupScreenState extends State<SignupScreen> {
                       const SizedBox(height: 10),
                       Center(
                         child: AtalaiaTextButton(
-                          label: 'Configurar Supabase',
+                          label: l10n.authConfigureSupabase,
                           onPressed: _loading ? null : () => unawaited(showSupabaseSetupDialog(context)),
                         ),
                       ),
                     ],
                     const SizedBox(height: 10),
                     AtalaiaTextButton(
-                      label: 'Já tenho conta → Entrar',
+                      label: l10n.authHaveAccountSignIn,
                       onPressed: _loading ? null : () => Navigator.of(context).pushReplacementNamed(Routes.login),
                     ),
                   ],
@@ -12696,7 +14427,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
     if (repo.isOffline) {
       setState(() {
         _loading = false;
-        _error = 'Sem conexão';
+        _error = DemoRepository._authErrNoConnection;
       });
       return;
     }
@@ -12704,7 +14435,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
     await Future<void>.delayed(const Duration(milliseconds: 450));
     await repo.requestPasswordReset(_email.text.trim());
     if (!mounted) return;
-    showAtalaiaSnackBar(context, 'Enviamos um email…');
+    showAtalaiaSnackBar(context, t(context).authResetEmailSentSnack);
     setState(() => _loading = false);
     Navigator.of(context).maybePop();
   }
@@ -12722,10 +14453,10 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
           appBar: AppBar(
             leading: AtalaiaIconButton(
               icon: Icons.arrow_back,
-              label: 'Voltar',
+              label: t(context).commonBack,
               onPressed: _loading ? null : () => Navigator.of(context).maybePop(),
             ),
-            title: const Text('Reset de senha', style: TextStyle(fontWeight: FontWeight.w800)),
+            title: Text(t(context).authResetPasswordTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
           ),
           body: Column(
             children: [
@@ -12737,22 +14468,22 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
                   children: [
                     AtalaiaTextField(
                       controller: _email,
-                      hintText: 'Email',
+                      hintText: t(context).authEmailLabel,
                       keyboardType: TextInputType.emailAddress,
                       textInputAction: TextInputAction.done,
-                      errorText: _error == 'Sem conexão' ? _error : null,
+                      errorText: _error == DemoRepository._authErrNoConnection ? _authErrorText(context, _error) : null,
                       onChanged: (_) => setState(() {}),
                       onSubmitted: (_) => canSubmit ? _submit() : null,
                     ),
-                    if (_error != null && _error != 'Sem conexão') ...[
+                    if (_error != null && _error != DemoRepository._authErrNoConnection) ...[
                       const SizedBox(height: 10),
-                      Text(_error!, style: TextStyle(color: cs.error, fontWeight: FontWeight.w700)),
+                      Text(_authErrorText(context, _error), style: TextStyle(color: cs.error, fontWeight: FontWeight.w700)),
                     ],
                     const SizedBox(height: 14),
                     SizedBox(
                       width: double.infinity,
                       child: PrimaryButton(
-                        label: 'Enviar link',
+                        label: t(context).authSendLink,
                         onPressed: canSubmit ? _submit : null,
                         loading: _loading,
                       ),
@@ -12791,11 +14522,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget build(BuildContext context) {
     final repo = RepoScope.of(context);
     final session = SessionScope.of(context);
-    final l10n = t(context);
-
     return AnimatedBuilder(
       animation: Listenable.merge([repo, session]),
       builder: (context, _) {
+        final l10n = t(context);
         final s = session.value;
         final isAuthenticated = s is AuthSession;
         final isModerator = isAuthenticated && (repo.profileForUserId(s.userId)?.isModerator ?? false);
@@ -12873,13 +14603,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 leading: const Icon(Icons.volunteer_activism_outlined),
                                 title: Text(l10n.settingsNotifications),
                                 trailing: const Icon(Icons.chevron_right),
-                                onTap: () => showInfoSnackBar(context, 'Fase 2'),
+                                onTap: () => showInfoSnackBar(context, l10n.commonPhase2),
                               ),
                               ListTile(
                                 leading: const Icon(Icons.dark_mode_outlined),
                                 title: Text(l10n.settingsTheme),
                                 trailing: const Icon(Icons.chevron_right),
-                                onTap: () => showInfoSnackBar(context, 'Fase 2'),
+                                onTap: () => showInfoSnackBar(context, l10n.commonPhase2),
+                              ),
+                              ListTile(
+                                leading: const Icon(Icons.library_music_outlined),
+                                title: Text(l10n.playlistLibraryTitle),
+                                trailing: const Icon(Icons.chevron_right),
+                                onTap: () => Navigator.of(context).pushNamed(Routes.playlistLibrary),
                               ),
                               const Divider(height: 26),
                               _SettingsSectionTitle(l10n.settingsSectionSupport),
@@ -12887,22 +14623,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 leading: const Icon(Icons.help_outline),
                                 title: Text(l10n.settingsHelp),
                                 trailing: const Icon(Icons.chevron_right),
-                                onTap: () => showInfoSnackBar(context, 'Fase 2'),
+                                onTap: () => showInfoSnackBar(context, l10n.commonPhase2),
                               ),
                               ListTile(
                                 leading: const Icon(Icons.policy_outlined),
                                 title: Text(l10n.settingsTermsPrivacy),
-                                trailing: const Icon(Icons.open_in_new),
-                                onTap: () async {
-                                  final uri = Uri.parse('https://atalaia.app/termos');
-                                  final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
-                                  if (!context.mounted) return;
-                                  if (!ok) {
-                                    await Clipboard.setData(ClipboardData(text: uri.toString()));
-                                    if (!context.mounted) return;
-                                    showInfoSnackBar(context, l10n.commonLinkCopied);
-                                  }
-                                },
+                                trailing: const Icon(Icons.chevron_right),
+                                onTap: () => Navigator.of(context).pushNamed(Routes.legal),
                               ),
                               if (kDebugMode)
                                 ListTile(
@@ -12954,12 +14681,13 @@ class _ModerationScreenState extends State<ModerationScreen> {
     required ReportModel report,
     required DemoRepository repo,
   }) async {
+    final l10n = t(context);
     String labelFor(ReportStatus s) {
       return switch (s) {
-        ReportStatus.open => 'Aberta',
-        ReportStatus.reviewing => 'Em análise',
-        ReportStatus.resolved => 'Resolvida',
-        ReportStatus.dismissed => 'Dispensada',
+        ReportStatus.open => l10n.reportsStatusOpen,
+        ReportStatus.reviewing => l10n.reportsStatusReviewing,
+        ReportStatus.resolved => l10n.reportsStatusResolved,
+        ReportStatus.dismissed => l10n.reportsStatusDismissed,
       };
     }
 
@@ -12975,24 +14703,24 @@ class _ModerationScreenState extends State<ModerationScreen> {
             children: [
               ListTile(
                 leading: const Icon(Icons.search_outlined),
-                title: Text('Marcar como "${labelFor(ReportStatus.reviewing)}"'),
+                title: Text(l10n.moderationMarkAs(labelFor(ReportStatus.reviewing))),
                 onTap: () => Navigator.pop(ctx, 'reviewing'),
               ),
               ListTile(
                 leading: const Icon(Icons.check_circle_outline),
-                title: Text('Marcar como "${labelFor(ReportStatus.resolved)}"'),
+                title: Text(l10n.moderationMarkAs(labelFor(ReportStatus.resolved))),
                 onTap: () => Navigator.pop(ctx, 'resolved'),
               ),
               ListTile(
                 leading: const Icon(Icons.block_outlined),
-                title: Text('Marcar como "${labelFor(ReportStatus.dismissed)}"'),
+                title: Text(l10n.moderationMarkAs(labelFor(ReportStatus.dismissed))),
                 onTap: () => Navigator.pop(ctx, 'dismissed'),
               ),
               if (canRemoveContent) ...[
                 const Divider(height: 18),
                 ListTile(
                   leading: Icon(Icons.delete_outline, color: Theme.of(ctx).colorScheme.error),
-                  title: Text('Remover conteúdo', style: TextStyle(color: Theme.of(ctx).colorScheme.error)),
+                  title: Text(l10n.moderationRemoveContent, style: TextStyle(color: Theme.of(ctx).colorScheme.error)),
                   onTap: () => Navigator.pop(ctx, 'remove'),
                 ),
               ],
@@ -13000,29 +14728,29 @@ class _ModerationScreenState extends State<ModerationScreen> {
                 const Divider(height: 18),
                 ListTile(
                   leading: const Icon(Icons.warning_amber_outlined),
-                  title: const Text('Advertir usuário'),
+                  title: Text(l10n.moderationWarnUser),
                   onTap: () => Navigator.pop(ctx, 'warn'),
                 ),
                 ListTile(
                   leading: const Icon(Icons.timer_off_outlined),
-                  title: const Text('Suspender 1 dia'),
+                  title: Text(l10n.moderationSuspendDays(1)),
                   onTap: () => Navigator.pop(ctx, 'suspend_1d'),
                 ),
                 ListTile(
                   leading: const Icon(Icons.timer_off_outlined),
-                  title: const Text('Suspender 7 dias'),
+                  title: Text(l10n.moderationSuspendDays(7)),
                   onTap: () => Navigator.pop(ctx, 'suspend_7d'),
                 ),
                 ListTile(
                   leading: const Icon(Icons.timer_off_outlined),
-                  title: const Text('Suspender 30 dias'),
+                  title: Text(l10n.moderationSuspendDays(30)),
                   onTap: () => Navigator.pop(ctx, 'suspend_30d'),
                 ),
               ],
               const Divider(height: 18),
               ListTile(
                 leading: const Icon(Icons.copy_all_outlined),
-                title: const Text('Copiar ID da denúncia'),
+                title: Text(l10n.moderationCopyReportId),
                 onTap: () => Navigator.pop(ctx, 'copy'),
               ),
               const SizedBox(height: 8),
@@ -13038,21 +14766,21 @@ class _ModerationScreenState extends State<ModerationScreen> {
       case 'reviewing':
         await repo.moderationSetReportStatus(reportId: report.id, status: ReportStatus.reviewing);
         if (!context.mounted) return;
-        showAtalaiaSnackBar(context, 'Denúncia marcada como em análise', kind: AtalaiaSnackKind.success);
+        showAtalaiaSnackBar(context, l10n.moderationReportMarkedReviewing, kind: AtalaiaSnackKind.success);
       case 'resolved':
         await repo.moderationSetReportStatus(reportId: report.id, status: ReportStatus.resolved);
         if (!context.mounted) return;
-        showAtalaiaSnackBar(context, 'Denúncia resolvida', kind: AtalaiaSnackKind.success);
+        showAtalaiaSnackBar(context, l10n.moderationReportResolved, kind: AtalaiaSnackKind.success);
       case 'dismissed':
         await repo.moderationSetReportStatus(reportId: report.id, status: ReportStatus.dismissed);
         if (!context.mounted) return;
-        showAtalaiaSnackBar(context, 'Denúncia dispensada', kind: AtalaiaSnackKind.success);
+        showAtalaiaSnackBar(context, l10n.moderationReportDismissed, kind: AtalaiaSnackKind.success);
       case 'remove':
         if (!canRemoveContent) return;
         final ok = await showAtalaiaConfirmDialog(
           context,
-          title: 'Remover conteúdo?',
-          confirmLabel: 'Remover',
+          title: l10n.moderationRemoveContentConfirmTitle,
+          confirmLabel: l10n.moderationRemoveContent,
           isDestructive: true,
         );
         if (!context.mounted) return;
@@ -13060,14 +14788,14 @@ class _ModerationScreenState extends State<ModerationScreen> {
           await repo.moderationRemoveContent(entityType: report.entityType, entityId: report.entityId);
           await repo.moderationSetReportStatus(reportId: report.id, status: ReportStatus.resolved);
           if (!context.mounted) return;
-          showAtalaiaSnackBar(context, 'Conteúdo removido', kind: AtalaiaSnackKind.success);
+          showAtalaiaSnackBar(context, l10n.moderationContentRemoved, kind: AtalaiaSnackKind.success);
         }
       case 'warn':
         final userId = report.reportedUserId;
         if (userId == null || userId.isEmpty) return;
         await repo.moderationWarnUser(userId: userId);
         if (!context.mounted) return;
-        showAtalaiaSnackBar(context, 'Advertência registrada', kind: AtalaiaSnackKind.success);
+        showAtalaiaSnackBar(context, l10n.moderationWarningRegistered, kind: AtalaiaSnackKind.success);
       case 'suspend_1d':
       case 'suspend_7d':
       case 'suspend_30d':
@@ -13080,20 +14808,20 @@ class _ModerationScreenState extends State<ModerationScreen> {
         };
         final ok = await showAtalaiaConfirmDialog(
           context,
-          title: 'Suspender usuário?',
-          confirmLabel: 'Suspender',
+          title: l10n.moderationSuspendUserConfirmTitle,
+          confirmLabel: l10n.moderationSuspendConfirmLabel,
           isDestructive: true,
         );
         if (!context.mounted) return;
         if (ok == true) {
           await repo.moderationSuspendUser(userId: userId, duration: duration);
           if (!context.mounted) return;
-          showAtalaiaSnackBar(context, 'Suspensão registrada', kind: AtalaiaSnackKind.success);
+          showAtalaiaSnackBar(context, l10n.moderationSuspensionRegistered, kind: AtalaiaSnackKind.success);
         }
       case 'copy':
         await Clipboard.setData(ClipboardData(text: report.id));
         if (!context.mounted) return;
-        showAtalaiaSnackBar(context, 'ID copiado', kind: AtalaiaSnackKind.success);
+        showAtalaiaSnackBar(context, t(context).commonIdCopied, kind: AtalaiaSnackKind.success);
       default:
         return;
     }
@@ -13110,9 +14838,9 @@ class _ModerationScreenState extends State<ModerationScreen> {
         final s = session.value;
         if (s is! AuthSession) {
           return Scaffold(
-            appBar: AppBar(title: const Text('Moderação', style: TextStyle(fontWeight: FontWeight.w800))),
+            appBar: AppBar(title: Text(t(context).settingsModeration, style: const TextStyle(fontWeight: FontWeight.w800))),
             body: Center(
-              child: PrimaryButton(label: 'Entrar para continuar', onPressed: () => showAuthGate(context)),
+              child: PrimaryButton(label: t(context).settingsSignInToContinue, onPressed: () => showAuthGate(context)),
             ),
           );
         }
@@ -13123,12 +14851,12 @@ class _ModerationScreenState extends State<ModerationScreen> {
             appBar: AppBar(
               leading: AtalaiaIconButton(
                 icon: Icons.arrow_back,
-                label: 'Voltar',
+                label: t(context).commonBack,
                 onPressed: () => Navigator.of(context).maybePop(),
               ),
-              title: const Text('Moderação', style: TextStyle(fontWeight: FontWeight.w800)),
+              title: Text(t(context).settingsModeration, style: const TextStyle(fontWeight: FontWeight.w800)),
             ),
-            body: const Center(child: Text('Acesso restrito')),
+            body: Center(child: Text(t(context).commonRestrictedAccess)),
           );
         }
 
@@ -13137,14 +14865,14 @@ class _ModerationScreenState extends State<ModerationScreen> {
           appBar: AppBar(
             leading: AtalaiaIconButton(
               icon: Icons.arrow_back,
-              label: 'Voltar',
+              label: t(context).commonBack,
               onPressed: () => Navigator.of(context).maybePop(),
             ),
-            title: const Text('Moderação', style: TextStyle(fontWeight: FontWeight.w800)),
+            title: Text(t(context).settingsModeration, style: const TextStyle(fontWeight: FontWeight.w800)),
             actions: [
               AtalaiaIconButton(
                 icon: Icons.refresh,
-                label: 'Atualizar',
+                label: t(context).commonRefresh,
                 onPressed: () => unawaited(repo.refreshModerationReports()),
               ),
             ],
@@ -13157,9 +14885,9 @@ class _ModerationScreenState extends State<ModerationScreen> {
                   onRefresh: repo.refreshModerationReports,
                   child: reports.isEmpty
                       ? ListView(
-                          children: const [
+                          children: [
                             SizedBox(height: 120),
-                            Center(child: Text('Nenhuma denúncia')),
+                            Center(child: Text(t(context).reportsEmpty)),
                           ],
                         )
                       : ListView.separated(
@@ -13168,21 +14896,22 @@ class _ModerationScreenState extends State<ModerationScreen> {
                           separatorBuilder: (_, __) => const SizedBox(height: 10),
                           itemBuilder: (context, index) {
                             final r = reports[index];
+                            final l10n = t(context);
                             final who = r.reportedUsername ?? r.reportedUserId ?? r.entityId;
                             final reporter = r.reporterUsername ?? r.reporterId;
                             final statusLabel = switch (r.status) {
-                              ReportStatus.open => 'aberta',
-                              ReportStatus.reviewing => 'em análise',
-                              ReportStatus.resolved => 'resolvida',
-                              ReportStatus.dismissed => 'dispensada',
+                              ReportStatus.open => l10n.reportsStatusOpen,
+                              ReportStatus.reviewing => l10n.reportsStatusReviewing,
+                              ReportStatus.resolved => l10n.reportsStatusResolved,
+                              ReportStatus.dismissed => l10n.reportsStatusDismissed,
                             };
                             final desc = (r.description ?? '').trim();
                             return Card(
                               child: ListTile(
                                 title: Text(r.reason, maxLines: 2, overflow: TextOverflow.ellipsis),
                                 subtitle: Text(
-                                  '${_reportEntityTypeToDb(r.entityType)} • $statusLabel\n'
-                                  'Alvo: $who • Repórter: $reporter${desc.isEmpty ? '' : '\n$desc'}',
+                                  '${_reportEntityTypeLabel(context, r.entityType)} • ${l10n.reportsStatus(statusLabel)}\n'
+                                  '${l10n.moderationTarget(who)} • ${l10n.moderationReporter(reporter)}${desc.isEmpty ? '' : '\n$desc'}',
                                   maxLines: 4,
                                   overflow: TextOverflow.ellipsis,
                                 ),
@@ -13206,7 +14935,7 @@ class _ModerationScreenState extends State<ModerationScreen> {
                                     case ReportEntityType.comment:
                                       final postId = repo.postIdForCommentId(r.entityId);
                                       if (postId == null) {
-                                        showAtalaiaSnackBar(context, 'Comentário não encontrado localmente');
+                                        showAtalaiaSnackBar(context, l10n.moderationCommentNotFoundLocally);
                                         return;
                                       }
                                       Navigator.of(context).pushNamed(
@@ -13214,7 +14943,7 @@ class _ModerationScreenState extends State<ModerationScreen> {
                                         arguments: CommentsArgs(postId: postId),
                                       );
                                     case ReportEntityType.story:
-                                      showAtalaiaSnackBar(context, 'Story (UI)');
+                                      showAtalaiaSnackBar(context, l10n.moderationStoryUiPlaceholder);
                                   }
                                 },
                                 trailing: IconButton(
@@ -13259,6 +14988,41 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
 
   String? _selectedAdvertiserId;
   String? _selectedCampaignId;
+
+  String _adsObjectiveLabel(BuildContext context, String raw) {
+    final l10n = t(context);
+    return switch (raw) {
+      'traffic' => l10n.adsObjectiveTraffic,
+      'awareness' => l10n.adsObjectiveAwareness,
+      'promotion' => l10n.adsObjectivePromotion,
+      'community' => l10n.adsObjectiveCommunity,
+      'event' => l10n.adsObjectiveEvent,
+      _ => raw,
+    };
+  }
+
+  String _adsScopeLabel(BuildContext context, String raw) {
+    final l10n = t(context);
+    return switch (raw) {
+      'world' => l10n.adsScopeWorld,
+      'country' => l10n.adsScopeCountry,
+      'state' => l10n.adsScopeState,
+      'city' => l10n.adsScopeCity,
+      'community' => l10n.adsScopeCommunity,
+      _ => raw,
+    };
+  }
+
+  String _adsPlacementLabel(BuildContext context, String raw) {
+    final l10n = t(context);
+    return switch (raw) {
+      'feed' => l10n.adsPlacementFeed,
+      'map_pin' => l10n.adsPlacementMapPin,
+      'story_slot' => l10n.adsPlacementStorySlot,
+      'community_feed' => l10n.adsPlacementCommunityFeed,
+      _ => raw,
+    };
+  }
 
   @override
   void initState() {
@@ -13472,20 +15236,20 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const Text('Novo anunciante', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+                      Text(t(context).adsNewAdvertiser, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
                       const SizedBox(height: 12),
                       AtalaiaTextField(
                         controller: name,
-                        labelText: 'Nome',
-                        hintText: 'Ex.: Livraria Ebenézer',
+                        labelText: t(context).adsFieldName,
+                        hintText: t(context).adsAdvertiserNameExample,
                         textInputAction: TextInputAction.next,
                         onChanged: (_) => setModalState(() {}),
                       ),
                       const SizedBox(height: 10),
                       AtalaiaTextField(
                         controller: email,
-                        labelText: 'Email (opcional)',
-                        hintText: 'contato@exemplo.com',
+                        labelText: t(context).adsFieldEmailOptional,
+                        hintText: t(context).adsAdvertiserEmailExample,
                         textInputAction: TextInputAction.next,
                         keyboardType: TextInputType.emailAddress,
                         onChanged: (_) {},
@@ -13493,20 +15257,20 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
                       const SizedBox(height: 10),
                       AtalaiaTextField(
                         controller: phone,
-                        labelText: 'Telefone (opcional)',
-                        hintText: '+55…',
+                        labelText: t(context).adsFieldPhoneOptional,
+                        hintText: t(context).adsAdvertiserPhoneExample,
                         textInputAction: TextInputAction.done,
                         keyboardType: TextInputType.phone,
                         onChanged: (_) {},
                       ),
                       const SizedBox(height: 14),
                       PrimaryButton(
-                        label: 'Salvar',
+                        label: t(context).commonSave,
                         onPressed: name.text.trim().isEmpty ? null : () => Navigator.pop(ctx, 'ok'),
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'Somente moderadores/admin podem criar.',
+                        t(context).adsOnlyModeratorsCanCreate,
                         style: TextStyle(color: cs.outline, fontSize: 12),
                         textAlign: TextAlign.center,
                       ),
@@ -13532,11 +15296,11 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
         'contact_phone': phoneValue.isEmpty ? null : phoneValue,
       });
       if (!mounted) return;
-      showAtalaiaSnackBar(context, 'Anunciante criado', kind: AtalaiaSnackKind.success);
+      showAtalaiaSnackBar(context, t(context).adsAdvertiserCreated, kind: AtalaiaSnackKind.success);
       await _refreshAdvertisers();
     } catch (_) {
       if (!mounted) return;
-      showAtalaiaSnackBar(context, 'Falha ao criar anunciante', kind: AtalaiaSnackKind.error);
+      showAtalaiaSnackBar(context, t(context).adsAdvertiserCreateFailed, kind: AtalaiaSnackKind.error);
     } finally {
       name.dispose();
       email.dispose();
@@ -13574,20 +15338,20 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const Text('Nova campanha', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+                      Text(t(context).adsNewCampaign, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
                       const SizedBox(height: 12),
                       AtalaiaTextField(
                         controller: title,
-                        labelText: 'Título',
-                        hintText: 'Ex.: Bíblia com desconto',
+                        labelText: t(context).campaignFieldTitle,
+                        hintText: t(context).adsCampaignTitleExample,
                         textInputAction: TextInputAction.next,
                         onChanged: (_) => setModalState(() {}),
                       ),
                       const SizedBox(height: 10),
                       AtalaiaTextField(
                         controller: desc,
-                        labelText: 'Descrição (opcional)',
-                        hintText: 'Contexto interno…',
+                        labelText: t(context).adsFieldDescriptionOptional,
+                        hintText: t(context).adsCampaignDescriptionHint,
                         maxLines: 3,
                         minLines: 2,
                         textInputAction: TextInputAction.newline,
@@ -13597,19 +15361,19 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
                       DropdownButtonFormField<String>(
                         key: ValueKey('ad_objective_$objective'),
                         initialValue: objective,
-                        decoration: const InputDecoration(labelText: 'Objetivo'),
-                        items: const [
-                          DropdownMenuItem(value: 'traffic', child: Text('Tráfego')),
-                          DropdownMenuItem(value: 'awareness', child: Text('Alcance')),
-                          DropdownMenuItem(value: 'promotion', child: Text('Promoção')),
-                          DropdownMenuItem(value: 'community', child: Text('Comunidade')),
-                          DropdownMenuItem(value: 'event', child: Text('Evento')),
+                        decoration: InputDecoration(labelText: t(context).adsFieldObjective),
+                        items: [
+                          DropdownMenuItem(value: 'traffic', child: Text(t(context).adsObjectiveTraffic)),
+                          DropdownMenuItem(value: 'awareness', child: Text(t(context).adsObjectiveAwareness)),
+                          DropdownMenuItem(value: 'promotion', child: Text(t(context).adsObjectivePromotion)),
+                          DropdownMenuItem(value: 'community', child: Text(t(context).adsObjectiveCommunity)),
+                          DropdownMenuItem(value: 'event', child: Text(t(context).adsObjectiveEvent)),
                         ],
                         onChanged: (v) => setModalState(() => objective = v ?? 'traffic'),
                       ),
                       const SizedBox(height: 14),
                       PrimaryButton(
-                        label: 'Criar',
+                        label: t(context).commonCreate,
                         onPressed: title.text.trim().isEmpty ? null : () => Navigator.pop(ctx, 'ok'),
                       ),
                       const SizedBox(height: 8),
@@ -13636,11 +15400,11 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
         'created_by': session.userId,
       });
       if (!mounted) return;
-      showAtalaiaSnackBar(context, 'Campanha criada (draft)', kind: AtalaiaSnackKind.success);
+      showAtalaiaSnackBar(context, t(context).adsCampaignCreatedDraft, kind: AtalaiaSnackKind.success);
       await _refreshCampaigns();
     } catch (_) {
       if (!mounted) return;
-      showAtalaiaSnackBar(context, 'Falha ao criar campanha', kind: AtalaiaSnackKind.error);
+      showAtalaiaSnackBar(context, t(context).adsCampaignCreateFailed, kind: AtalaiaSnackKind.error);
     } finally {
       title.dispose();
       desc.dispose();
@@ -13656,7 +15420,7 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
 
     final headline = TextEditingController();
     final body = TextEditingController();
-    final cta = TextEditingController(text: 'Saiba mais');
+    final cta = TextEditingController(text: t(context).adsLearnMore);
     final url = TextEditingController();
     var creativeType = 'text';
     var isActive = true;
@@ -13678,32 +15442,32 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const Text('Novo criativo', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+                      Text(t(context).adsNewCreative, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
                       const SizedBox(height: 12),
                       DropdownButtonFormField<String>(
                         key: ValueKey('ad_creative_type_$creativeType'),
                         initialValue: creativeType,
-                        decoration: const InputDecoration(labelText: 'Tipo'),
-                        items: const [
-                          DropdownMenuItem(value: 'text', child: Text('Texto')),
-                          DropdownMenuItem(value: 'image', child: Text('Imagem')),
-                          DropdownMenuItem(value: 'video', child: Text('Vídeo')),
+                        decoration: InputDecoration(labelText: t(context).adsFieldType),
+                        items: [
+                          DropdownMenuItem(value: 'text', child: Text(t(context).adsCreativeTypeText)),
+                          DropdownMenuItem(value: 'image', child: Text(t(context).adsCreativeTypeImage)),
+                          DropdownMenuItem(value: 'video', child: Text(t(context).adsCreativeTypeVideo)),
                         ],
                         onChanged: (v) => setModalState(() => creativeType = v ?? 'text'),
                       ),
                       const SizedBox(height: 10),
                       AtalaiaTextField(
                         controller: headline,
-                        labelText: 'Headline (opcional)',
-                        hintText: 'Ex.: Entrega rápida',
+                        labelText: t(context).adsFieldHeadlineOptional,
+                        hintText: t(context).adsHeadlineExample,
                         textInputAction: TextInputAction.next,
                         onChanged: (_) {},
                       ),
                       const SizedBox(height: 10),
                       AtalaiaTextField(
                         controller: body,
-                        labelText: 'Texto (opcional)',
-                        hintText: 'Mensagem…',
+                        labelText: t(context).adsFieldTextOptional,
+                        hintText: t(context).adsMessageHint,
                         maxLines: 3,
                         minLines: 2,
                         textInputAction: TextInputAction.newline,
@@ -13712,15 +15476,15 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
                       const SizedBox(height: 10),
                       AtalaiaTextField(
                         controller: cta,
-                        labelText: 'CTA (opcional)',
-                        hintText: 'Ex.: Comprar',
+                        labelText: t(context).adsFieldCtaOptional,
+                        hintText: t(context).adsCtaExample,
                         textInputAction: TextInputAction.next,
                         onChanged: (_) {},
                       ),
                       const SizedBox(height: 10),
                       AtalaiaTextField(
                         controller: url,
-                        labelText: 'URL de destino',
+                        labelText: t(context).adsFieldTargetUrl,
                         hintText: 'https://…',
                         textInputAction: TextInputAction.done,
                         keyboardType: TextInputType.url,
@@ -13730,11 +15494,11 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
                       SwitchListTile(
                         value: isActive,
                         onChanged: (v) => setModalState(() => isActive = v),
-                        title: const Text('Ativo'),
+                        title: Text(t(context).adsActive),
                       ),
                       const SizedBox(height: 8),
                       PrimaryButton(
-                        label: 'Criar',
+                        label: t(context).commonCreate,
                         onPressed: url.text.trim().isEmpty ? null : () => Navigator.pop(ctx, 'ok'),
                       ),
                       const SizedBox(height: 8),
@@ -13764,11 +15528,11 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
         'is_active': isActive,
       });
       if (!mounted) return;
-      showAtalaiaSnackBar(context, 'Criativo criado', kind: AtalaiaSnackKind.success);
+      showAtalaiaSnackBar(context, t(context).adsCreativeCreated, kind: AtalaiaSnackKind.success);
       await _refreshCreatives();
     } catch (_) {
       if (!mounted) return;
-      showAtalaiaSnackBar(context, 'Falha ao criar criativo', kind: AtalaiaSnackKind.error);
+      showAtalaiaSnackBar(context, t(context).adsCreativeCreateFailed, kind: AtalaiaSnackKind.error);
     } finally {
       headline.dispose();
       body.dispose();
@@ -13810,18 +15574,18 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const Text('Novo targeting', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+                      Text(t(context).adsNewTargeting, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
                       const SizedBox(height: 12),
                       DropdownButtonFormField<String>(
                         key: ValueKey('ad_target_scope_$scope'),
                         initialValue: scope,
-                        decoration: const InputDecoration(labelText: 'Escopo'),
-                        items: const [
-                          DropdownMenuItem(value: 'world', child: Text('Mundo')),
-                          DropdownMenuItem(value: 'country', child: Text('País')),
-                          DropdownMenuItem(value: 'state', child: Text('Estado')),
-                          DropdownMenuItem(value: 'city', child: Text('Cidade')),
-                          DropdownMenuItem(value: 'community', child: Text('Comunidade')),
+                        decoration: InputDecoration(labelText: t(context).adsFieldScope),
+                        items: [
+                          DropdownMenuItem(value: 'world', child: Text(t(context).adsScopeWorld)),
+                          DropdownMenuItem(value: 'country', child: Text(t(context).adsScopeCountry)),
+                          DropdownMenuItem(value: 'state', child: Text(t(context).adsScopeState)),
+                          DropdownMenuItem(value: 'city', child: Text(t(context).adsScopeCity)),
+                          DropdownMenuItem(value: 'community', child: Text(t(context).adsScopeCommunity)),
                         ],
                         onChanged: (v) => setModalState(() => scope = v ?? 'world'),
                       ),
@@ -13829,12 +15593,12 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
                       DropdownButtonFormField<String>(
                         key: ValueKey('ad_target_placement_$placement'),
                         initialValue: placement,
-                        decoration: const InputDecoration(labelText: 'Placement'),
-                        items: const [
-                          DropdownMenuItem(value: 'feed', child: Text('Feed')),
-                          DropdownMenuItem(value: 'map_pin', child: Text('Pin no mapa')),
-                          DropdownMenuItem(value: 'story_slot', child: Text('Story slot')),
-                          DropdownMenuItem(value: 'community_feed', child: Text('Feed da comunidade')),
+                        decoration: InputDecoration(labelText: t(context).adsFieldPlacement),
+                        items: [
+                          DropdownMenuItem(value: 'feed', child: Text(t(context).adsPlacementFeed)),
+                          DropdownMenuItem(value: 'map_pin', child: Text(t(context).adsPlacementMapPin)),
+                          DropdownMenuItem(value: 'story_slot', child: Text(t(context).adsPlacementStorySlot)),
+                          DropdownMenuItem(value: 'community_feed', child: Text(t(context).adsPlacementCommunityFeed)),
                         ],
                         onChanged: (v) => setModalState(() => placement = v ?? 'feed'),
                       ),
@@ -13842,15 +15606,15 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
                       if (needsLocation)
                         AtalaiaTextField(
                           controller: locationPath,
-                          labelText: 'Location path',
-                          hintText: 'Ex.: world/sa/br/sp/sao-paulo',
+                          labelText: t(context).adsFieldLocationPath,
+                          hintText: t(context).adsLocationPathExample,
                           textInputAction: TextInputAction.next,
                           onChanged: (_) => setModalState(() {}),
                         ),
                       if (needsCommunity)
                         AtalaiaTextField(
                           controller: communityId,
-                          labelText: 'Community ID (uuid)',
+                          labelText: t(context).adsFieldCommunityId,
                           hintText: '…',
                           textInputAction: TextInputAction.next,
                           onChanged: (_) => setModalState(() {}),
@@ -13858,7 +15622,7 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
                       const SizedBox(height: 10),
                       AtalaiaTextField(
                         controller: priority,
-                        labelText: 'Prioridade (int)',
+                        labelText: t(context).adsFieldPriority,
                         hintText: '0',
                         textInputAction: TextInputAction.next,
                         keyboardType: TextInputType.number,
@@ -13868,11 +15632,11 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
                       SwitchListTile(
                         value: isActive,
                         onChanged: (v) => setModalState(() => isActive = v),
-                        title: const Text('Ativo'),
+                        title: Text(t(context).adsActive),
                       ),
                       const SizedBox(height: 8),
                       PrimaryButton(
-                        label: 'Criar',
+                        label: t(context).commonCreate,
                         onPressed: () => Navigator.pop(ctx, 'ok'),
                       ),
                       const SizedBox(height: 8),
@@ -13896,10 +15660,10 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
       String? locationIdValue;
       String? communityIdValue;
       if (scopeValue == 'community') {
-        if (!_looksLikeUuid(communityIdValueText)) throw StateError('Community inválida');
+        if (!_looksLikeUuid(communityIdValueText)) throw StateError(t(context).adsInvalidCommunity);
         communityIdValue = communityIdValueText;
       } else if (scopeValue != 'world') {
-        if (locationPathValue.isEmpty) throw StateError('Path vazio');
+        if (locationPathValue.isEmpty) throw StateError(t(context).adsEmptyPath);
         locationIdValue = await repo.locationIdByPath(locationPathValue);
         if (!_looksLikeUuid(locationIdValue)) throw StateError('Local não encontrado');
       }
@@ -13914,11 +15678,11 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
         'is_active': isActiveValue,
       });
       if (!mounted) return;
-      showAtalaiaSnackBar(context, 'Targeting criado', kind: AtalaiaSnackKind.success);
+      showAtalaiaSnackBar(context, t(context).adsTargetingCreated, kind: AtalaiaSnackKind.success);
       await _refreshTargets();
     } catch (_) {
       if (!mounted) return;
-      showAtalaiaSnackBar(context, 'Falha ao criar targeting', kind: AtalaiaSnackKind.error);
+      showAtalaiaSnackBar(context, t(context).adsTargetingCreateFailed, kind: AtalaiaSnackKind.error);
     } finally {
       locationPath.dispose();
       communityId.dispose();
@@ -13933,7 +15697,7 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
     final campaignId = _selectedCampaignId;
     if (!_looksLikeUuid(campaignId)) return;
     if (_creatives.isEmpty) {
-      showAtalaiaSnackBar(context, 'Crie um criativo antes', kind: AtalaiaSnackKind.warning);
+      showAtalaiaSnackBar(context, t(context).adsCreateCreativeFirst, kind: AtalaiaSnackKind.warning);
       return;
     }
 
@@ -13959,12 +15723,12 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      const Text('Novo pin patrocinado', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+                      Text(t(context).adsNewSponsoredPin, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
                       const SizedBox(height: 12),
                       DropdownButtonFormField<String>(
                         key: ValueKey('ad_pin_creative_$creativeId'),
                         initialValue: creativeId,
-                        decoration: const InputDecoration(labelText: 'Criativo'),
+                        decoration: InputDecoration(labelText: t(context).adsFieldCreative),
                         items: [
                           for (final c in _creatives)
                             DropdownMenuItem(
@@ -13977,16 +15741,16 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
                       const SizedBox(height: 10),
                       AtalaiaTextField(
                         controller: locationPath,
-                        labelText: 'Location path',
-                        hintText: 'Ex.: world/sa/br/sp/sao-paulo',
+                        labelText: t(context).adsFieldLocationPath,
+                        hintText: t(context).adsLocationPathExample,
                         textInputAction: TextInputAction.next,
                         onChanged: (_) => setModalState(() {}),
                       ),
                       const SizedBox(height: 10),
                       AtalaiaTextField(
                         controller: pinLabel,
-                        labelText: 'Label (opcional)',
-                        hintText: 'Ex.: Patrocinado',
+                        labelText: t(context).adsFieldLabelOptional,
+                        hintText: t(context).adsPinLabelExample,
                         textInputAction: TextInputAction.done,
                         onChanged: (_) {},
                       ),
@@ -13994,11 +15758,11 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
                       SwitchListTile(
                         value: isActive,
                         onChanged: (v) => setModalState(() => isActive = v),
-                        title: const Text('Ativo'),
+                        title: Text(t(context).adsActive),
                       ),
                       const SizedBox(height: 8),
                       PrimaryButton(
-                        label: 'Criar',
+                        label: t(context).commonCreate,
                         onPressed: locationPath.text.trim().isEmpty ? null : () => Navigator.pop(ctx, 'ok'),
                       ),
                       const SizedBox(height: 8),
@@ -14018,8 +15782,8 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
       final isActiveValue = isActive;
 
       final locId = await repo.locationIdByPath(locationPathValue);
-      if (!_looksLikeUuid(locId)) throw StateError('Local não encontrado');
-      if (!_looksLikeUuid(creativeIdValue)) throw StateError('Criativo inválido');
+      if (!_looksLikeUuid(locId)) throw StateError(t(context).adsLocationNotFound);
+      if (!_looksLikeUuid(creativeIdValue)) throw StateError(t(context).adsInvalidCreative);
 
       await sb.from('sponsored_map_pins').insert(<String, Object?>{
         'campaign_id': campaignId,
@@ -14029,11 +15793,11 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
         'is_active': isActiveValue,
       });
       if (!mounted) return;
-      showAtalaiaSnackBar(context, 'Pin criado', kind: AtalaiaSnackKind.success);
+      showAtalaiaSnackBar(context, t(context).adsPinCreated, kind: AtalaiaSnackKind.success);
       await _refreshPins();
     } catch (_) {
       if (!mounted) return;
-      showAtalaiaSnackBar(context, 'Falha ao criar pin', kind: AtalaiaSnackKind.error);
+      showAtalaiaSnackBar(context, t(context).adsPinCreateFailed, kind: AtalaiaSnackKind.error);
     } finally {
       locationPath.dispose();
       pinLabel.dispose();
@@ -14048,10 +15812,10 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
       await sb.from('ad_campaigns').update(<String, Object?>{'status': status}).eq('id', campaignId);
       if (!mounted) return;
       await _refreshCampaigns();
-      showAtalaiaSnackBar(context, 'Status atualizado', kind: AtalaiaSnackKind.success);
+      showAtalaiaSnackBar(context, t(context).adsStatusUpdated, kind: AtalaiaSnackKind.success);
     } catch (_) {
       if (!mounted) return;
-      showAtalaiaSnackBar(context, 'Falha ao atualizar status', kind: AtalaiaSnackKind.error);
+      showAtalaiaSnackBar(context, t(context).adsStatusUpdateFailed, kind: AtalaiaSnackKind.error);
     }
   }
 
@@ -14063,11 +15827,14 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
     return AnimatedBuilder(
       animation: Listenable.merge([repo, session]),
       builder: (context, _) {
+        final l10n = t(context);
         final s = session.value;
         if (s is! AuthSession) {
           return Scaffold(
-            appBar: AppBar(title: const Text('Anúncios', style: TextStyle(fontWeight: FontWeight.w800))),
-            body: Center(child: PrimaryButton(label: 'Entrar para continuar', onPressed: () => showAuthGate(context))),
+            appBar: AppBar(title: Text(t(context).settingsAds, style: const TextStyle(fontWeight: FontWeight.w800))),
+            body: Center(
+              child: PrimaryButton(label: t(context).settingsSignInToContinue, onPressed: () => showAuthGate(context)),
+            ),
           );
         }
 
@@ -14077,12 +15844,12 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
             appBar: AppBar(
               leading: AtalaiaIconButton(
                 icon: Icons.arrow_back,
-                label: 'Voltar',
+                label: t(context).commonBack,
                 onPressed: () => Navigator.of(context).maybePop(),
               ),
-              title: const Text('Anúncios', style: TextStyle(fontWeight: FontWeight.w800)),
+              title: Text(t(context).settingsAds, style: const TextStyle(fontWeight: FontWeight.w800)),
             ),
-            body: const Center(child: Text('Acesso restrito')),
+            body: Center(child: Text(t(context).commonRestrictedAccess)),
           );
         }
 
@@ -14093,14 +15860,14 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
           appBar: AppBar(
             leading: AtalaiaIconButton(
               icon: Icons.arrow_back,
-              label: 'Voltar',
+              label: t(context).commonBack,
               onPressed: () => Navigator.of(context).maybePop(),
             ),
-            title: const Text('Anúncios', style: TextStyle(fontWeight: FontWeight.w800)),
+            title: Text(t(context).settingsAds, style: const TextStyle(fontWeight: FontWeight.w800)),
             actions: [
               AtalaiaIconButton(
                 icon: Icons.refresh,
-                label: 'Atualizar',
+                label: t(context).commonRefresh,
                 onPressed: () => unawaited(_refreshAdvertisers()),
               ),
             ],
@@ -14109,9 +15876,9 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
             children: [
               if (repo.isOffline) OfflineBanner(onRetry: () => repo.setOffline(false)),
               if (!hasBackend)
-                const Padding(
+                Padding(
                   padding: EdgeInsets.all(16),
-                  child: Text('Supabase indisponível para administrar anúncios.'),
+                  child: Text(l10n.adsSupabaseUnavailable),
                 ),
               Expanded(
                 child: ListView(
@@ -14119,22 +15886,22 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
                   children: [
                     Row(
                       children: [
-                        const Expanded(child: Text('Anunciantes', style: TextStyle(fontWeight: FontWeight.w900))),
+                        Expanded(child: Text(l10n.adsAdvertisersSection, style: const TextStyle(fontWeight: FontWeight.w900))),
                         TextButton.icon(
                           onPressed: hasBackend ? () => unawaited(_createAdvertiser()) : null,
                           icon: const Icon(Icons.add),
-                          label: const Text('Novo'),
+                          label: Text(l10n.adsNew),
                         ),
                       ],
                     ),
                     if (_loadingAdvertisers) const Padding(padding: EdgeInsets.all(12), child: LinearProgressIndicator()),
                     if (!_loadingAdvertisers && _advertisers.isEmpty)
-                      const Padding(padding: EdgeInsets.all(12), child: Text('Nenhum anunciante')),
+                      Padding(padding: const EdgeInsets.all(12), child: Text(l10n.adsNoAdvertisers)),
                     for (final a in _advertisers)
                       Card(
                         child: ListTile(
                           title: Text((a['name'] as String?) ?? '', style: const TextStyle(fontWeight: FontWeight.w800)),
-                          subtitle: Text((a['is_active'] == true) ? 'Ativo' : 'Inativo'),
+                          subtitle: Text((a['is_active'] == true) ? l10n.adsActive : l10n.adsInactive),
                           trailing: _selectedAdvertiserId == a['id']?.toString() ? const Icon(Icons.check) : null,
                           onTap: () {
                             final id = a['id']?.toString();
@@ -14155,22 +15922,22 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
                     const SizedBox(height: 16),
                     Row(
                       children: [
-                        const Expanded(child: Text('Campanhas', style: TextStyle(fontWeight: FontWeight.w900))),
+                        Expanded(child: Text(l10n.adsCampaignsSection, style: const TextStyle(fontWeight: FontWeight.w900))),
                         TextButton.icon(
                           onPressed: hasBackend && _looksLikeUuid(_selectedAdvertiserId) ? () => unawaited(_createCampaign()) : null,
                           icon: const Icon(Icons.add),
-                          label: const Text('Nova'),
+                          label: Text(l10n.adsNew),
                         ),
                       ],
                     ),
                     if (_loadingCampaigns) const Padding(padding: EdgeInsets.all(12), child: LinearProgressIndicator()),
                     if (!_loadingCampaigns && _campaigns.isEmpty)
-                      const Padding(padding: EdgeInsets.all(12), child: Text('Nenhuma campanha')),
+                      Padding(padding: const EdgeInsets.all(12), child: Text(l10n.adsNoCampaigns)),
                     for (final c in _campaigns)
                       Card(
                         child: ListTile(
                           title: Text((c['title'] as String?) ?? '', style: const TextStyle(fontWeight: FontWeight.w800)),
-                          subtitle: Text('${c['status']} • ${c['objective']}'),
+                          subtitle: Text('${c['status']} • ${_adsObjectiveLabel(context, c['objective']?.toString() ?? '')}'),
                           trailing: PopupMenuButton<String>(
                             onSelected: (v) {
                               if (v == 'select') {
@@ -14185,10 +15952,10 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
                               unawaited(_setCampaignStatus(id!, v));
                             },
                             itemBuilder: (_) => [
-                              const PopupMenuItem(value: 'select', child: Text('Selecionar')),
-                              const PopupMenuItem(value: 'active', child: Text('Ativar')),
-                              const PopupMenuItem(value: 'paused', child: Text('Pausar')),
-                              const PopupMenuItem(value: 'completed', child: Text('Concluir')),
+                              PopupMenuItem(value: 'select', child: Text(l10n.adsSelect)),
+                              PopupMenuItem(value: 'active', child: Text(l10n.adsActivate)),
+                              PopupMenuItem(value: 'paused', child: Text(l10n.adsPause)),
+                              PopupMenuItem(value: 'completed', child: Text(l10n.adsComplete)),
                             ],
                           ),
                           selected: _selectedCampaignId == c['id']?.toString(),
@@ -14203,70 +15970,74 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
                     const SizedBox(height: 16),
                     Row(
                       children: [
-                        const Expanded(child: Text('Criativos', style: TextStyle(fontWeight: FontWeight.w900))),
+                        Expanded(child: Text(l10n.adsCreativesSection, style: const TextStyle(fontWeight: FontWeight.w900))),
                         TextButton.icon(
                           onPressed: hasBackend && _looksLikeUuid(_selectedCampaignId) ? () => unawaited(_createCreative()) : null,
                           icon: const Icon(Icons.add),
-                          label: const Text('Novo'),
+                          label: Text(l10n.adsNew),
                         ),
                       ],
                     ),
                     if (_loadingCreatives) const Padding(padding: EdgeInsets.all(12), child: LinearProgressIndicator()),
                     if (!_loadingCreatives && _selectedCampaignId != null && _creatives.isEmpty)
-                      const Padding(padding: EdgeInsets.all(12), child: Text('Nenhum criativo')),
+                      Padding(padding: const EdgeInsets.all(12), child: Text(l10n.adsNoCreatives)),
                     for (final cr in _creatives)
                       Card(
                         child: ListTile(
                           title: Text((cr['headline'] as String?)?.trim().isEmpty ?? true ? (cr['id']?.toString() ?? '') : (cr['headline'] as String?)!),
-                          subtitle: Text('${cr['creative_type']} • ${(cr['is_active'] == true) ? 'ativo' : 'inativo'}'),
+                          subtitle: Text('${cr['creative_type']} • ${(cr['is_active'] == true) ? l10n.adsActive.toLowerCase() : l10n.adsInactive.toLowerCase()}'),
                         ),
                       ),
                     const SizedBox(height: 16),
                     Row(
                       children: [
-                        const Expanded(child: Text('Targeting', style: TextStyle(fontWeight: FontWeight.w900))),
+                        Expanded(child: Text(l10n.adsTargetingSection, style: const TextStyle(fontWeight: FontWeight.w900))),
                         TextButton.icon(
                           onPressed: hasBackend && _looksLikeUuid(_selectedCampaignId) ? () => unawaited(_createTarget()) : null,
                           icon: const Icon(Icons.add),
-                          label: const Text('Novo'),
+                          label: Text(l10n.adsNew),
                         ),
                       ],
                     ),
                     if (_loadingTargets) const Padding(padding: EdgeInsets.all(12), child: LinearProgressIndicator()),
                     if (!_loadingTargets && _selectedCampaignId != null && _targets.isEmpty)
-                      const Padding(padding: EdgeInsets.all(12), child: Text('Nenhum targeting')),
+                      Padding(padding: const EdgeInsets.all(12), child: Text(l10n.adsNoTargeting)),
                     for (final t in _targets)
                       Card(
                         child: ListTile(
-                          title: Text('${t['placement']} • ${t['scope']} • prio ${t['priority']}'),
-                          subtitle: Text((t['is_active'] == true) ? 'ativo' : 'inativo'),
+                          title: Text(
+                            '${_adsPlacementLabel(context, t['placement']?.toString() ?? '')} • '
+                            '${_adsScopeLabel(context, t['scope']?.toString() ?? '')} • '
+                            '${l10n.adsPriorityShort} ${t['priority']}',
+                          ),
+                          subtitle: Text((t['is_active'] == true) ? l10n.adsActive.toLowerCase() : l10n.adsInactive.toLowerCase()),
                         ),
                       ),
                     const SizedBox(height: 16),
                     Row(
                       children: [
-                        const Expanded(child: Text('Pins patrocinados', style: TextStyle(fontWeight: FontWeight.w900))),
+                        Expanded(child: Text(l10n.adsSponsoredPinsSection, style: const TextStyle(fontWeight: FontWeight.w900))),
                         TextButton.icon(
                           onPressed: hasBackend && _looksLikeUuid(_selectedCampaignId) ? () => unawaited(_createSponsoredPin()) : null,
                           icon: const Icon(Icons.add_location_alt_outlined),
-                          label: const Text('Novo'),
+                          label: Text(l10n.adsNew),
                         ),
                       ],
                     ),
                     if (_loadingPins) const Padding(padding: EdgeInsets.all(12), child: LinearProgressIndicator()),
                     if (!_loadingPins && _selectedCampaignId != null && _pins.isEmpty)
-                      const Padding(padding: EdgeInsets.all(12), child: Text('Nenhum pin')),
+                      Padding(padding: const EdgeInsets.all(12), child: Text(l10n.adsNoPins)),
                     for (final p in _pins)
                       Card(
                         child: ListTile(
                           title: Text((p['pin_label'] as String?)?.trim().isEmpty ?? true ? (p['id']?.toString() ?? '') : (p['pin_label'] as String?)!),
-                          subtitle: Text('${p['location_id']} • ${(p['is_active'] == true) ? 'ativo' : 'inativo'}'),
+                          subtitle: Text('${p['location_id']} • ${(p['is_active'] == true) ? l10n.adsActive.toLowerCase() : l10n.adsInactive.toLowerCase()}'),
                         ),
                       ),
                     const SizedBox(height: 16),
                     Row(
                       children: [
-                        const Expanded(child: Text('Métricas', style: TextStyle(fontWeight: FontWeight.w900))),
+                        Expanded(child: Text(l10n.adsMetricsSection, style: const TextStyle(fontWeight: FontWeight.w900))),
                         IconButton(
                           onPressed: hasBackend && _looksLikeUuid(_selectedCampaignId) ? () => unawaited(_refreshMetrics()) : null,
                           icon: const Icon(Icons.refresh),
@@ -14275,12 +16046,16 @@ class _AdminAdsScreenState extends State<AdminAdsScreen> {
                     ),
                     if (_loadingMetrics) const Padding(padding: EdgeInsets.all(12), child: LinearProgressIndicator()),
                     if (!_loadingMetrics && _selectedCampaignId != null && _metrics.isEmpty)
-                      const Padding(padding: EdgeInsets.all(12), child: Text('Sem dados')),
+                      Padding(padding: const EdgeInsets.all(12), child: Text(l10n.adsNoData)),
                     for (final m in _metrics)
                       Card(
                         child: ListTile(
-                          title: Text((m['placement'] as String?) ?? 'unknown'),
-                          subtitle: Text('Impressões: ${m['impressions']} • Cliques: ${m['clicks']} • CTR: ${((m['ctr'] as num?)?.toDouble() ?? 0).toStringAsFixed(3)}'),
+                          title: Text(_adsPlacementLabel(context, (m['placement'] as String?) ?? l10n.adsUnknown)),
+                          subtitle: Text(
+                            '${l10n.adsImpressions}: ${m['impressions']} • '
+                            '${l10n.adsClicks}: ${m['clicks']} • '
+                            '${l10n.adsCtr}: ${((m['ctr'] as num?)?.toDouble() ?? 0).toStringAsFixed(3)}',
+                          ),
                         ),
                       ),
                     const SizedBox(height: 24),
@@ -14331,14 +16106,15 @@ class AccountSettingsScreen extends StatelessWidget {
         final userId = s is AuthSession ? s.userId : null;
         final email = userId == null ? null : repo.emailForUserId(userId);
         final isAuthenticated = userId != null;
+        final l10n = t(context);
         return Scaffold(
           appBar: AppBar(
             leading: AtalaiaIconButton(
               icon: Icons.arrow_back,
-              label: 'Voltar',
+              label: t(context).commonBack,
               onPressed: () => Navigator.of(context).maybePop(),
             ),
-            title: const Text('Conta', style: TextStyle(fontWeight: FontWeight.w800)),
+            title: Text(t(context).settingsAccount, style: const TextStyle(fontWeight: FontWeight.w800)),
           ),
           body: Column(
             children: [
@@ -14347,36 +16123,72 @@ class AccountSettingsScreen extends StatelessWidget {
               Expanded(
                 child: !isAuthenticated
                     ? Center(
-                        child: PrimaryButton(label: 'Entrar para continuar', onPressed: () => showAuthGate(context)),
+                        child: PrimaryButton(label: t(context).settingsSignInToContinue, onPressed: () => showAuthGate(context)),
                       )
                     : ListView(
                         padding: const EdgeInsets.symmetric(vertical: 8),
                         children: [
                           ListTile(
                             leading: const Icon(Icons.alternate_email),
-                            title: const Text('Email'),
+                            title: Text(l10n.settingsEmail),
                             subtitle: Text(email ?? '-'),
                           ),
                           ListTile(
                             leading: const Icon(Icons.lock_reset),
-                            title: const Text('Alterar senha'),
+                            title: Text(l10n.settingsChangePassword),
                             trailing: const Icon(Icons.chevron_right),
                             onTap: () => Navigator.of(context).pushNamed(Routes.resetPassword),
                           ),
                           ListTile(
                             leading: const Icon(Icons.person_off_outlined),
-                            title: const Text('Desativar conta'),
+                            title: Text(l10n.settingsDeactivateAccount),
                             trailing: const Icon(Icons.chevron_right),
-                            onTap: () => showInfoSnackBar(context, 'Fase 2'),
+                            onTap: () async {
+                              final ok = await showAtalaiaConfirmDialog(
+                                context,
+                                title: '${l10n.settingsDeactivateAccount}?',
+                                message: 'Você poderá reativar entrando novamente.',
+                                confirmLabel: l10n.settingsDeactivateAccount,
+                                isDestructive: true,
+                              );
+                              if (ok != true) return;
+                              final success = await repo.deactivateMyAccount();
+                              if (!context.mounted) return;
+                              if (!success) {
+                                showAtalaiaSnackBar(context, 'Falha ao desativar conta.', kind: AtalaiaSnackKind.error);
+                                return;
+                              }
+                              showAtalaiaSnackBar(context, 'Conta desativada.', kind: AtalaiaSnackKind.success);
+                              session.value = const AnonSession();
+                              Navigator.of(context).popUntil((r) => r.isFirst);
+                            },
                           ),
                           ListTile(
                             leading: const Icon(Icons.delete_outline),
                             title: Text(
-                              'Excluir conta',
+                              l10n.settingsDeleteAccount,
                               style: TextStyle(color: Theme.of(context).colorScheme.error),
                             ),
                             trailing: const Icon(Icons.chevron_right),
-                            onTap: () => showInfoSnackBar(context, 'Fase 2'),
+                            onTap: () async {
+                              final ok = await showAtalaiaConfirmDialog(
+                                context,
+                                title: '${l10n.settingsDeleteAccount}?',
+                                message: l10n.postDeleteConfirmMessage,
+                                confirmLabel: l10n.commonDelete,
+                                isDestructive: true,
+                              );
+                              if (ok != true) return;
+                              final success = await repo.deleteMyAccount();
+                              if (!context.mounted) return;
+                              if (!success) {
+                                showAtalaiaSnackBar(context, 'Falha ao excluir conta.', kind: AtalaiaSnackKind.error);
+                                return;
+                              }
+                              showAtalaiaSnackBar(context, 'Conta excluída.', kind: AtalaiaSnackKind.success);
+                              session.value = const AnonSession();
+                              Navigator.of(context).popUntil((r) => r.isFirst);
+                            },
                           ),
                         ],
                       ),
@@ -14394,38 +16206,465 @@ class PrivacySettingsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final repo = RepoScope.of(context);
-    return AnimatedBuilder(
-      animation: repo,
-      builder: (context, _) {
-        return Scaffold(
-          appBar: AppBar(
-            leading: AtalaiaIconButton(
-              icon: Icons.arrow_back,
-              label: 'Voltar',
-              onPressed: () => Navigator.of(context).maybePop(),
-            ),
-            title: const Text('Privacidade', style: TextStyle(fontWeight: FontWeight.w800)),
-          ),
-          body: Column(
+    return const LegalScreen(args: LegalScreenArgs(initialTab: LegalTab.privacy));
+  }
+}
+
+enum LegalTab { terms, privacy }
+
+@immutable
+final class LegalScreenArgs {
+  const LegalScreenArgs({this.initialTab = LegalTab.terms});
+  final LegalTab initialTab;
+}
+
+const _legalAcceptedKeyV1 = 'accepted_legal_v1';
+const _legalProjectName = 'Atalaia Global';
+const _legalOrgName = 'RG A Church 360 LTDA';
+const _legalPrivacyEmail = 'privacidade@atalaia.app';
+const _legalDeletionEmail = 'exclusao@atalaia.app';
+const _legalSupportEmail = 'contato@atalaia.app';
+const _legalWebsite = 'https://atalaia.app';
+const _legalAddress = 'Brasil';
+const _legalPhoneDisplay = '—';
+const _legalLastUpdated = '08/04/2026';
+
+class LegalAcceptanceScreen extends StatefulWidget {
+  const LegalAcceptanceScreen({
+    required this.onOpenTermsPrivacy,
+    required this.onAccept,
+    super.key,
+  });
+
+  final Future<void> Function(LegalTab tab) onOpenTermsPrivacy;
+  final Future<void> Function() onAccept;
+
+  @override
+  State<LegalAcceptanceScreen> createState() => _LegalAcceptanceScreenState();
+}
+
+class _LegalAcceptanceScreenState extends State<LegalAcceptanceScreen> {
+  var _accepted = false;
+  var _saving = false;
+
+  Future<void> _accept() async {
+    if (_saving) return;
+    if (!_accepted) return;
+    setState(() => _saving = true);
+    await widget.onAccept();
+    if (!mounted) return;
+    setState(() => _saving = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = t(context);
+    final cs = Theme.of(context).colorScheme;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(l10n.settingsTermsPrivacy, style: const TextStyle(fontWeight: FontWeight.w800)),
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (repo.isOffline)
-                OfflineBanner(onRetry: () => repo.setOffline(false)),
-              Expanded(
-                child: Center(
-                  child: Text(
-                    'Em breve mais opções de privacidade.',
-                    style: TextStyle(color: Theme.of(context).colorScheme.outline),
+              Text(
+                'Para continuar, leia e aceite os Termos de Uso e a Política de Privacidade do $_legalProjectName.',
+                style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: SecondaryButton(
+                      label: 'Termos de uso',
+                      onPressed: () => unawaited(widget.onOpenTermsPrivacy(LegalTab.terms)),
+                    ),
                   ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: SecondaryButton(
+                      label: 'Política de privacidade',
+                      onPressed: () => unawaited(widget.onOpenTermsPrivacy(LegalTab.privacy)),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _accepted,
+                onChanged: _saving ? null : (v) => setState(() => _accepted = v ?? false),
+                title: const Text('Li e aceito os Termos de Uso e a Política de Privacidade.'),
+                controlAffinity: ListTileControlAffinity.leading,
+              ),
+              const Spacer(),
+              SizedBox(
+                width: double.infinity,
+                child: PrimaryButton(
+                  label: l10n.commonOk,
+                  loading: _saving,
+                  onPressed: (_accepted && !_saving) ? _accept : null,
                 ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Controladora: $_legalOrgName • Contato: $_legalPrivacyEmail',
+                style: TextStyle(color: cs.outline),
+                textAlign: TextAlign.center,
               ),
             ],
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 }
+
+class LegalScreen extends StatelessWidget {
+  const LegalScreen({this.args, super.key});
+
+  final LegalScreenArgs? args;
+
+  @override
+  Widget build(BuildContext context) {
+    final initialTab = (args?.initialTab ?? LegalTab.terms) == LegalTab.terms ? 0 : 1;
+    final repo = RepoScope.of(context);
+    final l10n = t(context);
+    return DefaultTabController(
+      length: 2,
+      initialIndex: initialTab,
+      child: AnimatedBuilder(
+        animation: repo,
+        builder: (context, _) {
+          return Scaffold(
+            appBar: AppBar(
+              leading: AtalaiaIconButton(
+                icon: Icons.arrow_back,
+                label: l10n.commonBack,
+                onPressed: () => Navigator.of(context).maybePop(),
+              ),
+              title: Text(l10n.settingsTermsPrivacy, style: const TextStyle(fontWeight: FontWeight.w800)),
+              bottom: const TabBar(
+                tabs: [
+                  Tab(text: 'Termos'),
+                  Tab(text: 'Privacidade'),
+                ],
+              ),
+            ),
+            body: Column(
+              children: [
+                if (repo.isOffline) OfflineBanner(onRetry: () => repo.setOffline(false)),
+                const Expanded(
+                  child: TabBarView(
+                    children: [
+                      _LegalDocBody(text: _termsOfUseTextPt),
+                      _LegalDocBody(text: _privacyPolicyTextPt),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _LegalDocBody extends StatelessWidget {
+  const _LegalDocBody({required this.text});
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return SelectionArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SelectableText(
+              text,
+              style: const TextStyle(height: 1.35),
+            ),
+            const SizedBox(height: 18),
+            Text(
+              'Última atualização: $_legalLastUpdated',
+              style: TextStyle(color: cs.outline, fontWeight: FontWeight.w700),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+const _privacyPolicyTextPt = '''
+Política de Privacidade
+
+Última atualização: $_legalLastUpdated
+
+Esta Política de Privacidade descreve como $_legalOrgName (\"nós\") coleta, usa, armazena, compartilha e protege dados pessoais quando você utiliza o aplicativo e serviços relacionados do projeto $_legalProjectName.
+
+1. Quem somos
+
+Para fins de legislação aplicável de proteção de dados (incluindo LGPD, GDPR e leis estaduais dos EUA quando aplicáveis), $_legalOrgName atua como controladora dos dados pessoais tratados no contexto do uso do $_legalProjectName.
+
+Contato para privacidade e proteção de dados:
+E-mail (privacidade): $_legalPrivacyEmail
+E-mail (exclusão de conta/dados): $_legalDeletionEmail
+E-mail (contato): $_legalSupportEmail
+Endereço: $_legalAddress
+Telefone: $_legalPhoneDisplay
+Site: $_legalWebsite
+
+2. Quais dados coletamos
+
+Podemos coletar as seguintes categorias de dados, de acordo com a forma como você usa nosso aplicativo e serviços:
+
+2.1 Dados fornecidos por você
+- nome completo
+- nome de usuário
+- e-mail e/ou telefone
+- foto de perfil
+- data de nascimento (quando informada)
+- senha ou credenciais de autenticação
+- informações de cadastro de igreja, grupo, comunidade ou organização
+- mensagens, comentários, publicações, pedidos de oração, arquivos, imagens, vídeos ou outros conteúdos enviados por você
+- informações fornecidas ao entrar em contato com nosso suporte
+
+2.2 Dados coletados automaticamente
+- identificadores do dispositivo
+- sistema operacional e versão
+- idioma
+- endereço IP
+- logs de acesso
+- data e hora de uso
+- telas e funcionalidades acessadas
+- informações de desempenho, falhas e diagnóstico
+- identificadores de sessão
+- dados aproximados de localização ou localização precisa, se o recurso estiver ativo e autorizado por você
+
+2.3 Dados obtidos de terceiros
+Podemos receber dados de terceiros, como:
+- provedores de login, quando você optar por entrar por serviços externos
+- ferramentas de hospedagem, analytics, notificações, autenticação, armazenamento em nuvem e atendimento
+- administradores da organização/comunidade à qual você pertence, quando seu acesso for criado por eles
+
+3. Para que usamos seus dados
+
+Usamos dados pessoais para:
+- criar e gerenciar sua conta
+- autenticar seu acesso
+- disponibilizar as funcionalidades do aplicativo
+- permitir comunicação entre usuários, líderes, membros, administradores ou comunidades
+- processar publicações, mensagens, pedidos de oração, eventos, escalas, cadastros ou conteúdos enviados
+- personalizar sua experiência
+- enviar notificações operacionais, lembretes e alertas
+- prestar suporte técnico e atendimento
+- monitorar segurança, prevenir fraudes, abusos e acessos indevidos
+- melhorar desempenho, usabilidade, recursos e estabilidade da plataforma
+- cumprir obrigações legais, regulatórias e contratuais
+- exercer direitos em processos judiciais, administrativos ou arbitrais
+
+4. Bases legais para o tratamento de dados
+
+Quando a legislação europeia (GDPR) ou equivalente for aplicável, tratamos seus dados com base em uma ou mais das seguintes bases legais:
+- execução de contrato
+- cumprimento de obrigação legal
+- legítimo interesse (segurança, prevenção de fraude, melhoria do serviço e operação do produto), sempre observados seus direitos
+- consentimento, quando exigido (permissões específicas, comunicações opcionais, uso de certas tecnologias)
+- exercício regular de direitos, proteção de interesses vitais e outras hipóteses aplicáveis
+
+Quando utilizarmos seu consentimento, você poderá revogá-lo a qualquer momento, sem afetar a legalidade do tratamento realizado anteriormente.
+
+5. Compartilhamento de dados
+
+Podemos compartilhar dados pessoais, quando necessário, com:
+- provedores de infraestrutura em nuvem, banco de dados, autenticação, armazenamento, analytics, mensageria, notificações e monitoramento
+- parceiros tecnológicos que viabilizam funcionalidades do app
+- administradores autorizados da organização/igreja/comunidade vinculada à sua conta, quando aplicável
+- autoridades públicas, órgãos reguladores ou judiciais, quando exigido por lei ou ordem válida
+- terceiros envolvidos em operação societária, fusão, aquisição, reorganização ou transferência de ativos, observadas as garantias aplicáveis
+
+Não vendemos dados pessoais no sentido tradicional de comercialização de listas de usuários.
+
+6. Transferências internacionais
+
+Seus dados podem ser processados e armazenados em países diferentes daquele em que você reside. Quando isso ocorrer, adotaremos medidas razoáveis e apropriadas para assegurar um nível adequado de proteção, incluindo cláusulas contratuais e salvaguardas exigidas pela legislação aplicável.
+
+7. Retenção de dados
+
+Mantemos seus dados pessoais apenas pelo tempo necessário para:
+- fornecer os serviços
+- cumprir finalidades descritas nesta Política
+- atender obrigações legais, regulatórias, fiscais e contábeis
+- resolver disputas e exercer/defender direitos
+
+Quando os dados deixarem de ser necessários, serão excluídos, anonimizados ou mantidos de forma bloqueada, quando a legislação permitir ou exigir.
+
+8. Seus direitos
+
+Dependendo da sua localização, você pode ter direitos como:
+- confirmar se tratamos seus dados
+- acessar seus dados pessoais
+- corrigir dados incompletos, inexatos ou desatualizados
+- solicitar anonimização, bloqueio ou exclusão, quando cabível
+- solicitar portabilidade, quando aplicável
+- revogar consentimento
+- opor-se a determinados tratamentos
+- solicitar revisão de decisões automatizadas, quando aplicável
+- restringir o tratamento, quando cabível
+- apresentar reclamação à autoridade de proteção de dados competente
+
+Para exercer seus direitos, entre em contato pelo e-mail $_legalPrivacyEmail.
+
+Direitos de residentes da Califórnia e outros estados dos EUA
+Se leis estaduais de privacidade dos EUA forem aplicáveis ao seu caso, você poderá ter direitos adicionais, como:
+- saber quais categorias de informações pessoais coletamos
+- saber as finalidades do uso
+- solicitar acesso, correção ou exclusão
+- obter informação sobre categorias de terceiros com quem compartilhamos dados
+- limitar certos usos de dados sensíveis, quando aplicável
+- não sofrer discriminação por exercer seus direitos de privacidade
+
+9. Conta e exclusão de dados
+
+Você pode solicitar a exclusão da sua conta e dos seus dados pessoais entrando em contato conosco pelo e-mail $_legalDeletionEmail. Quando disponível, você também pode usar o recurso de exclusão no próprio aplicativo.
+
+Alguns dados poderão ser mantidos por prazo adicional quando isso for necessário para:
+- cumprir obrigações legais
+- prevenir fraude e abuso
+- resguardar direitos
+- manter registros exigidos por auditoria, segurança ou conformidade
+
+10. Cookies, SDKs e tecnologias semelhantes
+
+Podemos utilizar cookies, SDKs, pixels, identificadores móveis, logs e tecnologias semelhantes para:
+- autenticação
+- segurança
+- funcionamento do app
+- métricas de uso
+- melhoria de desempenho
+- envio de notificações
+- prevenção de fraude
+
+Quando exigido por lei, solicitaremos seu consentimento antes de ativar tecnologias não estritamente necessárias.
+
+11. Segurança da informação
+
+Adotamos medidas técnicas, administrativas e organizacionais razoáveis para proteger os dados pessoais contra acesso não autorizado, destruição, perda, alteração, divulgação indevida ou qualquer forma de tratamento inadequado.
+
+No entanto, nenhum sistema é completamente invulnerável, e não podemos garantir segurança absoluta.
+
+12. Dados de menores de idade
+
+Nosso serviço não é destinado a crianças menores de 13 anos e não coletamos intencionalmente dados pessoais de crianças sem a autorização exigida pela legislação aplicável.
+
+Se você acreditar que uma criança nos forneceu dados pessoais sem autorização válida, entre em contato imediatamente pelo e-mail $_legalPrivacyEmail para que possamos investigar e adotar as medidas cabíveis.
+
+13. Links e serviços de terceiros
+
+O aplicativo pode conter links, integrações ou recursos de terceiros. Não somos responsáveis pelas práticas de privacidade desses terceiros. Recomendamos que você leia as políticas de privacidade correspondentes antes de utilizar tais serviços.
+
+14. Alterações nesta Política
+
+Podemos atualizar esta Política de Privacidade periodicamente. Quando isso ocorrer, publicaremos a versão atualizada com a nova data de revisão. Se houver mudanças relevantes, poderemos também comunicar você por meios adicionais, quando apropriado.
+
+15. Contato
+
+Em caso de dúvidas, solicitações ou exercício de direitos relacionados a esta Política de Privacidade, entre em contato com:
+
+$_legalOrgName
+E-mail: $_legalPrivacyEmail
+Endereço: $_legalAddress
+Telefone: $_legalPhoneDisplay
+''';
+
+const _termsOfUseTextPt = '''
+Termos de Uso
+
+Última atualização: $_legalLastUpdated
+
+Estes Termos de Uso regulam o acesso e o uso do aplicativo e serviços relacionados do projeto $_legalProjectName, operado por $_legalOrgName (\"nós\").
+
+Ao criar uma conta, acessar ou usar o serviço, você declara que leu e concorda com estes Termos e com a Política de Privacidade.
+
+1. Elegibilidade e idade mínima
+
+O serviço não é destinado a crianças menores de 13 anos. Se você tiver menos de 18 anos, use o serviço somente com autorização e supervisão de responsável legal, quando exigido pela legislação aplicável.
+
+2. Conta, segurança e informações
+
+Você é responsável por:
+- manter a confidencialidade de suas credenciais de acesso
+- fornecer informações corretas, atualizadas e completas quando necessário
+- todas as atividades realizadas por meio da sua conta
+
+Podemos suspender ou encerrar contas em caso de uso indevido, fraude, violação de direitos de terceiros, descumprimento destes Termos ou exigência legal.
+
+3. Conteúdo do usuário
+
+O serviço permite que você publique e envie conteúdos (por exemplo: mensagens, comentários, posts, pedidos de oração, imagens e vídeos).
+
+Você declara que:
+- tem os direitos necessários sobre o conteúdo que publica
+- não viola leis aplicáveis, direitos autorais, marcas, direitos de imagem, privacidade ou outros direitos de terceiros
+- não publica conteúdo ilegal, abusivo, discriminatório, pornográfico, violento, difamatório, enganoso ou que incentive dano
+
+Você mantém a titularidade do seu conteúdo. Para operar o serviço, você concede a nós uma licença não exclusiva, mundial, gratuita e transferível para hospedar, armazenar, reproduzir, exibir e distribuir seu conteúdo dentro do serviço, na medida necessária para fornecer as funcionalidades (ex.: exibir posts para outros usuários, entregar mensagens e gerar miniaturas).
+
+4. Regras de uso e condutas proibidas
+
+É proibido:
+- tentar acessar contas, sistemas ou dados sem autorização
+- explorar falhas, realizar engenharia reversa ou contornar medidas de segurança
+- usar o serviço para spam, fraude, phishing, assédio ou disseminação de malware
+- interferir no funcionamento do serviço ou sobrecarregar infraestrutura
+- coletar dados de outros usuários de forma automatizada, sem autorização
+
+5. Comunidades, moderação e denúncias
+
+Comunidades podem ter regras adicionais definidas por administradores. Podemos moderar conteúdo e aplicar medidas (remoção, restrição, suspensão) com base nestes Termos, em regras de comunidade e em exigências legais.
+
+6. Privacidade
+
+O tratamento de dados pessoais é descrito na Política de Privacidade. Você entende que determinados dados e conteúdos podem ser compartilhados com outros usuários e/ou administradores de comunidades conforme configurações do serviço e suas escolhas.
+
+7. Serviços de terceiros
+
+Podemos integrar serviços de terceiros (ex.: provedores de autenticação, analytics, notificações, hospedagem). Não controlamos serviços de terceiros e o uso pode estar sujeito a termos e políticas deles.
+
+8. Disponibilidade, alterações e encerramento
+
+Podemos atualizar, modificar, suspender ou descontinuar funcionalidades do serviço. Quando apropriado, poderemos avisar sobre mudanças relevantes.
+
+Você pode solicitar a exclusão de conta conforme descrito na Política de Privacidade.
+
+9. Isenções e limitações (na extensão permitida por lei)
+
+O serviço é fornecido \"como está\" e \"conforme disponível\". Embora busquemos estabilidade e segurança, não garantimos que o serviço será ininterrupto ou livre de erros.
+
+Na extensão máxima permitida pela legislação aplicável, $_legalOrgName não será responsável por danos indiretos, incidentais, especiais, consequenciais, perda de lucros, perda de dados ou interrupção de negócios decorrentes do uso do serviço.
+
+Algumas jurisdições (incluindo certos países/estados da UE e dos EUA) podem não permitir determinadas limitações. Nesses casos, as limitações serão aplicadas apenas na extensão permitida.
+
+10. Lei aplicável e foro
+
+Estes Termos são regidos pelas leis do Brasil, sem prejuízo de normas obrigatórias de proteção ao consumidor e privacidade que possam se aplicar conforme sua localização.
+
+11. Contato
+
+Dúvidas ou solicitações:
+E-mail: $_legalSupportEmail
+Privacidade: $_legalPrivacyEmail
+Site: $_legalWebsite
+''';
 
 class LocaleSettingsScreen extends StatefulWidget {
   const LocaleSettingsScreen({super.key});
@@ -14661,14 +16900,15 @@ class _VerificationPaywallScreenState extends State<VerificationPaywallScreen> {
 
     final repo = RepoScope.of(context);
     final plan = _planLabel();
+    final l10n = t(context);
     repo.trackEvent('verify_subscribe_tap', <String, Object?>{'plan': plan});
     if (repo.isOffline) {
       repo.trackEvent('verify_purchase_fail', <String, Object?>{'reason': 'offline', 'plan': plan});
       setState(() {
         _loading = false;
-        _error = 'Não foi possível iniciar pagamento';
+        _error = l10n.paymentStartFailed;
       });
-      showInfoSnackBar(context, 'Falha no pagamento');
+      showInfoSnackBar(context, l10n.paymentStartFailed);
       return;
     }
 
@@ -14680,16 +16920,16 @@ class _VerificationPaywallScreenState extends State<VerificationPaywallScreen> {
       repo.trackEvent('verify_purchase_fail', <String, Object?>{'reason': 'provider', 'plan': plan});
       setState(() {
         _loading = false;
-        _error = 'Não foi possível iniciar pagamento';
+        _error = l10n.paymentStartFailed;
       });
-      showInfoSnackBar(context, 'Falha no pagamento');
+      showInfoSnackBar(context, l10n.paymentStartFailed);
       return;
     }
 
     repo.activateVerificationForViewer(planLabel: plan);
     setState(() => _loading = false);
     if (!mounted) return;
-    showInfoSnackBar(context, 'Assinatura ativa');
+    showInfoSnackBar(context, l10n.verificationSubscriptionActive);
     Navigator.of(context).pushReplacementNamed(Routes.verificationStatus);
   }
 
@@ -14697,19 +16937,20 @@ class _VerificationPaywallScreenState extends State<VerificationPaywallScreen> {
   Widget build(BuildContext context) {
     final session = SessionScope.of(context).value;
     final cs = Theme.of(context).colorScheme;
+    final l10n = t(context);
 
     if (session is! AuthSession) {
       return Scaffold(
         appBar: AppBar(
           leading: AtalaiaIconButton(
             icon: Icons.arrow_back,
-            label: 'Voltar',
+            label: t(context).commonBack,
             onPressed: () => Navigator.of(context).maybePop(),
           ),
-          title: const Text('Selo Verificado', style: TextStyle(fontWeight: FontWeight.w800)),
+          title: Text(l10n.verificationBadgeTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
         ),
         body: Center(
-          child: PrimaryButton(label: 'Entrar para continuar', onPressed: () => showAuthGate(context)),
+          child: PrimaryButton(label: t(context).settingsSignInToContinue, onPressed: () => showAuthGate(context)),
         ),
       );
     }
@@ -14718,10 +16959,10 @@ class _VerificationPaywallScreenState extends State<VerificationPaywallScreen> {
       appBar: AppBar(
         leading: AtalaiaIconButton(
           icon: Icons.arrow_back,
-          label: 'Voltar',
+          label: t(context).commonBack,
           onPressed: _loading ? null : () => Navigator.of(context).maybePop(),
         ),
-        title: const Text('Selo Verificado', style: TextStyle(fontWeight: FontWeight.w800)),
+        title: Text(l10n.verificationBadgeTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
@@ -14738,37 +16979,37 @@ class _VerificationPaywallScreenState extends State<VerificationPaywallScreen> {
                 child: Icon(Icons.verified, color: cs.primary),
               ),
               const SizedBox(width: 12),
-              const Expanded(
+              Expanded(
                 child: Text(
-                  'Selo Verificado',
-                  style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18),
+                  l10n.verificationBadgeTitle,
+                  style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 14),
           Text(
-            'Destaque seu perfil com um selo de verificação.',
+            l10n.verificationBadgeDescription,
             style: TextStyle(color: cs.outline, fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 14),
-          _BenefitRow(text: 'Mais credibilidade'),
-          _BenefitRow(text: 'Destaque nos resultados'),
-          _BenefitRow(text: 'Proteção contra perfis falsos'),
+          _BenefitRow(text: l10n.verificationBenefitCredibility),
+          _BenefitRow(text: l10n.verificationBenefitHighlight),
+          _BenefitRow(text: l10n.verificationBenefitProtection),
           const SizedBox(height: 18),
-          const Text('Planos', style: TextStyle(fontWeight: FontWeight.w900)),
+          Text(l10n.verificationPlansTitle, style: const TextStyle(fontWeight: FontWeight.w900)),
           const SizedBox(height: 10),
           _TwoChoiceRow(
-            leftLabel: 'Pessoa',
-            rightLabel: 'Igreja',
+            leftLabel: l10n.verificationSubjectPerson,
+            rightLabel: l10n.verificationSubjectChurch,
             leftSelected: _subject == _VerificationSubject.person,
             onLeft: _loading ? null : () => setState(() => _subject = _VerificationSubject.person),
             onRight: _loading ? null : () => setState(() => _subject = _VerificationSubject.church),
           ),
           const SizedBox(height: 12),
           _TwoChoiceRow(
-            leftLabel: 'Mensal',
-            rightLabel: 'Anual',
+            leftLabel: l10n.verificationBillingMonthly,
+            rightLabel: l10n.verificationBillingYearly,
             leftSelected: _billing == _VerificationBilling.monthly,
             onLeft: _loading ? null : () => setState(() => _billing = _VerificationBilling.monthly),
             onRight: _loading ? null : () => setState(() => _billing = _VerificationBilling.yearly),
@@ -14788,7 +17029,7 @@ class _VerificationPaywallScreenState extends State<VerificationPaywallScreen> {
                     ),
                   ),
                   Text(
-                    _billing == _VerificationBilling.monthly ? 'R\$ 14,90' : 'R\$ 149,90',
+                    _billing == _VerificationBilling.monthly ? l10n.verificationPriceMonthly : l10n.verificationPriceYearly,
                     style: TextStyle(color: cs.onSurface, fontWeight: FontWeight.w900),
                   ),
                 ],
@@ -14803,31 +17044,22 @@ class _VerificationPaywallScreenState extends State<VerificationPaywallScreen> {
           SizedBox(
             width: double.infinity,
             child: PrimaryButton(
-              label: 'Assinar',
+              label: l10n.verificationSubscribe,
               loading: _loading,
               onPressed: _loading ? null : _startCheckout,
             ),
           ),
           const SizedBox(height: 10),
           AtalaiaTextButton(
-            label: 'Restaurar compra',
-            onPressed: _loading ? null : () => showInfoSnackBar(context, 'Restaurar compra (fase 2)'),
+            label: l10n.verificationRestorePurchase,
+            onPressed: _loading ? null : () => showInfoSnackBar(context, l10n.verificationRestorePhase2),
           ),
           const SizedBox(height: 6),
           AtalaiaTextButton(
-            label: 'Termos',
+            label: l10n.verificationTerms,
             onPressed: _loading
                 ? null
-                : () async {
-                    final uri = Uri.parse('https://atalaia.app/termos');
-                    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
-                    if (!context.mounted) return;
-                    if (!ok) {
-                      await Clipboard.setData(ClipboardData(text: uri.toString()));
-                      if (!context.mounted) return;
-                      showInfoSnackBar(context, 'Link copiado');
-                    }
-                  },
+                : () => Navigator.of(context).pushNamed(Routes.legal, arguments: const LegalScreenArgs(initialTab: LegalTab.terms)),
           ),
         ],
       ),
@@ -14947,13 +17179,13 @@ class VerificationStatusScreen extends StatelessWidget {
             appBar: AppBar(
               leading: AtalaiaIconButton(
                 icon: Icons.arrow_back,
-                label: 'Voltar',
+                label: t(context).commonBack,
                 onPressed: () => Navigator.of(context).maybePop(),
               ),
-              title: const Text('Verificação', style: TextStyle(fontWeight: FontWeight.w800)),
+              title: Text(t(context).profileVerification, style: const TextStyle(fontWeight: FontWeight.w800)),
             ),
             body: Center(
-              child: PrimaryButton(label: 'Entrar para continuar', onPressed: () => showAuthGate(context)),
+              child: PrimaryButton(label: t(context).settingsSignInToContinue, onPressed: () => showAuthGate(context)),
             ),
           );
         }
@@ -14967,10 +17199,10 @@ class VerificationStatusScreen extends StatelessWidget {
           appBar: AppBar(
             leading: AtalaiaIconButton(
               icon: Icons.arrow_back,
-              label: 'Voltar',
+              label: t(context).commonBack,
               onPressed: () => Navigator.of(context).maybePop(),
             ),
-            title: const Text('Verificação', style: TextStyle(fontWeight: FontWeight.w800)),
+            title: Text(t(context).profileVerification, style: const TextStyle(fontWeight: FontWeight.w800)),
           ),
           body: ListView(
             padding: const EdgeInsets.all(16),
@@ -14994,14 +17226,14 @@ class VerificationStatusScreen extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            active ? 'Você está verificado' : 'Assinatura cancelada',
+                            active ? t(context).verificationStatusVerifiedTitle : t(context).verificationStatusCanceledTitle,
                             style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
                           ),
                           const SizedBox(height: 6),
                           Text(
                             active
-                                ? 'Seu perfil está com selo ativo.'
-                                : 'Você pode assinar novamente para reativar o selo.',
+                                ? t(context).verificationStatusVerifiedDescription
+                                : t(context).verificationStatusCanceledDescription,
                             style: TextStyle(color: cs.outline, fontWeight: FontWeight.w600),
                           ),
                         ],
@@ -15016,7 +17248,7 @@ class VerificationStatusScreen extends StatelessWidget {
                   elevation: 0,
                   child: ListTile(
                     leading: const Icon(Icons.calendar_today_outlined),
-                    title: const Text('Início'),
+                    title: Text(t(context).verificationStatusStartLabel),
                     subtitle: Text(startedAt == null ? '-' : _dateLabel(startedAt)),
                   ),
                 ),
@@ -15024,13 +17256,13 @@ class VerificationStatusScreen extends StatelessWidget {
                   elevation: 0,
                   child: ListTile(
                     leading: const Icon(Icons.sell_outlined),
-                    title: const Text('Plano'),
+                    title: Text(t(context).verificationStatusPlanLabel),
                     subtitle: Text(plan ?? '-'),
                   ),
                 ),
                 const SizedBox(height: 10),
                 PrimaryButton(
-                  label: 'Gerenciar assinatura',
+                  label: t(context).verificationStatusManageSubscription,
                   onPressed: () async {
                     final uri = Uri.parse('https://atalaia.app/assinaturas');
                     final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
@@ -15038,38 +17270,38 @@ class VerificationStatusScreen extends StatelessWidget {
                     if (!ok) {
                       await Clipboard.setData(ClipboardData(text: uri.toString()));
                       if (!context.mounted) return;
-                      showInfoSnackBar(context, 'Link copiado');
+                      showInfoSnackBar(context, t(context).commonLinkCopied);
                     }
                   },
                 ),
               ] else ...[
                 PrimaryButton(
-                  label: 'Assinar novamente',
+                  label: t(context).verificationStatusResubscribe,
                   onPressed: () => Navigator.of(context).pushReplacementNamed(Routes.verificationPaywall),
                 ),
               ],
               const SizedBox(height: 14),
-              const Text('FAQ', style: TextStyle(fontWeight: FontWeight.w900)),
+              Text(t(context).verificationStatusFaqTitle, style: const TextStyle(fontWeight: FontWeight.w900)),
               const SizedBox(height: 10),
               ExpansionTile(
-                title: const Text('Como funciona a verificação?'),
+                title: Text(t(context).verificationStatusFaqHowItWorksQuestion),
                 childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                 children: [
-                  Text('A verificação é ativada após confirmação server-side do pagamento.', style: TextStyle(color: cs.outline)),
+                  Text(t(context).verificationStatusFaqHowItWorksAnswer, style: TextStyle(color: cs.outline)),
                 ],
               ),
               ExpansionTile(
-                title: const Text('Quando o selo aparece?'),
+                title: Text(t(context).verificationStatusFaqWhenBadgeQuestion),
                 childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                 children: [
-                  Text('Assim que a assinatura estiver ativa no servidor.', style: TextStyle(color: cs.outline)),
+                  Text(t(context).verificationStatusFaqWhenBadgeAnswer, style: TextStyle(color: cs.outline)),
                 ],
               ),
               ExpansionTile(
-                title: const Text('Posso cancelar quando quiser?'),
+                title: Text(t(context).verificationStatusFaqCancelQuestion),
                 childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                 children: [
-                  Text('Sim, o gerenciamento acontece na loja (fase 2).', style: TextStyle(color: cs.outline)),
+                  Text(t(context).verificationStatusFaqCancelAnswer, style: TextStyle(color: cs.outline)),
                 ],
               ),
             ],
@@ -15085,6 +17317,7 @@ Future<void> showShareSheet(
   required PostModel post,
   required bool isAuthenticated,
 }) async {
+  final l10n = t(context);
   if (!isAuthenticated) {
     showCtaSnackBar(context);
     return;
@@ -15105,17 +17338,17 @@ Future<void> showShareSheet(
           children: [
             ListTile(
               leading: const Icon(Icons.link),
-              title: const Text('Copiar link'),
+              title: Text(l10n.postActionCopyLink),
               onTap: () => Navigator.pop(context, 'copy'),
             ),
             ListTile(
               leading: const Icon(Icons.share_outlined),
-              title: const Text('Compartilhar externo'),
+              title: Text(l10n.shareSheetExternalShare),
               onTap: () => Navigator.pop(context, 'external'),
             ),
             ListTile(
               leading: const Icon(Icons.send_rounded),
-              title: const Text('Enviar por Direct'),
+              title: Text(l10n.shareSheetSendDirect),
               onTap: () => Navigator.pop(context, 'direct'),
             ),
             const SizedBox(height: 8),
@@ -15128,13 +17361,74 @@ Future<void> showShareSheet(
   if (!context.mounted) return;
   switch (choice) {
     case 'copy':
-      showInfoSnackBar(context, 'Link copiado');
+      showInfoSnackBar(context, l10n.commonLinkCopied);
     case 'external':
-      showInfoSnackBar(context, 'Compartilhar externo (UI)');
+      showInfoSnackBar(context, l10n.commonComingSoon);
     case 'direct':
       Navigator.of(context).pushNamed(
         Routes.direct,
         arguments: DirectInboxArgs(selectForPostId: post.id),
+      );
+    default:
+      return;
+  }
+}
+
+Future<void> showPlaylistShareSheet(
+  BuildContext context, {
+  required PlaylistModel playlist,
+  required bool isAuthenticated,
+}) async {
+  final l10n = t(context);
+  if (!isAuthenticated) {
+    showCtaSnackBar(context);
+    return;
+  }
+
+  final playlistUrl = 'https://atalaia.app/playlist/${playlist.id}';
+  final playlistText = '${playlist.title} • $playlistUrl';
+
+  final choice = await showAtalaiaBottomSheet<String>(
+    context,
+    builder: (context) {
+      return SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.link),
+              title: Text(l10n.postActionCopyLink),
+              onTap: () => Navigator.pop(context, 'copy'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.share_outlined),
+              title: Text(l10n.shareSheetExternalShare),
+              onTap: () => Navigator.pop(context, 'external'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.send_rounded),
+              title: Text(l10n.shareSheetSendDirect),
+              onTap: () => Navigator.pop(context, 'direct'),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      );
+    },
+  );
+
+  if (!context.mounted) return;
+  switch (choice) {
+    case 'copy':
+      await Clipboard.setData(ClipboardData(text: playlistUrl));
+      if (!context.mounted) return;
+      showInfoSnackBar(context, l10n.commonLinkCopied);
+    case 'external':
+      showInfoSnackBar(context, l10n.commonComingSoon);
+    case 'direct':
+      Navigator.of(context).pushNamed(
+        Routes.direct,
+        arguments: DirectInboxArgs(selectForSharedText: playlistText),
       );
     default:
       return;
@@ -15153,13 +17447,13 @@ final class _ReportPayload {
   final String otherText;
 }
 
-String _reportReasonLabel(_ReportReason r) {
+String _reportReasonLabel(AppLocalizations l10n, _ReportReason r) {
   return switch (r) {
-    _ReportReason.spam => 'Spam',
-    _ReportReason.inappropriate => 'Conteúdo impróprio',
-    _ReportReason.harassment => 'Assédio/ameaça',
-    _ReportReason.misleading => 'Falso/enganoso',
-    _ReportReason.other => 'Outro',
+    _ReportReason.spam => l10n.postReportReasonSpam,
+    _ReportReason.inappropriate => l10n.postReportReasonInappropriate,
+    _ReportReason.harassment => l10n.postReportReasonHarassment,
+    _ReportReason.misleading => l10n.postReportReasonMisleading,
+    _ReportReason.other => l10n.postReportReasonOther,
   };
 }
 
@@ -15167,6 +17461,7 @@ Future<_ReportPayload?> showReportReasonSheet(BuildContext context) async {
   return showAtalaiaBottomSheet<_ReportPayload>(
     context,
     builder: (context) {
+      final l10n = t(context);
       var reason = _ReportReason.spam;
       final other = TextEditingController();
       return StatefulBuilder(
@@ -15181,11 +17476,11 @@ Future<_ReportPayload?> showReportReasonSheet(BuildContext context) async {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   const SizedBox(height: 8),
-                  const Padding(
+                  Padding(
                     padding: EdgeInsets.symmetric(horizontal: 16),
                     child: Align(
                       alignment: Alignment.centerLeft,
-                      child: Text('Denunciar', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+                      child: Text(l10n.postActionReport, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -15198,7 +17493,7 @@ Future<_ReportPayload?> showReportReasonSheet(BuildContext context) async {
                           .map(
                             (r) => RadioListTile<_ReportReason>(
                               value: r,
-                              title: Text(_reportReasonLabel(r)),
+                              title: Text(_reportReasonLabel(l10n, r)),
                             ),
                           )
                           .toList(growable: false),
@@ -15212,7 +17507,7 @@ Future<_ReportPayload?> showReportReasonSheet(BuildContext context) async {
                         onChanged: (_) => setState(() {}),
                         maxLines: 3,
                         minLines: 2,
-                        hintText: 'Explique…',
+                        hintText: l10n.postReportExplainHint,
                       ),
                     ),
                   ],
@@ -15228,7 +17523,7 @@ Future<_ReportPayload?> showReportReasonSheet(BuildContext context) async {
                                 );
                               }
                             : null,
-                        label: 'Enviar denúncia',
+                        label: l10n.postReportSubmit,
                       ),
                     ),
                   ),
@@ -15246,6 +17541,7 @@ Future<void> showPostActionsSheet(
   BuildContext context, {
   required PostModel post,
 }) async {
+  final l10n = t(context);
   final session = SessionScope.of(context).value;
   final repo = RepoScope.of(context);
   final isAuthor = session is AuthSession && session.userId == post.userId;
@@ -15260,38 +17556,38 @@ Future<void> showPostActionsSheet(
             if (!isAuthor) ...[
               ListTile(
                 leading: const Icon(Icons.flag_outlined),
-                title: const Text('Denunciar'),
+                title: Text(l10n.postActionReport),
                 onTap: () => Navigator.pop(context, 'report'),
               ),
               ListTile(
                 leading: const Icon(Icons.link),
-                title: const Text('Copiar link'),
+                title: Text(l10n.postActionCopyLink),
                 onTap: () => Navigator.pop(context, 'copy'),
               ),
               ListTile(
                 leading: const Icon(Icons.visibility_off_outlined),
-                title: const Text('Ocultar post'),
+                title: Text(l10n.postActionHidePost),
                 onTap: () => Navigator.pop(context, 'hide'),
               ),
               ListTile(
                 leading: const Icon(Icons.person_remove_outlined),
-                title: const Text('Deixar de seguir'),
+                title: Text(l10n.postActionUnfollow),
                 onTap: () => Navigator.pop(context, 'unfollow'),
               ),
             ] else ...[
               ListTile(
                 leading: const Icon(Icons.visibility_off_outlined),
-                title: const Text('Ocultar post'),
+                title: Text(l10n.postActionHidePost),
                 onTap: () => Navigator.pop(context, 'hide'),
               ),
               ListTile(
                 leading: const Icon(Icons.edit_outlined),
-                title: const Text('Editar'),
+                title: Text(l10n.postActionEdit),
                 onTap: () => Navigator.pop(context, 'edit'),
               ),
               ListTile(
                 leading: const Icon(Icons.delete_outline),
-                title: const Text('Excluir'),
+                title: Text(l10n.postActionDelete),
                 onTap: () => Navigator.pop(context, 'delete'),
               ),
             ],
@@ -15324,16 +17620,16 @@ Future<void> showPostActionsSheet(
           reportedUserId: post.userId,
         );
         if (!context.mounted) return;
-        showInfoSnackBar(context, 'Denúncia enviada');
+        showInfoSnackBar(context, l10n.postSnackReportSent);
       }
     case 'copy':
-      showInfoSnackBar(context, 'Link copiado');
+      showInfoSnackBar(context, l10n.commonLinkCopied);
     case 'hide':
       repo.hidePost(post.id);
       showAtalaiaSnackBar(
         context,
-        'Post ocultado',
-        actionLabel: 'Desfazer',
+        l10n.postSnackPostHidden,
+        actionLabel: l10n.postSnackUndo,
         onAction: () => repo.unhidePost(post.id),
       );
     case 'unfollow':
@@ -15341,7 +17637,7 @@ Future<void> showPostActionsSheet(
         showCtaSnackBar(context);
         return;
       }
-      showInfoSnackBar(context, 'Deixar de seguir (UI)');
+      showInfoSnackBar(context, l10n.commonComingSoon);
     case 'edit':
       if (!session.isAuthenticated) {
         showCtaSnackBar(context);
@@ -15368,15 +17664,15 @@ Future<void> showPostActionsSheet(
     case 'delete':
       final ok = await showAtalaiaConfirmDialog(
         context,
-        title: 'Excluir post?',
-        message: 'Essa ação não pode ser desfeita (demo).',
-        confirmLabel: 'Excluir',
+        title: l10n.postDeleteConfirmTitle,
+        message: l10n.postDeleteConfirmMessage,
+        confirmLabel: l10n.postDeleteConfirmLabel,
         isDestructive: true,
       );
       if (!context.mounted) return;
       if (ok == true) {
         repo.deletePost(post.id, viewerIsAuthor: isAuthor);
-        showInfoSnackBar(context, 'Post excluído');
+        showInfoSnackBar(context, l10n.postSnackPostDeleted);
       }
     default:
       return;
@@ -15412,6 +17708,7 @@ class _ShellScreenState extends State<ShellScreen> {
     return AnimatedBuilder(
       animation: Listenable.merge([repo, session]),
       builder: (context, _) {
+        final l10n = t(context);
         final value = session.value;
         final cs = Theme.of(context).colorScheme;
         final viewerId = value is AuthSession ? value.userId : null;
@@ -15423,20 +17720,20 @@ class _ShellScreenState extends State<ShellScreen> {
         final activeMapCommunityId = _index == 1 ? mapState?.activeCommunityId : null;
         final activeMapCommunity = activeMapCommunityId == null ? null : repo.findCommunity(activeMapCommunityId);
         final title = (_index == 1 && activeMapCommunityId != null)
-            ? (activeMapCommunity?.name ?? 'Comunidade')
+            ? (activeMapCommunity?.name ?? l10n.mainTitleCommunity)
             : switch (_index) {
-          0 => 'Atalaia',
-          1 => 'Mapa',
-          2 => 'Mensagens',
-          3 => viewerName.isNotEmpty ? viewerName : 'Perfil',
-          _ => 'Atalaia',
+          0 => l10n.appTitle,
+          1 => l10n.mainTitleMap,
+          2 => l10n.mainTitleMessages,
+          3 => viewerName.isNotEmpty ? viewerName : l10n.mainTitleProfile,
+          _ => l10n.appTitle,
         };
         final leadingLabel = (_index == 1 && activeMapCommunityId != null)
-            ? 'Feed'
+            ? l10n.mainLeadingFeed
             : switch (_index) {
-          2 => 'Nova mensagem',
-          1 => 'Momento',
-          _ => 'Criar',
+          2 => l10n.mainLeadingNewMessage,
+          1 => l10n.mainLeadingMoment,
+          _ => l10n.mainLeadingCreate,
         };
         final leadingIcon = (_index == 1 && activeMapCommunityId != null)
             ? Icons.rss_feed_outlined
@@ -15466,13 +17763,13 @@ class _ShellScreenState extends State<ShellScreen> {
         };
 
         final actionLabel = (_index == 1 && activeMapCommunityId != null)
-            ? 'Chat'
+            ? l10n.mainActionChat
             : switch (_index) {
-          0 => 'Notificações',
-          1 => 'Comunidades',
-          2 => 'Solicitações',
-          3 => 'Menu',
-          _ => 'Notificações',
+          0 => l10n.mainActionNotifications,
+          1 => l10n.mainActionCommunities,
+          2 => l10n.mainActionRequests,
+          3 => l10n.mainActionMenu,
+          _ => l10n.mainActionNotifications,
         };
         final actionIcon = (_index == 1 && activeMapCommunityId != null)
             ? Icons.chat_bubble_outline
@@ -15493,7 +17790,7 @@ class _ShellScreenState extends State<ShellScreen> {
               if (future == null) return;
               unawaited(future);
             },
-          2 => () => showInfoSnackBar(context, 'Em breve'),
+          2 => () => showInfoSnackBar(context, l10n.commonComingSoon),
           3 => () => Navigator.of(context).pushNamed(Routes.settings),
           _ => () => Navigator.of(context).pushNamed(Routes.notifications),
         };
@@ -15550,20 +17847,20 @@ class _ShellScreenState extends State<ShellScreen> {
               labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
               onDestinationSelected: (i) => setState(() => _index = i),
               destinations: [
-                const NavigationDestination(
+                NavigationDestination(
                   icon: Icon(Icons.home_outlined),
                   selectedIcon: Icon(Icons.home),
-                  label: 'Home',
+                  label: l10n.navHome,
                 ),
-                const NavigationDestination(
+                NavigationDestination(
                   icon: Icon(Icons.map_outlined),
                   selectedIcon: Icon(Icons.map),
-                  label: 'Mapa',
+                  label: l10n.navMap,
                 ),
-                const NavigationDestination(
+                NavigationDestination(
                   icon: Icon(Icons.send_outlined),
                   selectedIcon: Icon(Icons.send_rounded),
-                  label: 'Direct',
+                  label: l10n.navDirect,
                 ),
                 NavigationDestination(
                   icon: _BottomNavAvatar(
@@ -15578,7 +17875,7 @@ class _ShellScreenState extends State<ShellScreen> {
                     avatarUrl: viewerAvatarUrl,
                     selected: true,
                   ),
-                  label: 'Perfil',
+                  label: l10n.navProfile,
                 ),
               ],
             ),
@@ -15954,7 +18251,7 @@ class _AdCardState extends State<AdCard> {
 
     final uri = Uri.tryParse(creative.destinationUrl);
     if (uri == null) {
-      showInfoSnackBar(context, 'Link inválido');
+      showInfoSnackBar(context, t(context).commonInvalidLink);
       return;
     }
     final ok = await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
@@ -15962,7 +18259,7 @@ class _AdCardState extends State<AdCard> {
     if (!ok) {
       await Clipboard.setData(ClipboardData(text: uri.toString()));
       if (!context.mounted) return;
-      showInfoSnackBar(context, 'Link copiado');
+      showInfoSnackBar(context, t(context).commonLinkCopied);
     }
   }
 
@@ -15993,7 +18290,7 @@ class _AdCardState extends State<AdCard> {
             'creativeId': slot.creative.id,
           });
           repo.hideAdSlot(widget.slotId);
-          showInfoSnackBar(context, 'Anúncio ocultado');
+          showInfoSnackBar(context, t(context).adsHiddenSnack);
         },
       ),
     };
@@ -16128,7 +18425,7 @@ class _AdReadyCard extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                       ),
                       const SizedBox(height: 2),
-                      Text('Patrocinado', style: TextStyle(color: cs.outline, fontSize: 12)),
+                      Text(t(context).adsSponsoredLabel, style: TextStyle(color: cs.outline, fontSize: 12)),
                     ],
                   ),
                 ),
@@ -16137,9 +18434,7 @@ class _AdReadyCard extends StatelessWidget {
                   onSelected: (v) {
                     if (v == 'hide') onHide();
                   },
-                  itemBuilder: (_) => const [
-                    PopupMenuItem(value: 'hide', child: Text('Ocultar anúncio')),
-                  ],
+                  itemBuilder: (_) => [PopupMenuItem(value: 'hide', child: Text(t(context).adsHideAction))],
                 ),
               ],
             ),
@@ -16211,11 +18506,12 @@ class PostCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final repo = RepoScope.of(context);
+    final l10n = t(context);
     final cs = Theme.of(context).colorScheme;
-    final identity = _identityForUserId(repo, post.userId, legacyVerified: post.isVerified);
+    final identity = _identityForUserId(repo, post.userId, legacyVerified: post.isVerified, userFallback: l10n.commonUserFallback);
     final session = SessionScope.of(context).value;
     final viewerProfile = session is AuthSession ? repo.profileForUserId(session.userId) : null;
-    final viewerName = viewerProfile == null ? null : _displayNameForProfile(viewerProfile).trim();
+    final viewerName = viewerProfile == null ? null : _displayNameForProfile(viewerProfile, userFallback: l10n.commonUserFallback).trim();
     void safePray() {
       if (!isAuthenticated) {
         showCtaSnackBar(context);
@@ -16269,12 +18565,13 @@ class PostCard extends StatelessWidget {
     }
 
     Widget prayAction() {
+      final l10n = t(context);
       final count = post.prayerCount;
       final showCount = count > 0;
       if (post.viewerHasPrayed) {
         return actionWithCount(
           icon: Icons.volunteer_activism,
-          label: 'Orei',
+          label: l10n.postPrayAction,
           onTap: safePray,
           count: count,
           color: const Color(0xFF2E7D32),
@@ -16284,9 +18581,9 @@ class PostCard extends StatelessWidget {
       final fg = cs.onSurfaceVariant;
       return Semantics(
         button: true,
-        label: showCount ? 'Orei ($count)' : 'Orei',
+        label: showCount ? '${l10n.postPrayAction} ($count)' : l10n.postPrayAction,
         child: Tooltip(
-          message: 'Orei',
+          message: l10n.postPrayAction,
           child: Material(
             color: Colors.transparent,
             child: InkWell(
@@ -16309,7 +18606,7 @@ class PostCard extends StatelessWidget {
                       ],
                       const SizedBox(width: 8),
                       Text(
-                        'Orei',
+                        l10n.postPrayAction,
                         style: TextStyle(color: fg, fontWeight: FontWeight.w900, fontSize: 12, height: 1.0),
                       ),
                     ],
@@ -16323,6 +18620,7 @@ class PostCard extends StatelessWidget {
     }
 
     String? prayerByline() {
+      final l10n = t(context);
       final total = post.prayerCount;
       if (total <= 0) return null;
       final cached = repo.prayerUsernamesForPost(post.id);
@@ -16331,14 +18629,14 @@ class PostCard extends StatelessWidget {
       }
       final first = cached.isNotEmpty ? cached.first : (post.viewerHasPrayed ? viewerName : null);
       if (total == 1) {
-        return first == null ? 'Orado por 1 pessoa' : 'Orado por $first';
+        return first == null ? l10n.postPrayedByOnePerson : l10n.postPrayedByName(first);
       }
       if (total == 2) {
-        if (first != null) return 'Orado por $first e outra pessoa';
-        return 'Orado por 2 pessoas';
+        if (first != null) return l10n.postPrayedByNameAndOneOther(first);
+        return l10n.postPrayedByTwoPeople;
       }
-      if (first != null) return 'Orado por $first e outras pessoas';
-      return 'Orado por $total pessoas';
+      if (first != null) return l10n.postPrayedByNameAndOthers(first);
+      return l10n.postPrayedByManyPeople(total);
     }
 
     return Card(
@@ -16392,7 +18690,7 @@ class PostCard extends StatelessWidget {
                             ],
                             const SizedBox(width: 10),
                             Text(
-                              _relativeTime(post.createdAt),
+                              _relativeTime(context, post.createdAt),
                               style: AtalaiaText.meta(context).copyWith(fontSize: 11),
                             ),
                           ],
@@ -16403,7 +18701,7 @@ class PostCard extends StatelessWidget {
                 ),
                 AtalaiaIconButton(
                   icon: Icons.more_horiz_rounded,
-                  label: 'Mais',
+                  label: t(context).postMore,
                   color: cs.onSurfaceVariant,
                   onPressed: () => showPostActionsSheet(context, post: post),
                 ),
@@ -16435,20 +18733,20 @@ class PostCard extends StatelessWidget {
                 prayAction(),
                 actionWithCount(
                   icon: post.viewerHasLiked ? Icons.favorite : Icons.favorite_border,
-                  label: 'Curtir',
+                  label: t(context).postLike,
                   onTap: onLike,
                   count: post.likeCount,
                   color: post.viewerHasLiked ? cs.error : null,
                 ),
                 actionWithCount(
                   icon: Icons.chat_bubble_outline,
-                  label: 'Comentar',
+                  label: t(context).postComment,
                   onTap: onComment,
                   count: post.commentCount,
                 ),
                 actionWithCount(
                   icon: Icons.send_rounded,
-                  label: 'Compartilhar',
+                  label: t(context).postShare,
                   onTap: onShare,
                   count: 0,
                 ),
@@ -16526,7 +18824,7 @@ class _ExpandablePostTextState extends State<ExpandablePostText> {
           Align(
             alignment: Alignment.centerLeft,
             child: AtalaiaTextButton(
-              label: 'ver mais',
+              label: t(context).commonSeeMore,
               onPressed: () => setState(() => _expanded = true),
             ),
           ),
@@ -17204,8 +19502,8 @@ class _HomeFeedScreenState extends State<HomeFeedScreen> {
                               SizedBox(height: MediaQuery.sizeOf(context).height * 0.14),
                               EmptyState(
                                 icon: Icons.inbox_outlined,
-                                title: 'Ainda não há posts.',
-                                ctaLabel: 'Criar post',
+                                title: t(context).feedEmptyPosts,
+                                ctaLabel: t(context).feedCreatePost,
                                 onCta: () {
                                   if (!isAuthenticated) return showCtaSnackBar(context);
                                   Navigator.of(context).pushNamed(Routes.createPost);
@@ -17260,8 +19558,8 @@ class _HomeFeedScreenState extends State<HomeFeedScreen> {
                                   padding: const EdgeInsets.only(top: 10),
                                   child: EmptyState(
                                     icon: Icons.inbox_outlined,
-                                    title: 'Ainda não há posts.',
-                                    ctaLabel: 'Criar post',
+                                    title: t(context).feedEmptyPosts,
+                                    ctaLabel: t(context).feedCreatePost,
                                     onCta: () {
                                       if (!isAuthenticated) return showCtaSnackBar(context);
                                       Navigator.of(context).pushNamed(Routes.createPost);
@@ -17304,7 +19602,7 @@ class _HomeFeedScreenState extends State<HomeFeedScreen> {
                                 onPray: () {
                                   if (!isAuthenticated) return showCtaSnackBar(context);
                                   repo.togglePrayer(post.id, isAuthenticated: true);
-                                  showInfoSnackBar(context, 'Oração registrada');
+                                  showInfoSnackBar(context, t(context).prayerRegisteredSnack);
                                 },
                                 onComment: () {
                                   if (!isAuthenticated) return showCtaSnackBar(context);
@@ -17324,7 +19622,7 @@ class _HomeFeedScreenState extends State<HomeFeedScreen> {
                                   if (!isAuthenticated) return showCtaSnackBar(context);
                                   final willSave = !post.viewerHasSaved;
                                   repo.toggleSave(post.id, isAuthenticated: true);
-                                  if (willSave) showInfoSnackBar(context, 'Salvo');
+                                  if (willSave) showInfoSnackBar(context, t(context).commonSaved);
                                 },
                               );
                             },
@@ -17388,7 +19686,7 @@ class CampaignCard extends StatelessWidget {
                   Chip(
                     visualDensity: VisualDensity.compact,
                     avatar: Icon(isUrgent ? Icons.local_fire_department_outlined : Icons.volunteer_activism_outlined, size: 18),
-                    label: Text(isUrgent ? 'Urgente' : _campaignStatusLabel(campaign.status)),
+                    label: Text(isUrgent ? t(context).campaignUrgent : _campaignStatusLabel(context, campaign.status)),
                   ),
                 ],
               ),
@@ -17400,7 +19698,7 @@ class CampaignCard extends StatelessWidget {
                   Chip(
                     visualDensity: VisualDensity.compact,
                     avatar: const Icon(Icons.category_outlined, size: 18),
-                    label: Text(_campaignCategoryLabel(campaign.category)),
+                    label: Text(_campaignCategoryLabel(context, campaign.category)),
                   ),
                   Chip(
                     visualDensity: VisualDensity.compact,
@@ -17423,12 +19721,12 @@ class CampaignCard extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      '${_formatBrl(campaign.raisedAmount)} arrecadados',
+                      t(context).campaignRaisedAmount(_formatBrl(campaign.raisedAmount)),
                       style: const TextStyle(fontWeight: FontWeight.w900),
                     ),
                   ),
                   Text(
-                    'meta: ${_formatBrl(campaign.goalAmount)}',
+                    t(context).campaignGoalAmount(_formatBrl(campaign.goalAmount)),
                     style: TextStyle(color: cs.outline, fontWeight: FontWeight.w700),
                   ),
                 ],
@@ -17441,7 +19739,7 @@ class CampaignCard extends StatelessWidget {
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        'Prazo: ${_formatTimestamp(campaign.deadline!.toLocal())}',
+                        t(context).campaignDeadlineAt(_formatTimestamp(campaign.deadline!.toLocal())),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(color: cs.outline, fontWeight: FontWeight.w700),
@@ -17555,6 +19853,7 @@ class _CampaignListScreenState extends State<CampaignListScreen> {
   Widget build(BuildContext context) {
     final repo = RepoScope.of(context);
     final session = SessionScope.of(context);
+    final l10n = t(context);
 
     return AnimatedBuilder(
       animation: Listenable.merge([repo, session]),
@@ -17566,7 +19865,7 @@ class _CampaignListScreenState extends State<CampaignListScreen> {
 
         return Scaffold(
           appBar: AppBar(
-            title: Text('Campanhas — ${widget.args.locationLabel}'),
+            title: Text(l10n.campaignsTitle(widget.args.locationLabel)),
             actions: [
               IconButton(
                 onPressed: () {
@@ -17582,7 +19881,7 @@ class _CampaignListScreenState extends State<CampaignListScreen> {
                   );
                 },
                 icon: const Icon(Icons.add),
-                tooltip: 'Criar',
+                tooltip: l10n.commonCreate,
               ),
             ],
           ),
@@ -17598,17 +19897,17 @@ class _CampaignListScreenState extends State<CampaignListScreen> {
                     runSpacing: 8,
                     children: [
                       ChoiceChip(
-                        label: const Text('Perto'),
+                        label: Text(l10n.campaignSortNearby),
                         selected: _sort == _CampaignSort.nearby,
                         onSelected: (_) => setState(() => _sort = _CampaignSort.nearby),
                       ),
                       ChoiceChip(
-                        label: const Text('Urgentes'),
+                        label: Text(l10n.campaignUrgent),
                         selected: _sort == _CampaignSort.urgent,
                         onSelected: (_) => setState(() => _sort = _CampaignSort.urgent),
                       ),
                       ChoiceChip(
-                        label: const Text('Populares'),
+                        label: Text(l10n.campaignSortPopular),
                         selected: _sort == _CampaignSort.popular,
                         onSelected: (_) => setState(() => _sort = _CampaignSort.popular),
                       ),
@@ -17618,7 +19917,7 @@ class _CampaignListScreenState extends State<CampaignListScreen> {
                 if (repo.isOffline)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                    child: Text('Sem conexão', style: TextStyle(color: Theme.of(context).colorScheme.outline)),
+                    child: Text(l10n.commonNoConnection, style: TextStyle(color: Theme.of(context).colorScheme.outline)),
                   ),
                 if (_loading && campaigns.isEmpty)
                   ...List.generate(
@@ -17630,8 +19929,8 @@ class _CampaignListScreenState extends State<CampaignListScreen> {
                     padding: const EdgeInsets.only(top: 40),
                     child: EmptyState(
                       icon: Icons.volunteer_activism_outlined,
-                      title: 'Ainda não há campanhas aqui.',
-                      ctaLabel: 'Criar campanha',
+                      title: l10n.campaignEmptyHere,
+                      ctaLabel: l10n.campaignCreateTitle,
                       onCta: () {
                         if (s is! AuthSession) return showCtaSnackBar(context);
                         Navigator.of(context).push(
@@ -17707,6 +20006,7 @@ class _CampaignDetailScreenState extends State<CampaignDetailScreen> {
     final repo = RepoScope.of(context);
     final session = SessionScope.of(context);
     final s = session.value;
+    final l10n = t(context);
 
     return AnimatedBuilder(
       animation: Listenable.merge([repo, session]),
@@ -17741,9 +20041,9 @@ class _CampaignDetailScreenState extends State<CampaignDetailScreen> {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Text('Esta campanha não está disponível.'),
+                          Text(l10n.campaignUnavailable),
                           const SizedBox(height: 12),
-                          PrimaryButton(label: 'Voltar', onPressed: () => Navigator.of(context).maybePop()),
+                          PrimaryButton(label: t(context).commonBack, onPressed: () => Navigator.of(context).maybePop()),
                         ],
                       ),
                     ),
@@ -17762,7 +20062,7 @@ class _CampaignDetailScreenState extends State<CampaignDetailScreen> {
               );
 
         return Scaffold(
-          appBar: AppBar(title: const Text('Campanha')),
+          appBar: AppBar(title: Text(l10n.campaignTitle)),
           body: body,
         );
       },
@@ -17799,20 +20099,21 @@ class _CampaignDetailBody extends StatelessWidget {
     final canPostUpdate = viewerId != null && viewerId == campaign.creatorId;
     final updates = repo.updatesForCampaign(campaign.id);
     final comments = repo.commentsForCampaign(campaign.id);
+    final l10n = t(context);
 
     void donate() {
       if (session is! AuthSession) return showCtaSnackBar(context);
       final auth = session as AuthSession;
       final raw = amountController.text.trim().replaceAll('.', '').replaceAll(',', '.');
       final amount = double.tryParse(raw) ?? 0;
-      if (amount <= 0) return showAtalaiaSnackBar(context, 'Informe um valor válido', kind: AtalaiaSnackKind.error);
+      if (amount <= 0) return showAtalaiaSnackBar(context, l10n.campaignInvalidAmount, kind: AtalaiaSnackKind.error);
       repo.donateToCampaign(
         campaign.id,
         session: auth,
         amount: amount,
         method: method,
       );
-      final label = method == PaymentMethod.pix ? 'Pagamento PIX gerado (demo)' : 'Doação registrada';
+      final label = method == PaymentMethod.pix ? l10n.campaignPixGeneratedDemo : l10n.campaignDonationRecorded;
       showAtalaiaSnackBar(context, label, kind: AtalaiaSnackKind.success);
     }
 
@@ -17823,7 +20124,7 @@ class _CampaignDetailBody extends StatelessWidget {
       if (text.isEmpty) return;
       updateController.clear();
       repo.addCampaignUpdateText(campaign.id, session: auth, content: text);
-      showAtalaiaSnackBar(context, 'Atualização publicada', kind: AtalaiaSnackKind.success);
+      showAtalaiaSnackBar(context, l10n.campaignUpdatePublished, kind: AtalaiaSnackKind.success);
     }
 
     void publishComment() {
@@ -17860,7 +20161,7 @@ class _CampaignDetailBody extends StatelessWidget {
             Chip(
               visualDensity: VisualDensity.compact,
               avatar: const Icon(Icons.category_outlined, size: 18),
-              label: Text(_campaignCategoryLabel(campaign.category)),
+              label: Text(_campaignCategoryLabel(context, campaign.category)),
             ),
             Chip(
               visualDensity: VisualDensity.compact,
@@ -17870,7 +20171,7 @@ class _CampaignDetailBody extends StatelessWidget {
             Chip(
               visualDensity: VisualDensity.compact,
               avatar: Icon(campaign.isUrgent ? Icons.local_fire_department_outlined : Icons.flag_outlined, size: 18),
-              label: Text(campaign.isUrgent ? 'Urgente' : _campaignStatusLabel(campaign.status)),
+              label: Text(campaign.isUrgent ? t(context).campaignUrgent : _campaignStatusLabel(context, campaign.status)),
             ),
           ],
         ),
@@ -17893,14 +20194,14 @@ class _CampaignDetailBody extends StatelessWidget {
               ),
             ),
             Text(
-              'meta ${_formatBrl(campaign.goalAmount)}',
+              l10n.campaignGoalAmount(_formatBrl(campaign.goalAmount)),
               style: TextStyle(color: cs.outline, fontWeight: FontWeight.w700),
             ),
           ],
         ),
         const SizedBox(height: 6),
         Text(
-          '${campaign.donationsCount} doações',
+          l10n.campaignDonationsCount(campaign.donationsCount),
           style: TextStyle(color: cs.outline, fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 12),
@@ -17910,7 +20211,7 @@ class _CampaignDetailBody extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Text('Doar', style: TextStyle(fontWeight: FontWeight.w900)),
+                Text(l10n.campaignDonateTitle, style: const TextStyle(fontWeight: FontWeight.w900)),
                 const SizedBox(height: 10),
                 Wrap(
                   spacing: 8,
@@ -17922,7 +20223,7 @@ class _CampaignDetailBody extends StatelessWidget {
                         children: [
                           Icon(_paymentMethodIcon(PaymentMethod.pix), size: 18),
                           const SizedBox(width: 6),
-                          const Text('PIX'),
+                          Text(l10n.paymentMethodPix),
                         ],
                       ),
                       selected: method == PaymentMethod.pix,
@@ -17934,7 +20235,7 @@ class _CampaignDetailBody extends StatelessWidget {
                         children: [
                           Icon(_paymentMethodIcon(PaymentMethod.card), size: 18),
                           const SizedBox(width: 6),
-                          const Text('Cartão'),
+                          Text(l10n.paymentMethodCard),
                         ],
                       ),
                       selected: method == PaymentMethod.card,
@@ -17945,19 +20246,19 @@ class _CampaignDetailBody extends StatelessWidget {
                 const SizedBox(height: 10),
                 AtalaiaTextField(
                   controller: amountController,
-                  labelText: 'Valor',
+                  labelText: l10n.campaignAmountLabel,
                   prefixText: 'R\$ ',
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
                 ),
                 const SizedBox(height: 10),
                 PrimaryButton(
-                  label: isAuth ? 'Confirmar doação' : 'Entrar para doar',
+                  label: isAuth ? l10n.campaignConfirmDonation : l10n.campaignSignInToDonate,
                   onPressed: isAuth ? donate : () => showCtaSnackBar(context),
                 ),
                 if (method == PaymentMethod.pix) ...[
                   const SizedBox(height: 10),
                   Text(
-                    'No PIX, o status começa como pendente e é confirmado em seguida (demo).',
+                    l10n.campaignPixPendingInfo,
                     style: TextStyle(color: cs.outline),
                   ),
                 ],
@@ -17966,17 +20267,17 @@ class _CampaignDetailBody extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 12),
-        const Text('Descrição', style: TextStyle(fontWeight: FontWeight.w900)),
+        Text(l10n.commonDescription, style: const TextStyle(fontWeight: FontWeight.w900)),
         const SizedBox(height: 6),
         Text(campaign.description, style: TextStyle(color: cs.onSurfaceVariant, height: 1.35)),
         const SizedBox(height: 18),
         Row(
           children: [
-            const Text('Atualizações', style: TextStyle(fontWeight: FontWeight.w900)),
+            Text(l10n.campaignUpdatesTitle, style: const TextStyle(fontWeight: FontWeight.w900)),
             const Spacer(),
             if (canPostUpdate)
               Text(
-                'Somente o criador publica',
+                l10n.campaignOnlyCreatorPublishes,
                 style: TextStyle(color: cs.outline, fontWeight: FontWeight.w700),
               ),
           ],
@@ -17991,13 +20292,13 @@ class _CampaignDetailBody extends StatelessWidget {
                 children: [
                   AtalaiaTextField(
                     controller: updateController,
-                    labelText: 'Escreva uma atualização',
+                    labelText: l10n.campaignWriteUpdate,
                     maxLines: 4,
                     minLines: 2,
                     textCapitalization: TextCapitalization.sentences,
                   ),
                   const SizedBox(height: 10),
-                  PrimaryButton(label: 'Publicar', onPressed: publishUpdate),
+                  PrimaryButton(label: l10n.commonPublish, onPressed: publishUpdate),
                 ],
               ),
             ),
@@ -18005,7 +20306,7 @@ class _CampaignDetailBody extends StatelessWidget {
         if (updates.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 10),
-            child: Text('Sem atualizações ainda.', style: TextStyle(color: cs.outline)),
+            child: Text(l10n.campaignNoUpdatesYet, style: TextStyle(color: cs.outline)),
           )
         else
           ...updates.map(
@@ -18038,7 +20339,7 @@ class _CampaignDetailBody extends StatelessWidget {
             ),
           ),
         const SizedBox(height: 18),
-        Text('Comentários (${comments.length})', style: const TextStyle(fontWeight: FontWeight.w900)),
+        Text(l10n.campaignCommentsTitle(comments.length), style: const TextStyle(fontWeight: FontWeight.w900)),
         const SizedBox(height: 10),
         if (!isAuth)
           Card(
@@ -18047,9 +20348,9 @@ class _CampaignDetailBody extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text('Entre para comentar', style: TextStyle(color: cs.outline)),
+                  Text(t(context).postSignInToComment, style: TextStyle(color: cs.outline)),
                   const SizedBox(height: 10),
-                  PrimaryButton(label: 'Entrar', onPressed: () => showCtaSnackBar(context)),
+                  PrimaryButton(label: t(context).commonSignIn, onPressed: () => showCtaSnackBar(context)),
                 ],
               ),
             ),
@@ -18063,13 +20364,13 @@ class _CampaignDetailBody extends StatelessWidget {
                 children: [
                   AtalaiaTextField(
                     controller: commentController,
-                    labelText: 'Adicionar comentário',
+                    labelText: t(context).commentAddLabel,
                     maxLines: 4,
                     minLines: 1,
                     textCapitalization: TextCapitalization.sentences,
                   ),
                   const SizedBox(height: 10),
-                  PrimaryButton(label: 'Publicar', onPressed: publishComment),
+                  PrimaryButton(label: t(context).commonPublish, onPressed: publishComment),
                 ],
               ),
             ),
@@ -18077,11 +20378,11 @@ class _CampaignDetailBody extends StatelessWidget {
         if (comments.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 10),
-            child: Text('Sem comentários ainda.', style: TextStyle(color: cs.outline)),
+            child: Text(t(context).commentNoCommentsYet, style: TextStyle(color: cs.outline)),
           )
         else
           ...comments.map((c) {
-            final identity = _identityForUserId(repo, c.userId, legacyVerified: c.isVerified);
+            final identity = _identityForUserId(repo, c.userId, legacyVerified: c.isVerified, userFallback: t(context).commonUserFallback);
             return Card(
               child: ListTile(
                 leading: Avatar(name: identity.avatarName, imageUrl: identity.avatarUrl, size: AvatarSize.s44),
@@ -18100,7 +20401,7 @@ class _CampaignDetailBody extends StatelessWidget {
                       Icon(Icons.verified, size: 18, color: context.brand.verifiedBlue),
                       const SizedBox(width: 6),
                     ],
-                    Text(_relativeTime(c.createdAt), style: TextStyle(color: cs.outline, fontWeight: FontWeight.w600)),
+                    Text(_relativeTime(context, c.createdAt), style: TextStyle(color: cs.outline, fontWeight: FontWeight.w600)),
                   ],
                 ),
                 subtitle: Column(
@@ -18145,11 +20446,22 @@ class _CreateCampaignScreenState extends State<CreateCampaignScreen> {
   late String _locationPath;
   late String _locationLabel;
 
+  String _locationLabelFor(BuildContext context, String path) {
+    final l10n = t(context);
+    return switch (path) {
+      'world' => l10n.campaignLocationWorld,
+      'world/sa/br' => l10n.campaignLocationBrazil,
+      'world/sa/br/go/goiania' => l10n.campaignLocationGoiania,
+      'world/sa/br/sp/sao-paulo' => l10n.campaignLocationSaoPaulo,
+      _ => _locationLabel.isNotEmpty ? _locationLabel : l10n.campaignLocationWorld,
+    };
+  }
+
   @override
   void initState() {
     super.initState();
     _locationPath = widget.initialLocationPath ?? 'world';
-    _locationLabel = widget.initialLocationLabel ?? 'Mundo';
+    _locationLabel = widget.initialLocationLabel ?? '';
   }
 
   @override
@@ -18170,25 +20482,25 @@ class _CreateCampaignScreenState extends State<CreateCampaignScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const ListTile(title: Text('Escolher local', style: TextStyle(fontWeight: FontWeight.w900))),
+              ListTile(title: Text(t(context).campaignChooseLocation, style: const TextStyle(fontWeight: FontWeight.w900))),
               ListTile(
                 leading: const Icon(Icons.public),
-                title: const Text('Mundo'),
+                title: Text(t(context).campaignLocationWorld),
                 onTap: () => Navigator.of(ctx).pop('world'),
               ),
               ListTile(
                 leading: const Icon(Icons.flag_outlined),
-                title: const Text('Brasil'),
+                title: Text(t(context).campaignLocationBrazil),
                 onTap: () => Navigator.of(ctx).pop('world/sa/br'),
               ),
               ListTile(
                 leading: const Icon(Icons.place_outlined),
-                title: const Text('Goiânia, GO'),
+                title: Text(t(context).campaignLocationGoiania),
                 onTap: () => Navigator.of(ctx).pop('world/sa/br/go/goiania'),
               ),
               ListTile(
                 leading: const Icon(Icons.place_outlined),
-                title: const Text('São Paulo, SP'),
+                title: Text(t(context).campaignLocationSaoPaulo),
                 onTap: () => Navigator.of(ctx).pop('world/sa/br/sp/sao-paulo'),
               ),
               const SizedBox(height: 8),
@@ -18200,16 +20512,9 @@ class _CreateCampaignScreenState extends State<CreateCampaignScreen> {
     if (!mounted) return;
     if (picked == null) return;
     final nextPath = picked;
-    final nextLabel = switch (nextPath) {
-      'world' => 'Mundo',
-      'world/sa/br' => 'Brasil',
-      'world/sa/br/go/goiania' => 'Goiânia, GO',
-      'world/sa/br/sp/sao-paulo' => 'São Paulo, SP',
-      _ => 'Mundo',
-    };
     setState(() {
       _locationPath = nextPath;
-      _locationLabel = nextLabel;
+      _locationLabel = _locationLabelFor(context, nextPath);
     });
   }
 
@@ -18227,19 +20532,20 @@ class _CreateCampaignScreenState extends State<CreateCampaignScreen> {
   }
 
   void _submit(AuthSession session, DemoRepository repo) {
-    final t = _title.text.trim();
-    final d = _description.text.trim();
+    final l10n = t(context);
+    final titleText = _title.text.trim();
+    final descriptionText = _description.text.trim();
     final gRaw = _goal.text.trim().replaceAll('.', '').replaceAll(',', '.');
     final g = double.tryParse(gRaw) ?? 0;
-    if (t.isEmpty) return showAtalaiaSnackBar(context, 'Informe um título', kind: AtalaiaSnackKind.error);
-    if (d.isEmpty) return showAtalaiaSnackBar(context, 'Informe uma descrição', kind: AtalaiaSnackKind.error);
-    if (g <= 0) return showAtalaiaSnackBar(context, 'Informe uma meta válida', kind: AtalaiaSnackKind.error);
+    if (titleText.isEmpty) return showAtalaiaSnackBar(context, l10n.campaignEnterTitle, kind: AtalaiaSnackKind.error);
+    if (descriptionText.isEmpty) return showAtalaiaSnackBar(context, l10n.campaignEnterDescription, kind: AtalaiaSnackKind.error);
+    if (g <= 0) return showAtalaiaSnackBar(context, l10n.campaignEnterValidGoal, kind: AtalaiaSnackKind.error);
 
     final imgUrl = _imageUrl.text.trim();
     repo.createCampaign(
       session,
-      title: t,
-      description: d,
+      title: titleText,
+      description: descriptionText,
       category: _category,
       goalAmount: g,
       locationPath: _locationPath,
@@ -18248,7 +20554,7 @@ class _CreateCampaignScreenState extends State<CreateCampaignScreen> {
       imageUrl: imgUrl.isEmpty ? null : imgUrl,
       status: CampaignStatus.active,
     );
-    showAtalaiaSnackBar(context, 'Campanha criada', kind: AtalaiaSnackKind.success);
+    showAtalaiaSnackBar(context, l10n.campaignCreated, kind: AtalaiaSnackKind.success);
     Future<void>.delayed(const Duration(milliseconds: 220)).then((_) {
       if (!context.mounted) return;
       Navigator.of(context).maybePop();
@@ -18259,6 +20565,7 @@ class _CreateCampaignScreenState extends State<CreateCampaignScreen> {
   Widget build(BuildContext context) {
     final repo = RepoScope.of(context);
     final session = SessionScope.of(context);
+    final l10n = t(context);
 
     return ValueListenableBuilder(
       valueListenable: session,
@@ -18266,30 +20573,30 @@ class _CreateCampaignScreenState extends State<CreateCampaignScreen> {
         final cs = Theme.of(context).colorScheme;
         if (s is! AuthSession) {
           return Scaffold(
-            appBar: AppBar(title: const Text('Criar campanha')),
+            appBar: AppBar(title: Text(l10n.campaignCreateTitle)),
             body: Center(
               child: PrimaryButton(
-                label: 'Entrar para criar',
-                onPressed: () => showLoginSnackBar(context, message: 'Entre para criar campanha'),
+                label: t(context).ctaSignInToCreate,
+                onPressed: () => showLoginSnackBar(context, message: t(context).ctaSignInToCreate),
               ),
             ),
           );
         }
 
         return Scaffold(
-          appBar: AppBar(title: const Text('Criar campanha')),
+          appBar: AppBar(title: Text(l10n.campaignCreateTitle)),
           body: ListView(
             padding: const EdgeInsets.all(12),
             children: [
               AtalaiaTextField(
                 controller: _title,
-                labelText: 'Título',
+                labelText: l10n.campaignFieldTitle,
                 textCapitalization: TextCapitalization.sentences,
               ),
               const SizedBox(height: 10),
               AtalaiaTextField(
                 controller: _description,
-                labelText: 'Descrição',
+                labelText: l10n.commonDescription,
                 maxLines: 6,
                 minLines: 3,
                 textCapitalization: TextCapitalization.sentences,
@@ -18297,19 +20604,15 @@ class _CreateCampaignScreenState extends State<CreateCampaignScreen> {
               const SizedBox(height: 10),
               AtalaiaTextField(
                 controller: _goal,
-                labelText: 'Meta (R\$)',
+                labelText: l10n.campaignGoalLabel,
                 keyboardType: const TextInputType.numberWithOptions(decimal: true),
               ),
               const SizedBox(height: 10),
               DropdownButtonFormField<CampaignCategory>(
                 initialValue: _category,
-                decoration: const InputDecoration(
-                  isDense: true,
-                  labelText: 'Categoria',
-                  border: OutlineInputBorder(),
-                ),
+                decoration: InputDecoration(isDense: true, labelText: l10n.campaignCategoryFieldLabel, border: const OutlineInputBorder()),
                 items: CampaignCategory.values
-                    .map((c) => DropdownMenuItem(value: c, child: Text(_campaignCategoryLabel(c))))
+                    .map((c) => DropdownMenuItem(value: c, child: Text(_campaignCategoryLabel(context, c))))
                     .toList(growable: false),
                 onChanged: (v) => setState(() => _category = v ?? CampaignCategory.communityProject),
               ),
@@ -18317,7 +20620,7 @@ class _CreateCampaignScreenState extends State<CreateCampaignScreen> {
               Card(
                 child: ListTile(
                   leading: const Icon(Icons.place_outlined),
-                  title: Text(_locationLabel, style: const TextStyle(fontWeight: FontWeight.w800)),
+                  title: Text(_locationLabelFor(context, _locationPath), style: const TextStyle(fontWeight: FontWeight.w800)),
                   subtitle: Text(_locationPath),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: _pickLocation,
@@ -18327,7 +20630,7 @@ class _CreateCampaignScreenState extends State<CreateCampaignScreen> {
               Card(
                 child: ListTile(
                   leading: const Icon(Icons.schedule),
-                  title: Text(_deadline == null ? 'Definir prazo (opcional)' : _formatTimestamp(_deadline!.toLocal())),
+                  title: Text(_deadline == null ? l10n.campaignSetDeadlineOptional : _formatTimestamp(_deadline!.toLocal())),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: _pickDeadline,
                 ),
@@ -18335,16 +20638,16 @@ class _CreateCampaignScreenState extends State<CreateCampaignScreen> {
               const SizedBox(height: 10),
               AtalaiaTextField(
                 controller: _imageUrl,
-                labelText: 'Imagem (URL)',
+                labelText: l10n.campaignImageUrlLabel,
                 keyboardType: TextInputType.url,
               ),
               const SizedBox(height: 14),
               Text(
-                'As doações via PIX e cartão ficam registradas em “donations”.',
+                l10n.campaignDonationsStoredInfo,
                 style: TextStyle(color: cs.outline),
               ),
               const SizedBox(height: 12),
-              PrimaryButton(label: 'Publicar campanha', onPressed: () => _submit(s, repo)),
+              PrimaryButton(label: l10n.campaignPublishCta, onPressed: () => _submit(s, repo)),
               const SizedBox(height: 12),
             ],
           ),
@@ -18403,12 +20706,12 @@ class _PrayerChallengeListScreenState extends State<PrayerChallengeListScreen> {
 
         return Scaffold(
           appBar: AppBar(
-            title: const Text('Desafios de oração'),
+            title: Text(t(context).prayerChallengesTitle),
             actions: [
               IconButton(
                 onPressed: () => unawaited(_load(force: true)),
                 icon: const Icon(Icons.refresh),
-                tooltip: 'Atualizar',
+                tooltip: t(context).commonRefresh,
               ),
             ],
           ),
@@ -18424,7 +20727,7 @@ class _PrayerChallengeListScreenState extends State<PrayerChallengeListScreen> {
                     runSpacing: 8,
                     children: [
                       ChoiceChip(
-                        label: const Text('Ativos'),
+                        label: Text(t(context).prayerChallengesFilterActive),
                         selected: _onlyActive,
                         onSelected: (_) => setState(() {
                           _onlyActive = true;
@@ -18432,7 +20735,7 @@ class _PrayerChallengeListScreenState extends State<PrayerChallengeListScreen> {
                         }),
                       ),
                       ChoiceChip(
-                        label: const Text('Todos'),
+                        label: Text(t(context).prayerChallengesFilterAll),
                         selected: !_onlyActive,
                         onSelected: (_) => setState(() {
                           _onlyActive = false;
@@ -18451,7 +20754,7 @@ class _PrayerChallengeListScreenState extends State<PrayerChallengeListScreen> {
                   Padding(
                     padding: const EdgeInsets.all(12),
                     child: Text(
-                      _onlyActive ? 'Nenhum desafio ativo agora.' : 'Nenhum desafio encontrado.',
+                      _onlyActive ? t(context).prayerChallengesEmptyActive : t(context).prayerChallengesEmptyAll,
                       style: TextStyle(color: Theme.of(context).colorScheme.outline),
                     ),
                   )
@@ -18486,26 +20789,28 @@ class _PrayerChallengeListTile extends StatelessWidget {
   final PrayerChallengeModel challenge;
   final VoidCallback onOpen;
 
-  String _windowLabel(DateTime nowUtc) {
+  String _windowLabel(BuildContext context, DateTime nowUtc) {
     final now = nowUtc;
     final start = challenge.startDate.toUtc();
     final end = challenge.endDate.toUtc();
     if (now.isBefore(start)) {
       final d = start.difference(now);
-      return 'Começa em ${d.inDays >= 1 ? '${d.inDays} d' : '${d.inHours} h'}';
+      final duration = d.inDays >= 1 ? '${d.inDays} d' : '${d.inHours} h';
+      return t(context).prayerChallengeStartsIn(duration);
     }
-    if (now.isAfter(end)) return 'Encerrado';
+    if (now.isAfter(end)) return t(context).prayerChallengeEnded;
     final d = end.difference(now);
-    return 'Termina em ${d.inDays >= 1 ? '${d.inDays} d' : '${d.inHours} h'}';
+    final duration = d.inDays >= 1 ? '${d.inDays} d' : '${d.inHours} h';
+    return t(context).prayerChallengeEndsIn(duration);
   }
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final now = DateTime.now().toUtc();
-    final subtitle = (challenge.description.trim().isEmpty ? 'Sem descrição' : challenge.description.trim());
+    final subtitle = challenge.description.trim().isEmpty ? t(context).prayerChallengeNoDescription : challenge.description.trim();
     final participants = _formatCompactInt(challenge.participantsCount);
-    final window = _windowLabel(now);
+    final window = _windowLabel(context, now);
 
     return Card(
       margin: const EdgeInsets.fromLTRB(12, 6, 12, 6),
@@ -18538,7 +20843,7 @@ class _PrayerChallengeListTile extends StatelessWidget {
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                         child: Text(
-                          'Participando',
+                          t(context).prayerChallengeParticipating,
                           style: TextStyle(color: cs.onPrimaryContainer, fontWeight: FontWeight.w900, fontSize: 12),
                         ),
                       ),
@@ -18557,7 +20862,7 @@ class _PrayerChallengeListTile extends StatelessWidget {
                 children: [
                   Icon(Icons.groups_2_outlined, size: 16, color: cs.outline),
                   const SizedBox(width: 6),
-                  Text('$participants participantes', style: TextStyle(color: cs.outline, fontWeight: FontWeight.w700)),
+                  Text(t(context).prayerChallengeParticipantsCount(participants), style: TextStyle(color: cs.outline, fontWeight: FontWeight.w700)),
                   const SizedBox(width: 12),
                   Icon(Icons.schedule, size: 16, color: cs.outline),
                   const SizedBox(width: 6),
@@ -18640,9 +20945,9 @@ class _PrayerChallengeDetailScreenState extends State<PrayerChallengeDetailScree
     final resolvedLocationId = _looksLikeUuid(locationId) ? locationId : await repo.locationIdByPath(regionPath);
     if (!mounted) return;
     if (resolvedLocationId == null || resolvedLocationId.isEmpty) {
-      return showAtalaiaSnackBar(context, 'Região do desafio indisponível', kind: AtalaiaSnackKind.error);
+      return showAtalaiaSnackBar(context, t(context).prayerChallengeRegionUnavailable, kind: AtalaiaSnackKind.error);
     }
-    final locationName = challenge.targetLocationName?.trim().isNotEmpty ?? false ? challenge.targetLocationName!.trim() : 'Região';
+    final locationName = challenge.targetLocationName?.trim().isNotEmpty ?? false ? challenge.targetLocationName!.trim() : t(context).prayerChallengeRegionFallback;
     final level = _levelFromRegionPath(regionPath);
     Navigator.of(context).pushNamed(
       Routes.regionPrayer,
@@ -18663,17 +20968,17 @@ class _PrayerChallengeDetailScreenState extends State<PrayerChallengeDetailScree
     final ok = challenge.viewerJoined ? await repo.leavePrayerChallenge(challenge.id) : await repo.joinPrayerChallenge(challenge.id);
     if (!mounted) return;
     if (!ok) {
-      showAtalaiaSnackBar(context, 'Não foi possível atualizar sua participação', kind: AtalaiaSnackKind.error);
+      showAtalaiaSnackBar(context, t(context).participationUpdateFailed, kind: AtalaiaSnackKind.error);
     } else {
       unawaited(_load(force: true));
     }
   }
 
   Future<void> _share(PrayerChallengeModel challenge) async {
-    final text = 'Estou participando do desafio de oração: "${challenge.title}".';
+    final text = t(context).prayerChallengeShareText(challenge.title);
     await Clipboard.setData(ClipboardData(text: text));
     if (!mounted) return;
-    showAtalaiaSnackBar(context, 'Texto copiado para compartilhar', kind: AtalaiaSnackKind.success);
+    showAtalaiaSnackBar(context, t(context).prayerChallengeShareCopied, kind: AtalaiaSnackKind.success);
   }
 
   @override
@@ -18689,11 +20994,11 @@ class _PrayerChallengeDetailScreenState extends State<PrayerChallengeDetailScree
 
         if (challenge == null && !_loading) {
           return Scaffold(
-            appBar: AppBar(title: const Text('Desafio')),
+            appBar: AppBar(title: Text(t(context).prayerChallengeTitle)),
             body: Center(
               child: Padding(
                 padding: const EdgeInsets.all(16),
-                child: Text('Desafio não encontrado.', style: TextStyle(color: cs.outline)),
+                child: Text(t(context).prayerChallengeNotFound, style: TextStyle(color: cs.outline)),
               ),
             ),
           );
@@ -18711,17 +21016,17 @@ class _PrayerChallengeDetailScreenState extends State<PrayerChallengeDetailScree
 
         return Scaffold(
           appBar: AppBar(
-            title: Text(c?.title ?? 'Desafio'),
+            title: Text(c?.title ?? t(context).prayerChallengeTitle),
             actions: [
               IconButton(
                 onPressed: c == null ? null : () => unawaited(_share(c)),
                 icon: const Icon(Icons.share_outlined),
-                tooltip: 'Compartilhar',
+                tooltip: t(context).prayerChallengeShare,
               ),
               IconButton(
                 onPressed: () => unawaited(_load(force: true)),
                 icon: const Icon(Icons.refresh),
-                tooltip: 'Atualizar',
+                tooltip: t(context).commonRefresh,
               ),
             ],
           ),
@@ -18777,14 +21082,14 @@ class _PrayerChallengeDetailScreenState extends State<PrayerChallengeDetailScree
                                   children: [
                                     Expanded(
                                       child: PrimaryButton(
-                                        label: c.viewerJoined ? 'Sair do desafio' : 'Participar do desafio',
+                                        label: c.viewerJoined ? t(context).prayerChallengeLeaveAction : t(context).prayerChallengeJoinAction,
                                         onPressed: () => unawaited(_toggleJoin(c)),
                                       ),
                                     ),
                                     const SizedBox(width: 10),
                                     Expanded(
                                       child: PrimaryButton(
-                                        label: 'Orar agora',
+                                        label: t(context).prayerStart,
                                         onPressed: () => unawaited(_startPrayer(c)),
                                       ),
                                     ),
@@ -18801,13 +21106,16 @@ class _PrayerChallengeDetailScreenState extends State<PrayerChallengeDetailScree
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Text('Progresso', style: TextStyle(fontWeight: FontWeight.w900)),
+                              Text(t(context).prayerChallengeProgressTitle, style: const TextStyle(fontWeight: FontWeight.w900)),
                               const SizedBox(height: 10),
                               Row(
                                 children: [
                                   Expanded(
                                     child: Text(
-                                      'Participantes: ${_formatCompactInt(participantsCount)}${goalParticipants > 0 ? ' / ${_formatCompactInt(goalParticipants)}' : ''}',
+                                      t(context).prayerChallengeParticipantsProgress(
+                                        _formatCompactInt(participantsCount),
+                                        goalParticipants > 0 ? ' / ${_formatCompactInt(goalParticipants)}' : '',
+                                      ),
                                       style: TextStyle(color: cs.outline, fontWeight: FontWeight.w700),
                                     ),
                                   ),
@@ -18821,7 +21129,10 @@ class _PrayerChallengeDetailScreenState extends State<PrayerChallengeDetailScree
                                 children: [
                                   Expanded(
                                     child: Text(
-                                      'Tempo: ${_formatHoursFromSeconds(totalSeconds)}${goalPrayerSeconds > 0 ? ' / ${_formatHoursFromSeconds(goalPrayerSeconds)}' : ''}',
+                                      t(context).prayerChallengeTimeProgress(
+                                        _formatHoursFromSeconds(totalSeconds),
+                                        goalPrayerSeconds > 0 ? ' / ${_formatHoursFromSeconds(goalPrayerSeconds)}' : '',
+                                      ),
                                       style: TextStyle(color: cs.outline, fontWeight: FontWeight.w700),
                                     ),
                                   ),
@@ -18836,39 +21147,45 @@ class _PrayerChallengeDetailScreenState extends State<PrayerChallengeDetailScree
                       ),
                       const SizedBox(height: 12),
                       if (_rankUsers.isNotEmpty) ...[
-                        const Text('Top intercessores', style: TextStyle(fontWeight: FontWeight.w900)),
+                        Text(t(context).prayerChallengeTopIntercessors, style: const TextStyle(fontWeight: FontWeight.w900)),
                         const SizedBox(height: 8),
                         ..._rankUsers.take(10).toList(growable: false).asMap().entries.map(
                               (e) => _RankRow(
                                 rank: e.key + 1,
                                 title: e.value.displayName.trim().isNotEmpty ? e.value.displayName.trim() : (e.value.username.trim().isNotEmpty ? e.value.username.trim() : e.value.userId),
-                                subtitle: '${_formatHoursFromSeconds(e.value.totalDurationSeconds)} • ${_formatCompactInt(e.value.sessionsCount)} sessões',
+                                subtitle: t(context).prayerChallengeRankSessions(
+                                  _formatHoursFromSeconds(e.value.totalDurationSeconds),
+                                  _formatCompactInt(e.value.sessionsCount),
+                                ),
                                 leadingUrl: e.value.avatarUrl,
                               ),
                             ),
                         const SizedBox(height: 12),
                       ],
                       if (_rankCommunities.isNotEmpty) ...[
-                        const Text('Top comunidades', style: TextStyle(fontWeight: FontWeight.w900)),
+                        Text(t(context).prayerChallengeTopCommunities, style: const TextStyle(fontWeight: FontWeight.w900)),
                         const SizedBox(height: 8),
                         ..._rankCommunities.take(10).toList(growable: false).asMap().entries.map(
                               (e) => _RankRow(
                                 rank: e.key + 1,
                                 title: e.value.name.trim().isEmpty ? e.value.communityId : e.value.name.trim(),
-                                subtitle: '${_formatCompactInt(e.value.participantsCount)} participantes',
+                                subtitle: t(context).prayerChallengeParticipantsCount(_formatCompactInt(e.value.participantsCount)),
                                 leadingUrl: null,
                               ),
                             ),
                         const SizedBox(height: 12),
                       ],
                       if (_rankCountries.isNotEmpty) ...[
-                        const Text('Top países', style: TextStyle(fontWeight: FontWeight.w900)),
+                        Text(t(context).prayerChallengeTopCountries, style: const TextStyle(fontWeight: FontWeight.w900)),
                         const SizedBox(height: 8),
                         ..._rankCountries.take(10).toList(growable: false).asMap().entries.map(
                               (e) => _RankRow(
                                 rank: e.key + 1,
                                 title: e.value.countryName,
-                                subtitle: '${_formatHoursFromSeconds(e.value.totalDurationSeconds)} • ${_formatCompactInt(e.value.participantsCount)} sessões',
+                                subtitle: t(context).prayerChallengeRankSessions(
+                                  _formatHoursFromSeconds(e.value.totalDurationSeconds),
+                                  _formatCompactInt(e.value.participantsCount),
+                                ),
                                 leadingUrl: null,
                               ),
                             ),
@@ -18945,11 +21262,17 @@ class DirectInboxScreen extends StatefulWidget {
 class _DirectInboxScreenState extends State<DirectInboxScreen> {
   final _search = TextEditingController();
   var _seededCommunityThreads = false;
+  var _directPrimed = false;
 
   Future<void> _onRefresh() async {
     final repo = RepoScope.of(context);
     repo.setDirectLoading(true);
-    await Future<void>.delayed(const Duration(milliseconds: 320));
+    final session = SessionScope.of(context).value;
+    if (session is AuthSession && repo.supabase != null && !repo.isOffline) {
+      await repo.refreshDirectForViewer(session.userId, force: true);
+    } else {
+      await Future<void>.delayed(const Duration(milliseconds: 320));
+    }
     repo.setDirectLoading(false);
   }
 
@@ -18969,17 +21292,31 @@ class _DirectInboxScreenState extends State<DirectInboxScreen> {
       builder: (context, _) {
         final s = session.value;
         final selectingPostId = widget.args?.selectForPostId;
-        final isSelecting = selectingPostId != null;
+        final selectingSharedText = widget.args?.selectForSharedText?.trim();
+        final isSelecting = selectingPostId != null || (selectingSharedText != null && selectingSharedText.isNotEmpty);
+        final l10n = t(context);
 
         if (s is! AuthSession) {
           final content = Center(
             child: PrimaryButton(
-              label: 'Entrar para abrir o Direct',
-              onPressed: () => showLoginSnackBar(context, message: 'Entre para enviar mensagens'),
+              label: l10n.directSignInToOpen,
+              onPressed: () => showLoginSnackBar(context, message: l10n.directSignInToSendMessage),
             ),
           );
           if (widget.embedded) return content;
-          return Scaffold(appBar: AppBar(title: const Text('Direct')), body: content);
+          return Scaffold(appBar: AppBar(title: Text(l10n.navDirect)), body: content);
+        }
+
+        if (!_directPrimed) {
+          _directPrimed = true;
+          Future<void>.microtask(() async {
+            if (!mounted) return;
+            final repo = RepoScope.of(context);
+            final session = SessionScope.of(context).value;
+            if (session is! AuthSession) return;
+            if (repo.supabase == null || repo.isOffline) return;
+            await repo.refreshDirectForViewer(session.userId, force: true);
+          });
         }
 
         if (!_seededCommunityThreads) {
@@ -18995,13 +21332,13 @@ class _DirectInboxScreenState extends State<DirectInboxScreen> {
                 .where((c) => c.viewerStatus == CommunityViewerStatus.approved)
                 .toList(growable: false);
             for (final c in approved) {
-              repo.openOrCreateCommunityThread(c.id);
+              repo.openOrCreateCommunityThread(c.id, nameFallback: l10n.communityTitle, usernameFallback: 'group');
             }
           });
         }
 
         final threads = repo.threadsFor(s, query: _search.text);
-        final title = isSelecting ? 'Enviar por Direct' : 'Mensagens';
+        final title = isSelecting ? l10n.shareSheetSendDirect : l10n.mainTitleMessages;
         final body = Column(
           children: [
             if (repo.isOffline) OfflineBanner(onRetry: () => repo.setOffline(false)),
@@ -19012,7 +21349,7 @@ class _DirectInboxScreenState extends State<DirectInboxScreen> {
                 AtalaiaSpacing.md,
                 AtalaiaSpacing.sm,
               ),
-              child: SearchField(controller: _search, hintText: 'Pesquisar conversas'),
+              child: SearchField(controller: _search, hintText: l10n.commonSearch),
             ),
             Expanded(
               child: Builder(
@@ -19031,9 +21368,9 @@ class _DirectInboxScreenState extends State<DirectInboxScreen> {
                     return EmptyState(
                       icon: Icons.send_rounded,
                       title: q.isEmpty
-                          ? 'Seu Direct ainda está vazio.\nEnvie uma mensagem para começar.'
-                          : 'Nenhuma conversa encontrada.\nTente outro termo.',
-                      ctaLabel: q.isEmpty ? 'Nova mensagem' : null,
+                          ? l10n.directEmpty
+                          : l10n.directEmptySearch,
+                      ctaLabel: q.isEmpty ? l10n.mainLeadingNewMessage : null,
                       onCta: q.isEmpty ? () => Navigator.of(context).pushNamed(Routes.newMessage) : null,
                     );
                   }
@@ -19047,32 +21384,69 @@ class _DirectInboxScreenState extends State<DirectInboxScreen> {
                       separatorBuilder: (_, __) => const SizedBox(height: 10),
                       itemBuilder: (context, index) {
                         final t = threads[index];
+                        final displayIsGroup = t.isGroup;
+                        String displayName = t.peerName;
+                        String displayUsername = t.peerUsername;
+                        String? displayImageUrl;
+                        var displayIsVerified = false;
+                        if (displayIsGroup) {
+                          final c = t.communityId == null ? null : repo.findCommunity(t.communityId!);
+                          displayName = c?.name ?? t.peerName;
+                          displayImageUrl = c?.imageUrl;
+                          displayIsVerified = false;
+                        } else {
+                          var resolvedPeerId = t.peerUserId;
+                          if (resolvedPeerId == s.userId) {
+                            final messages = repo.messagesFor(t.id, s);
+                            for (final m in messages) {
+                              if (m.senderId != s.userId) {
+                                resolvedPeerId = m.senderId;
+                                break;
+                              }
+                            }
+                          }
+                          final p = repo.profileForUserId(resolvedPeerId);
+                          if (p != null) {
+                            displayName = _displayNameForProfile(p, userFallback: l10n.commonUserFallback);
+                            displayUsername = _usernameForProfile(p, userId: p.userId);
+                            displayImageUrl = p.avatarUrl;
+                            displayIsVerified = p.isVerified;
+                          } else {
+                            displayIsVerified = t.peerIsVerified;
+                          }
+                        }
                         return _DirectRow(
                           thread: t,
+                          displayName: displayName,
+                          displayImageUrl: displayImageUrl,
+                          displayIsVerified: displayIsVerified,
+                          displayIsGroup: displayIsGroup,
                           onOpen: () async {
                             if (isSelecting) {
-                              final post = RepoScope.of(context).findPost(selectingPostId);
-                              if (post == null) {
-                                showAtalaiaSnackBar(context, 'Este post não está disponível.');
-                                return;
+                              if (selectingPostId != null) {
+                                final post = RepoScope.of(context).findPost(selectingPostId);
+                                if (post == null) {
+                                  showAtalaiaSnackBar(context, l10n.postUnavailable);
+                                  return;
+                                }
+                                await repo.sendPostCardMessage(t.id, s.userId, post);
+                              } else if (selectingSharedText != null && selectingSharedText.isNotEmpty) {
+                                await repo.sendTextMessage(t.id, s.userId, selectingSharedText);
                               }
-                              await repo.sendPostCardMessage(t.id, s.userId, post);
                               if (!context.mounted) return;
-                              showAtalaiaSnackBar(context, 'Enviado');
+                              showAtalaiaSnackBar(context, l10n.commonSent);
                             }
 
                             repo.markThreadRead(t.id);
                             if (!context.mounted) return;
-                            final peerIsVerified = t.isGroup
-                                ? false
-                                : (repo.profileForUserId(t.peerUserId)?.isVerified ?? t.peerIsVerified);
                             Navigator.of(context).pushNamed(
                               Routes.chat,
                               arguments: ChatArgs(
                                 threadId: t.id,
-                                peerName: t.peerName,
-                                peerUsername: t.peerUsername,
-                                peerIsVerified: peerIsVerified,
+                                peerName: displayName,
+                                peerUsername: displayUsername,
+                                peerIsVerified: displayIsGroup ? false : displayIsVerified,
+                                peerAvatarUrl: displayIsGroup ? null : displayImageUrl,
                                 communityId: t.communityId,
                               ),
                             );
@@ -19096,13 +21470,13 @@ class _DirectInboxScreenState extends State<DirectInboxScreen> {
             centerTitle: false,
             actions: [
               IconButton(
-                onPressed: () => showInfoSnackBar(context, 'Câmera (em breve)'),
-                tooltip: 'Câmera',
+                onPressed: () => showInfoSnackBar(context, t(context).directCameraComingSoon),
+                tooltip: t(context).directCamera,
                 icon: const Icon(Icons.camera_alt_outlined),
               ),
               IconButton(
                 onPressed: () => Navigator.of(context).pushNamed(Routes.newMessage),
-                tooltip: 'Nova mensagem',
+                tooltip: t(context).mainLeadingNewMessage,
                 icon: const Icon(Icons.edit_outlined),
               )
             ],
@@ -19117,25 +21491,31 @@ class _DirectInboxScreenState extends State<DirectInboxScreen> {
 class _DirectRow extends StatelessWidget {
   const _DirectRow({
     required this.thread,
+    required this.displayName,
+    required this.displayImageUrl,
+    required this.displayIsVerified,
+    required this.displayIsGroup,
     required this.onOpen,
     required this.onToggleMute,
     required this.onDelete,
   });
 
   final ThreadModel thread;
+  final String displayName;
+  final String? displayImageUrl;
+  final bool displayIsVerified;
+  final bool displayIsGroup;
   final VoidCallback onOpen;
   final VoidCallback onToggleMute;
   final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
-    final repo = RepoScope.of(context);
-    final time = _relativeTime(thread.lastAt);
+    final time = _relativeTime(context, thread.lastAt);
     final cs = Theme.of(context).colorScheme;
     final isUnread = thread.unreadCount > 0;
     const radius = 22.0;
-    final peerIsVerified =
-        thread.isGroup ? false : (repo.profileForUserId(thread.peerUserId)?.isVerified ?? thread.peerIsVerified);
+    final peerIsVerified = displayIsGroup ? false : displayIsVerified;
 
     return Dismissible(
       key: ValueKey('direct-${thread.id}'),
@@ -19164,9 +21544,9 @@ class _DirectRow extends StatelessWidget {
         }
         final ok = await showAtalaiaConfirmDialog(
           context,
-          title: 'Excluir conversa?',
-          message: 'Isso remove a conversa do seu inbox (demo).',
-          confirmLabel: 'Excluir',
+          title: t(context).directDeleteConversationTitle,
+          message: t(context).directDeleteConversationMessage,
+          confirmLabel: t(context).commonDelete,
           isDestructive: true,
         );
         return ok == true;
@@ -19189,9 +21569,11 @@ class _DirectRow extends StatelessWidget {
                   SizedBox(
                     width: 48,
                     height: 48,
-                    child: thread.isGroup
-                        ? const IconAvatar(icon: Icons.groups_outlined, size: 48)
-                        : Avatar(name: thread.peerName, size: AvatarSize.s44),
+                    child: displayIsGroup
+                        ? (displayImageUrl == null || displayImageUrl!.trim().isEmpty
+                            ? const IconAvatar(icon: Icons.groups_outlined, size: 48)
+                            : Avatar(name: displayName, imageUrl: displayImageUrl, size: AvatarSize.s44))
+                        : Avatar(name: displayName, imageUrl: displayImageUrl, size: AvatarSize.s44),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -19202,7 +21584,7 @@ class _DirectRow extends StatelessWidget {
                           children: [
                             Flexible(
                               child: Text(
-                                thread.peerName,
+                                displayName,
                                 style: TextStyle(fontWeight: isUnread ? FontWeight.w900 : FontWeight.w800),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
@@ -19212,11 +21594,11 @@ class _DirectRow extends StatelessWidget {
                               const SizedBox(width: 6),
                               Icon(Icons.verified, size: 18, color: context.brand.verifiedBlue),
                             ],
-                            if (thread.isGroup) ...[
+                            if (displayIsGroup) ...[
                               const SizedBox(width: 6),
                               Icon(Icons.circle, size: 6, color: cs.outline),
                               const SizedBox(width: 6),
-                              Text('Grupo', style: TextStyle(color: cs.outline, fontSize: 12)),
+                              Text(t(context).directGroupLabel, style: TextStyle(color: cs.outline, fontSize: 12)),
                             ],
                             if (thread.isMuted) ...[
                               const SizedBox(width: 6),
@@ -19298,6 +21680,7 @@ class _NewMessageScreenState extends State<NewMessageScreen> {
   Widget build(BuildContext context) {
     final repo = RepoScope.of(context);
     final session = SessionScope.of(context);
+    final l10n = t(context);
 
     return AnimatedBuilder(
       animation: Listenable.merge([repo, session, _search]),
@@ -19305,11 +21688,11 @@ class _NewMessageScreenState extends State<NewMessageScreen> {
         final s = session.value;
         if (s is! AuthSession) {
           return Scaffold(
-            appBar: AppBar(title: const Text('Nova mensagem')),
+            appBar: AppBar(title: Text(l10n.mainLeadingNewMessage)),
             body: Center(
               child: PrimaryButton(
-                label: 'Entrar',
-                onPressed: () => showLoginSnackBar(context, message: 'Entre para enviar mensagens'),
+                label: l10n.commonSignIn,
+                onPressed: () => showLoginSnackBar(context, message: l10n.directSignInToSendMessage),
               ),
             ),
           );
@@ -19318,7 +21701,7 @@ class _NewMessageScreenState extends State<NewMessageScreen> {
         final people = repo.profiles(query: _search.text).where((p) => p.userId != s.userId).toList();
 
         return Scaffold(
-          appBar: AppBar(title: const Text('Nova mensagem')),
+          appBar: AppBar(title: Text(l10n.mainLeadingNewMessage)),
           body: Column(
             children: [
               if (repo.isOffline) OfflineBanner(onRetry: () => repo.setOffline(false)),
@@ -19329,21 +21712,18 @@ class _NewMessageScreenState extends State<NewMessageScreen> {
                   AtalaiaSpacing.md,
                   AtalaiaSpacing.sm,
                 ),
-                child: SearchField(controller: _search, hintText: 'Pesquisar pessoas'),
+                child: SearchField(controller: _search, hintText: l10n.directSearchPeopleHint),
               ),
               Expanded(
                 child: people.isEmpty
-                    ? const EmptyState(
-                        icon: Icons.search_off_outlined,
-                        title: 'Nenhum resultado para esta busca.',
-                      )
+                    ? EmptyState(icon: Icons.search_off_outlined, title: l10n.directEmptyPeopleSearch)
                     : ListView.separated(
                         physics: const AlwaysScrollableScrollPhysics(),
                         itemCount: people.length,
                         separatorBuilder: (_, __) => const Divider(height: 1),
                         itemBuilder: (context, index) {
                           final p = people[index];
-                          final displayName = _displayNameForProfile(p);
+                          final displayName = _displayNameForProfile(p, userFallback: l10n.commonUserFallback);
                           final displayUsername = _usernameForProfile(p, userId: p.userId);
                           return ListTile(
                             leading: Avatar(name: displayName, imageUrl: p.avatarUrl, size: AvatarSize.s44),
@@ -19372,6 +21752,7 @@ class _NewMessageScreenState extends State<NewMessageScreen> {
                                   peerName: t.peerName,
                                   peerUsername: t.peerUsername,
                                   peerIsVerified: t.peerIsVerified,
+                                  peerAvatarUrl: p.avatarUrl,
                                 ),
                               );
                             },
@@ -19403,8 +21784,10 @@ class _ChatScreenState extends State<ChatScreen> {
   String? _attachmentToken;
   bool _userScrolledUp = false;
   String? _notifiedFailedId;
+  String? _notifiedDirectError;
   bool _sendingAttachment = false;
   bool _communityPrimed = false;
+  bool _directPrimed = false;
 
   @override
   void initState() {
@@ -19423,13 +21806,24 @@ class _ChatScreenState extends State<ChatScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     final communityId = widget.args.communityId;
-    if (communityId == null) return;
-    if (_communityPrimed) return;
-    _communityPrimed = true;
+    final repo = RepoScope.of(context);
+    if (repo.supabase == null || repo.isOffline) return;
+    if (communityId != null) {
+      if (_communityPrimed) return;
+      _communityPrimed = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(repo.refreshCommunityMessages(communityId, force: true));
+      });
+      return;
+    }
+    if (_directPrimed) return;
+    _directPrimed = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final repo = RepoScope.of(context);
-      if (repo.supabase == null || repo.isOffline) return;
-      unawaited(repo.refreshCommunityMessages(communityId, force: true));
+      final s = SessionScope.of(context).value;
+      if (s is AuthSession) {
+        unawaited(repo.ensureDirectDmMembershipForThread(widget.args.threadId, viewerId: s.userId));
+      }
+      unawaited(repo.refreshDirectMessages(widget.args.threadId, force: true));
     });
   }
 
@@ -19451,12 +21845,13 @@ class _ChatScreenState extends State<ChatScreen> {
       builder: (context, _) {
         final s = session.value;
         if (s is! AuthSession) {
+          final l10n = t(context);
           return Scaffold(
             appBar: AppBar(title: Text(widget.args.peerName)),
             body: Center(
               child: PrimaryButton(
-                label: 'Entrar para conversar',
-                onPressed: () => showLoginSnackBar(context, message: 'Entre para enviar mensagens'),
+                label: l10n.chatSignInToChat,
+                onPressed: () => showLoginSnackBar(context, message: l10n.directSignInToSendMessage),
               ),
             ),
           );
@@ -19469,6 +21864,26 @@ class _ChatScreenState extends State<ChatScreen> {
           if (lastFailed == null) return;
           repo.retryMessage(widget.args.threadId, lastFailed.id);
         });
+        final directErr = repo.lastDirectSendError?.trim();
+        if (directErr != null && directErr.isNotEmpty && _notifiedDirectError != directErr) {
+          _notifiedDirectError = directErr;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            showErrorSnackBar(
+              context,
+              message: directErr,
+              onRetry: () {
+                final sid = (SessionScope.of(context).value is AuthSession)
+                    ? (SessionScope.of(context).value as AuthSession).userId
+                    : '';
+                if (sid.trim().isNotEmpty) {
+                  unawaited(repo.ensureDirectDmMembershipForThread(widget.args.threadId, viewerId: sid));
+                }
+                unawaited(repo.refreshDirectMessages(widget.args.threadId, force: true));
+              },
+            );
+          });
+        }
         ThreadModel? thread;
         for (final t in repo.threadsFor(s)) {
           if (t.id == widget.args.threadId) {
@@ -19477,18 +21892,35 @@ class _ChatScreenState extends State<ChatScreen> {
           }
         }
         final community = widget.args.communityId == null ? null : repo.findCommunity(widget.args.communityId!);
-        final verifiedNow = widget.args.isGroup
-            ? false
-            : (thread == null
-                ? widget.args.peerIsVerified
-                : (repo.profileForUserId(thread.peerUserId)?.isVerified ?? thread.peerIsVerified));
+        final isGroup = widget.args.isGroup;
+        var resolvedPeerUserId = thread?.peerUserId ?? '';
+        if (!isGroup && resolvedPeerUserId == s.userId) {
+          for (final m in messages) {
+            if (m.senderId != s.userId) {
+              resolvedPeerUserId = m.senderId;
+              break;
+            }
+          }
+        }
+        final resolvedPeerProfile =
+            isGroup || resolvedPeerUserId.trim().isEmpty ? null : repo.profileForUserId(resolvedPeerUserId);
+        final displayName = isGroup
+            ? (community?.name ?? widget.args.peerName)
+            : (resolvedPeerProfile == null
+                ? widget.args.peerName
+                : _displayNameForProfile(resolvedPeerProfile, userFallback: widget.args.peerName));
+        final displayImageUrl = isGroup ? community?.imageUrl : (resolvedPeerProfile?.avatarUrl ?? widget.args.peerAvatarUrl);
+        final verifiedNow =
+            isGroup ? false : (resolvedPeerProfile?.isVerified ?? (thread?.peerIsVerified ?? widget.args.peerIsVerified));
         return Scaffold(
           appBar: AppBar(
-            title: widget.args.isGroup
+            title: isGroup
                 ? Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const IconAvatar(icon: Icons.groups_outlined, size: 32),
+                      (displayImageUrl == null || displayImageUrl.trim().isEmpty)
+                          ? const IconAvatar(icon: Icons.groups_outlined, size: 32)
+                          : Avatar(name: displayName, imageUrl: displayImageUrl, size: AvatarSize.s32),
                       const SizedBox(width: 10),
                       Flexible(
                         child: Column(
@@ -19496,12 +21928,12 @@ class _ChatScreenState extends State<ChatScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              widget.args.peerName,
+                              displayName,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(fontWeight: FontWeight.w800),
                             ),
                             Text(
-                              community == null ? '' : '${community.memberCount} membros',
+                              community == null ? '' : t(context).communityMembersCount(community.memberCount),
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 fontSize: 12,
@@ -19516,9 +21948,9 @@ class _ChatScreenState extends State<ChatScreen> {
                   )
                 : GestureDetector(
                     onTap: () {
-                      final userId = thread?.peerUserId;
+                      final userId = resolvedPeerUserId.trim().isEmpty ? null : resolvedPeerUserId.trim();
                       if (userId == null) {
-                        showAtalaiaSnackBar(context, 'Perfil indisponível');
+                        showAtalaiaSnackBar(context, t(context).profileUnavailable);
                         return;
                       }
                       Navigator.of(context).pushNamed(
@@ -19529,7 +21961,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Avatar(name: widget.args.peerName, size: AvatarSize.s32),
+                        Avatar(name: displayName, imageUrl: displayImageUrl, size: AvatarSize.s32),
                         const SizedBox(width: 10),
                         Flexible(
                           child: Row(
@@ -19537,7 +21969,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             children: [
                               Flexible(
                                 child: Text(
-                                  widget.args.peerName,
+                                  displayName,
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(fontWeight: FontWeight.w800),
                                 ),
@@ -19555,10 +21987,10 @@ class _ChatScreenState extends State<ChatScreen> {
             actions: [
               AtalaiaIconButton(
                 icon: Icons.info_outline,
-                label: 'Detalhes',
+                label: t(context).chatDetailsAction,
                 onPressed: () {
                   if (widget.args.communityId == null) {
-                    showAtalaiaSnackBar(context, 'Detalhes (UI)');
+                    showAtalaiaSnackBar(context, t(context).chatDetailsUiPlaceholder);
                     return;
                   }
                   Navigator.of(context).pushNamed(
@@ -19673,16 +22105,12 @@ class _ChatScreenState extends State<ChatScreen> {
                                 child: const Icon(Icons.image_outlined),
                               ),
                               const SizedBox(width: 10),
-                              const Expanded(
-                                child: Text(
-                                  'Imagem anexada',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
+                              Expanded(
+                                child: Text(t(context).chatAttachmentImageAttached, maxLines: 1, overflow: TextOverflow.ellipsis),
                               ),
                               AtalaiaIconButton(
                                 icon: Icons.close,
-                                label: 'Remover anexo',
+                                label: t(context).chatAttachmentRemove,
                                 onPressed: () => setState(() => _attachmentToken = null),
                               ),
                             ],
@@ -19703,7 +22131,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               height: AtalaiaTapTarget.min,
                               child: AtalaiaIconButton(
                                 icon: Icons.photo_outlined,
-                                label: 'Anexar foto',
+                                label: t(context).chatAttachmentAddPhoto,
                                 onPressed: () {
                                   setState(
                                     () => _attachmentToken = 'demo://${DateTime.now().microsecondsSinceEpoch}',
@@ -19716,7 +22144,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               child: MultiLineComposer(
                                 controller: _controller,
                                 focusNode: _composerFocus,
-                                hintText: 'Mensagem…',
+                                hintText: t(context).chatComposerHint,
                                 sendOnEnter: true,
                                 onSend: _canSend() ? () => _send(repo, s) : null,
                               ),
@@ -19724,7 +22152,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             const SizedBox(width: 8),
                             AtalaiaFilledIconButton(
                               icon: Icons.send_rounded,
-                              label: 'Enviar mensagem',
+                              label: t(context).chatSendMessage,
                               onPressed: _canSend() ? () => _send(repo, s) : null,
                             ),
                           ],
@@ -19844,7 +22272,7 @@ class MessageBubble extends StatelessWidget {
                           left: 8,
                           child: AtalaiaIconButton(
                             icon: Icons.close,
-                            label: 'Fechar',
+                            label: t(context).commonClose,
                             onPressed: () => Navigator.of(context).pop(),
                             color: Colors.white,
                           ),
@@ -19905,13 +22333,14 @@ class MessageBubble extends StatelessWidget {
 
   Future<void> _showMessageMenu(BuildContext context) async {
     final repo = RepoScope.of(context);
+    final l10n = t(context);
     final canCopy = message.kind == MessageKind.text && (message.text ?? '').trim().isNotEmpty;
     final canDelete = message.senderId == viewerId;
-    final time = _relativeTime(message.sentAt);
+    final time = _relativeTime(context, message.sentAt);
     final statusLabel = switch (message.sendStatus) {
-      MessageSendStatus.sending => 'Enviando',
-      MessageSendStatus.sent => 'Enviado',
-      MessageSendStatus.failed => 'Falhou',
+      MessageSendStatus.sending => l10n.messageStatusSending,
+      MessageSendStatus.sent => l10n.commonSent,
+      MessageSendStatus.failed => l10n.messageStatusFailed,
     };
     final selected = await showAtalaiaBottomSheet<String>(
       context,
@@ -19933,13 +22362,13 @@ class MessageBubble extends StatelessWidget {
               if (canCopy)
                 ListTile(
                   leading: const Icon(Icons.copy),
-                  title: const Text('Copiar'),
+                  title: Text(l10n.commonCopy),
                   onTap: () => Navigator.pop(context, 'copy'),
                 ),
               if (canDelete)
                 ListTile(
                   leading: const Icon(Icons.delete_outline),
-                  title: const Text('Excluir'),
+                  title: Text(l10n.postActionDelete),
                   onTap: () => Navigator.pop(context, 'delete'),
                 ),
               const SizedBox(height: 8),
@@ -19953,7 +22382,7 @@ class MessageBubble extends StatelessWidget {
       case 'copy':
         await Clipboard.setData(ClipboardData(text: message.text ?? ''));
         if (!context.mounted) return;
-        showAtalaiaSnackBar(context, 'Copiado');
+        showAtalaiaSnackBar(context, l10n.commonCopied);
       case 'delete':
         onDelete();
         if (!context.mounted) return;
@@ -19982,7 +22411,7 @@ class TextMessageBubble extends StatelessWidget {
 
     return InkWell(
       onTap: () {
-        showAtalaiaSnackBar(context, 'Abrir link (UI): ${match.group(0)}');
+        showAtalaiaSnackBar(context, t(context).chatOpenLinkUi(match.group(0) ?? ''));
       },
       child: Text(
         text,
@@ -20045,7 +22474,7 @@ class ImageMessageBubble extends StatelessWidget {
                         child: Container(
                           color: Colors.black.withValues(alpha: 0.18),
                           child: Center(
-                            child: SecondaryButton(label: 'Tentar novamente', onPressed: onRetry),
+                            child: SecondaryButton(label: t(context).commonTryAgain, onPressed: onRetry),
                           ),
                         ),
                       ),
@@ -20085,6 +22514,7 @@ class PostShareCardMessage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final l10n = t(context);
     if (post == null) {
       return Container(
         padding: const EdgeInsets.all(14),
@@ -20092,12 +22522,12 @@ class PostShareCardMessage extends StatelessWidget {
           color: cs.surfaceContainerHighest,
           borderRadius: BorderRadius.circular(16),
         ),
-        child: Text('Este post não está disponível.', style: TextStyle(color: color)),
+        child: Text(l10n.postUnavailable, style: TextStyle(color: color)),
       );
     }
 
     final repo = RepoScope.of(context);
-    final identity = _identityForUserId(repo, post!.userId, legacyVerified: post!.isVerified);
+    final identity = _identityForUserId(repo, post!.userId, legacyVerified: post!.isVerified, userFallback: l10n.commonUserFallback);
     return InkWell(
       onTap: onOpen,
       child: Container(
@@ -20109,7 +22539,7 @@ class PostShareCardMessage extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Compartilhou um post', style: TextStyle(color: cs.outline, fontSize: 12)),
+            Text(l10n.shareSheetSharedPost, style: TextStyle(color: cs.outline, fontSize: 12)),
             const SizedBox(height: 12),
             Row(
               children: [
@@ -20177,7 +22607,7 @@ class PostShareCardMessage extends StatelessWidget {
             const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
-              child: SecondaryButton(label: 'Ver post', onPressed: onOpen),
+              child: SecondaryButton(label: t(context).postView, onPressed: onOpen),
             ),
           ],
         ),
@@ -20239,7 +22669,10 @@ extension on _ChatScreenState {
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      showErrorSnackBar(context, onRetry: onRetry);
+      final repo = RepoScope.of(context);
+      final raw = repo.lastDirectSendError;
+      final msg = raw == null || raw.trim().isEmpty ? 'Falha ao enviar mensagem.' : raw.trim();
+      showErrorSnackBar(context, message: msg, onRetry: onRetry);
     });
   }
 }
@@ -20299,15 +22732,15 @@ class _RegionPostsScreenState extends State<RegionPostsScreen> {
 
   String _emptyTitle() {
     return switch (_filter) {
-      _RegionPostsFilter.testimonies => 'Ainda não há testemunhos nesta região',
-      _ => 'Ainda não há pedidos nesta região',
+      _RegionPostsFilter.testimonies => t(context).regionPostsEmptyTestimonies,
+      _ => t(context).regionPostsEmptyRequests,
     };
   }
 
   String _ctaLabel() {
     return switch (_filter) {
-      _RegionPostsFilter.testimonies => 'Criar testemunho',
-      _ => 'Criar pedido',
+      _RegionPostsFilter.testimonies => t(context).regionPostsCreateTestimony,
+      _ => t(context).regionPostsCreateRequest,
     };
   }
 
@@ -20353,7 +22786,7 @@ class _RegionPostsScreenState extends State<RegionPostsScreen> {
     if (locationId == null) {
       setState(() {
         _loading = false;
-        _error = 'Não foi possível identificar a região.';
+        _error = t(context).regionIdentifyFailed;
       });
       return;
     }
@@ -20437,7 +22870,7 @@ class _RegionPostsScreenState extends State<RegionPostsScreen> {
     if (!mounted) return;
     if (!ok) {
       _replacePostAt(idx, p);
-      showAtalaiaSnackBar(context, 'Não foi possível registrar a curtida.', kind: AtalaiaSnackKind.error);
+      showAtalaiaSnackBar(context, t(context).likeRegisterFailed, kind: AtalaiaSnackKind.error);
     }
   }
 
@@ -20453,7 +22886,7 @@ class _RegionPostsScreenState extends State<RegionPostsScreen> {
     });
     final updated = p.copyWith(viewerHasPrayed: true, prayerCount: p.prayerCount + 1);
     _replacePostAt(idx, updated);
-    showInfoSnackBar(context, 'Oração registrada');
+    showInfoSnackBar(context, t(context).prayerRegisteredSnack);
 
     final useRemote = repo.supabase != null && !repo.isOffline;
     if (!useRemote) return;
@@ -20461,7 +22894,7 @@ class _RegionPostsScreenState extends State<RegionPostsScreen> {
     if (!mounted) return;
     if (!ok) {
       _replacePostAt(idx, p);
-      showAtalaiaSnackBar(context, 'Não foi possível registrar a oração.', kind: AtalaiaSnackKind.error);
+      showAtalaiaSnackBar(context, t(context).prayerRegisterFailed, kind: AtalaiaSnackKind.error);
     }
   }
 
@@ -20477,8 +22910,8 @@ class _RegionPostsScreenState extends State<RegionPostsScreen> {
       animation: Listenable.merge([repo, session]),
       builder: (context, _) {
         final titleBase = communityName == null
-            ? 'Pedidos em ${widget.args.location.name}'
-            : 'Pedidos em ${widget.args.location.name} • $communityName';
+            ? t(context).regionPostsTitle(widget.args.location.name)
+            : t(context).regionPostsTitleWithCommunity(widget.args.location.name, communityName);
         final breadcrumb = widget.args.contextBreadcrumb;
         return Scaffold(
           appBar: AppBar(
@@ -20508,17 +22941,17 @@ class _RegionPostsScreenState extends State<RegionPostsScreen> {
                   spacing: 8,
                   children: [
                     ChoiceChip(
-                      label: const Text('Todos'),
+                      label: Text(t(context).regionPostsFilterAll),
                       selected: _filter == _RegionPostsFilter.all,
                       onSelected: (_) => _setFilter(_RegionPostsFilter.all),
                     ),
                     ChoiceChip(
-                      label: const Text('Pedidos'),
+                      label: Text(t(context).regionPostsFilterRequests),
                       selected: _filter == _RegionPostsFilter.requests,
                       onSelected: (_) => _setFilter(_RegionPostsFilter.requests),
                     ),
                     ChoiceChip(
-                      label: const Text('Testemunhos'),
+                      label: Text(t(context).regionPostsFilterTestimonies),
                       selected: _filter == _RegionPostsFilter.testimonies,
                       onSelected: (_) => _setFilter(_RegionPostsFilter.testimonies),
                     ),
@@ -20537,7 +22970,7 @@ class _RegionPostsScreenState extends State<RegionPostsScreen> {
                               const SizedBox(height: 14),
                               Padding(
                                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                                child: PrimaryButton(label: 'Tentar novamente', onPressed: () => unawaited(_loadInitial())),
+                                child: PrimaryButton(label: t(context).commonTryAgain, onPressed: () => unawaited(_loadInitial())),
                               ),
                             ],
                           )
@@ -20554,7 +22987,7 @@ class _RegionPostsScreenState extends State<RegionPostsScreen> {
                                   Padding(
                                     padding: const EdgeInsets.symmetric(horizontal: 16),
                                     child: PrimaryButton(
-                                      label: isAuthenticated ? _ctaLabel() : 'Entrar para criar',
+                                      label: isAuthenticated ? _ctaLabel() : t(context).ctaSignInToCreate,
                                       onPressed: () {
                                         if (!isAuthenticated) return showCtaSnackBar(context);
                                         final kind = _kindFilter ?? PostKind.request;
@@ -20617,7 +23050,7 @@ class _RegionPostsScreenState extends State<RegionPostsScreen> {
                                       if (!isAuthenticated) return showCtaSnackBar(context);
                                       final willSave = !post.viewerHasSaved;
                                       repo.toggleSave(post.id, isAuthenticated: true);
-                                      if (willSave) showInfoSnackBar(context, 'Salvo');
+                                      if (willSave) showInfoSnackBar(context, t(context).commonSaved);
                                     },
                                   );
                                 },
@@ -20716,7 +23149,7 @@ class _RegionNewsScreenState extends State<RegionNewsScreen> {
     if (locationId == null) {
       setState(() {
         _loading = false;
-        _error = 'Não foi possível identificar a região.';
+        _error = t(context).regionIdentifyFailed;
       });
       return;
     }
@@ -20757,7 +23190,7 @@ class _RegionNewsScreenState extends State<RegionNewsScreen> {
   Widget build(BuildContext context) {
     final repo = RepoScope.of(context);
     final titleBase = widget.args.location.name;
-    final title = 'Notícias • $titleBase';
+    final title = t(context).regionNewsTitle(titleBase);
     final subtitle = widget.args.contextBreadcrumb ?? widget.args.location.path;
 
     return AnimatedBuilder(
@@ -20765,7 +23198,7 @@ class _RegionNewsScreenState extends State<RegionNewsScreen> {
       builder: (context, _) {
         return Scaffold(
           appBar: AppBar(
-            title: const Text('Notícias', style: TextStyle(fontWeight: FontWeight.w800)),
+            title: Text(t(context).regionNewsTitleShort, style: const TextStyle(fontWeight: FontWeight.w800)),
           ),
           body: Column(
             children: [
@@ -20786,7 +23219,7 @@ class _RegionNewsScreenState extends State<RegionNewsScreen> {
                     ),
                     AtalaiaIconButton(
                       icon: Icons.refresh,
-                      label: 'Atualizar',
+                      label: t(context).commonRefresh,
                       onPressed: () {
                         if (repo.supabase == null || repo.isOffline) return;
                         unawaited(_loadInitial());
@@ -20807,7 +23240,7 @@ class _RegionNewsScreenState extends State<RegionNewsScreen> {
                               const SizedBox(height: 14),
                               Padding(
                                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                                child: PrimaryButton(label: 'Tentar novamente', onPressed: () => unawaited(_loadInitial())),
+                                child: PrimaryButton(label: t(context).commonTryAgain, onPressed: () => unawaited(_loadInitial())),
                               ),
                             ],
                           )
@@ -20816,9 +23249,9 @@ class _RegionNewsScreenState extends State<RegionNewsScreen> {
                                 physics: const AlwaysScrollableScrollPhysics(),
                                 children: [
                                   SizedBox(height: MediaQuery.sizeOf(context).height * 0.14),
-                                  const EmptyState(
+                                  EmptyState(
                                     icon: Icons.public,
-                                    title: 'Ainda não há notícias relevantes nesta região.',
+                                    title: t(context).regionNewsEmpty,
                                   ),
                                 ],
                               )
@@ -20845,7 +23278,10 @@ class _RegionNewsScreenState extends State<RegionNewsScreen> {
                                     ),
                                     title: Text(e.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w900)),
                                     subtitle: Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
-                                    trailing: _UrgencyPill(label: _alertUrgencyLabel(urgency), color: _alertUrgencyColor(urgency)),
+                                    trailing: _UrgencyPill(
+                                      label: _alertUrgencyLabel(context, urgency),
+                                      color: _alertUrgencyColor(urgency),
+                                    ),
                                     onTap: () {
                                       Navigator.of(context).pushNamed(
                                         Routes.newsEventDetail,
@@ -20991,7 +23427,7 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
     if (locationId == null) {
       setState(() {
         _loading = false;
-        _error = 'Não foi possível identificar a região.';
+        _error = t(context).regionIdentifyFailed;
       });
       return;
     }
@@ -21145,7 +23581,7 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
                 children: [
                   const Icon(Icons.format_list_numbered, size: 18),
                   const SizedBox(width: 8),
-                  const Text('Pedidos', style: TextStyle(fontWeight: FontWeight.w800)),
+                  Text(t(context).communityRequestsCardTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
                   const Spacer(),
                   Text(_requestCountEstimate.toString(), style: TextStyle(color: cs.outline, fontWeight: FontWeight.w800)),
                   const SizedBox(width: 6),
@@ -21154,14 +23590,14 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
               ),
               const SizedBox(height: 10),
               if (_loading && items.isEmpty)
-                Text('Carregando pedidos…', style: TextStyle(color: cs.outline, fontWeight: FontWeight.w600))
+                Text(t(context).communityRequestsCardLoading, style: TextStyle(color: cs.outline, fontWeight: FontWeight.w600))
               else if (items.isEmpty)
-                Text('Sem pedidos por enquanto.', style: TextStyle(color: cs.outline, fontWeight: FontWeight.w600))
+                Text(t(context).communityRequestsCardEmpty, style: TextStyle(color: cs.outline, fontWeight: FontWeight.w600))
               else
                 ...items.indexed.map((e) {
                   final i = e.$1 + 1;
                   final body = e.$2.body.trim();
-                  final text = body.isEmpty ? '(sem texto)' : body;
+                  final text = body.isEmpty ? t(context).communityRequestsCardNoText : body;
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 8),
                     child: Text(
@@ -21206,7 +23642,7 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
                           const SizedBox(height: 14),
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 16),
-                            child: PrimaryButton(label: 'Tentar novamente', onPressed: () => unawaited(_loadInitial())),
+                            child: PrimaryButton(label: t(context).commonTryAgain, onPressed: () => unawaited(_loadInitial())),
                           ),
                         ],
                       )
@@ -21232,7 +23668,7 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
                                   ),
                                   const SizedBox(height: 12),
                                   _StatPill(
-                                    label: 'Orações',
+                                    label: t(context).regionPrayersTitleShort,
                                     value: _prayerCountEstimate.toString(),
                                     cs: cs,
                                   ),
@@ -21240,11 +23676,11 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
                                   _requestsCard(cs),
                                   const SizedBox(height: 12),
                                   PrimaryButton(
-                                    label: 'Orar por esta região',
+                                    label: t(context).regionPrayForThisRegion,
                                     onPressed: isAuthenticated ? () => unawaited(_startPrayerSession()) : () => unawaited(showAuthGate(context)),
                                   ),
                                   const SizedBox(height: 18),
-                                  const Text('Atividade', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                                  Text(t(context).regionActivityTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
                                 ],
                               ),
                             ),
@@ -21257,10 +23693,10 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
                               ),
                             )
                           else if (_items.isEmpty)
-                            const SliverToBoxAdapter(
+                            SliverToBoxAdapter(
                               child: Padding(
                                 padding: EdgeInsets.fromLTRB(12, 24, 12, 18),
-                                child: EmptyState(icon: Icons.public, title: 'Ainda não há atividade nesta região.'),
+                                child: EmptyState(icon: Icons.public, title: t(context).regionActivityEmpty),
                               ),
                             )
                           else
@@ -21329,7 +23765,7 @@ class _RegionDetailScreenState extends State<RegionDetailScreen> {
                                             if (!isAuthenticated) return showCtaSnackBar(context);
                                             final willSave = !it.post.viewerHasSaved;
                                             repo.toggleSave(it.post.id, isAuthenticated: true);
-                                            if (willSave) showInfoSnackBar(context, 'Salvo');
+                                            if (willSave) showInfoSnackBar(context, t(context).commonSaved);
                                           },
                                         ),
                                       _RegionFeedPrayerItem() => _RegionPrayerCard(entry: it.entry),
@@ -21427,7 +23863,7 @@ class _RegionPrayerHistoryScreenState extends State<RegionPrayerHistoryScreen> {
     if (locationId == null) {
       setState(() {
         _loading = false;
-        _error = 'Não foi possível identificar a região.';
+        _error = t(context).regionIdentifyFailed;
       });
       return;
     }
@@ -21471,14 +23907,14 @@ class _RegionPrayerHistoryScreenState extends State<RegionPrayerHistoryScreen> {
   Widget build(BuildContext context) {
     final repo = RepoScope.of(context);
     final cs = Theme.of(context).colorScheme;
-    final title = 'Orações • ${widget.args.location.name}';
+    final title = t(context).regionPrayersTitle(widget.args.location.name);
     final subtitle = widget.args.breadcrumb;
     return AnimatedBuilder(
       animation: repo,
       builder: (context, _) {
         return Scaffold(
           appBar: AppBar(
-            title: const Text('Orações', style: TextStyle(fontWeight: FontWeight.w800)),
+            title: Text(t(context).regionPrayersTitleShort, style: const TextStyle(fontWeight: FontWeight.w800)),
           ),
           body: Column(
             children: [
@@ -21499,7 +23935,7 @@ class _RegionPrayerHistoryScreenState extends State<RegionPrayerHistoryScreen> {
                     ),
                     AtalaiaIconButton(
                       icon: Icons.refresh,
-                      label: 'Atualizar',
+                      label: t(context).commonRefresh,
                       onPressed: () {
                         if (repo.supabase == null || repo.isOffline) return;
                         unawaited(_loadInitial());
@@ -21520,16 +23956,16 @@ class _RegionPrayerHistoryScreenState extends State<RegionPrayerHistoryScreen> {
                               const SizedBox(height: 14),
                               Padding(
                                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                                child: PrimaryButton(label: 'Tentar novamente', onPressed: () => unawaited(_loadInitial())),
+                                child: PrimaryButton(label: t(context).commonTryAgain, onPressed: () => unawaited(_loadInitial())),
                               ),
                             ],
                           )
                         : _items.isEmpty
                             ? ListView(
                                 physics: const AlwaysScrollableScrollPhysics(),
-                                children: const [
-                                  SizedBox(height: 120),
-                                  EmptyState(icon: Icons.volunteer_activism_outlined, title: 'Ainda não há orações registradas aqui.'),
+                                children: [
+                                  const SizedBox(height: 120),
+                                  EmptyState(icon: Icons.volunteer_activism_outlined, title: t(context).regionPrayersEmpty),
                                 ],
                               )
                             : ListView.builder(
@@ -21568,7 +24004,7 @@ class _RegionPrayerCard extends StatelessWidget {
     final repo = RepoScope.of(context);
     final cs = Theme.of(context).colorScheme;
     final p = repo.findProfile(entry.userId);
-    final displayName = p == null ? entry.userId : _displayNameForProfile(p);
+    final displayName = p == null ? entry.userId : _displayNameForProfile(p, userFallback: t(context).commonUserFallback);
     final displayUsername = p == null ? entry.userId : _usernameForProfile(p, userId: p.userId);
     final when = _formatRelativeTimeForUser(context, entry.createdAt);
     final text = (entry.message ?? '').trim();
@@ -21737,7 +24173,7 @@ class _NewsEventDetailScreenState extends State<NewsEventDetailScreen> {
           IconButton(
             onPressed: repo.supabase == null || repo.isOffline ? null : _reload,
             icon: const Icon(Icons.refresh),
-            tooltip: 'Atualizar',
+            tooltip: t(context).commonRefresh,
           ),
         ],
       ),
@@ -21756,11 +24192,11 @@ class _NewsEventDetailScreenState extends State<NewsEventDetailScreen> {
                   return ListView(
                     children: [
                       SizedBox(height: MediaQuery.sizeOf(context).height * 0.16),
-                      const EmptyState(icon: Icons.public, title: 'Não foi possível carregar este evento.'),
+                      EmptyState(icon: Icons.public, title: t(context).eventLoadFailed),
                       const SizedBox(height: 14),
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: PrimaryButton(label: 'Tentar novamente', onPressed: _reload),
+                        child: PrimaryButton(label: t(context).commonTryAgain, onPressed: _reload),
                       ),
                     ],
                   );
@@ -21780,7 +24216,7 @@ class _NewsEventDetailScreenState extends State<NewsEventDetailScreen> {
                       spacing: 8,
                       runSpacing: 8,
                       children: [
-                        _UrgencyPill(label: _alertUrgencyLabel(urgency), color: _alertUrgencyColor(urgency)),
+                        _UrgencyPill(label: _alertUrgencyLabel(context, urgency), color: _alertUrgencyColor(urgency)),
                         if (loc.isNotEmpty) _Pill(label: loc, background: cs.surfaceContainerHighest, foreground: cs.onSurface),
                         _Pill(
                           label: _formatRelativeTimeForUser(context, event.lastSeenAt),
@@ -21913,7 +24349,7 @@ class _RegionAlertsScreenState extends State<RegionAlertsScreen> {
     if (locationId == null) {
       setState(() {
         _loading = false;
-        _error = 'Não foi possível identificar a região.';
+        _error = t(context).regionIdentifyFailed;
       });
       return;
     }
@@ -21967,7 +24403,9 @@ class _RegionAlertsScreenState extends State<RegionAlertsScreen> {
     final isAuthenticated = s.isAuthenticated;
     final communityName = widget.args.communityId == null ? null : repo.findCommunity(widget.args.communityId!)?.name;
     final titleBase = widget.args.location.name;
-    final title = communityName == null ? 'Alertas • $titleBase' : 'Alertas • $titleBase • $communityName';
+    final title = communityName == null
+        ? t(context).alertsTitleWithLocation(titleBase)
+        : t(context).alertsTitleWithLocationAndCommunity(titleBase, communityName);
     final subtitle = widget.args.contextBreadcrumb ?? widget.args.location.path;
 
     return AnimatedBuilder(
@@ -21975,7 +24413,7 @@ class _RegionAlertsScreenState extends State<RegionAlertsScreen> {
       builder: (context, _) {
         return Scaffold(
           appBar: AppBar(
-            title: const Text('Alertas', style: TextStyle(fontWeight: FontWeight.w800)),
+            title: Text(t(context).alertsTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
           ),
           body: Column(
             children: [
@@ -21996,7 +24434,7 @@ class _RegionAlertsScreenState extends State<RegionAlertsScreen> {
                     ),
                     AtalaiaIconButton(
                       icon: Icons.refresh,
-                      label: 'Atualizar',
+                      label: t(context).commonRefresh,
                       onPressed: () {
                         if (repo.supabase == null || repo.isOffline) return;
                         unawaited(_loadInitial());
@@ -22017,7 +24455,7 @@ class _RegionAlertsScreenState extends State<RegionAlertsScreen> {
                               const SizedBox(height: 14),
                               Padding(
                                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                                child: PrimaryButton(label: 'Tentar novamente', onPressed: () => unawaited(_loadInitial())),
+                                child: PrimaryButton(label: t(context).commonTryAgain, onPressed: () => unawaited(_loadInitial())),
                               ),
                             ],
                           )
@@ -22026,15 +24464,15 @@ class _RegionAlertsScreenState extends State<RegionAlertsScreen> {
                                 physics: const AlwaysScrollableScrollPhysics(),
                                 children: [
                                   SizedBox(height: MediaQuery.sizeOf(context).height * 0.14),
-                                  const EmptyState(
+                                  EmptyState(
                                     icon: Icons.notification_important_outlined,
-                                    title: 'Ainda não há alertas nesta região.',
+                                    title: t(context).alertsNoAlertsInRegion,
                                   ),
                                   const SizedBox(height: 14),
                                   Padding(
                                     padding: const EdgeInsets.symmetric(horizontal: 16),
                                     child: PrimaryButton(
-                                      label: isAuthenticated ? 'Criar alerta' : 'Entrar para criar',
+                                      label: isAuthenticated ? t(context).alertsCreateAlert : t(context).ctaSignInToCreate,
                                       onPressed: () {
                                         if (!isAuthenticated) return showCtaSnackBar(context);
                                         Navigator.of(context).pushNamed(Routes.createPost);
@@ -22068,7 +24506,10 @@ class _RegionAlertsScreenState extends State<RegionAlertsScreen> {
                                       if (!isAuthenticated) return showCtaSnackBar(context);
                                       final willFollow = !alert.viewerIsFollowing;
                                       repo.toggleFollowAlert(alert.id, isAuthenticated: true);
-                                      showInfoSnackBar(context, willFollow ? 'Seguindo alerta' : 'Parou de seguir');
+                                      showInfoSnackBar(
+                                        context,
+                                        willFollow ? t(context).alertFollowingStartedSnack : t(context).alertFollowingStoppedSnack,
+                                      );
                                     },
                                   );
                                 },
@@ -22094,6 +24535,13 @@ final class _PrayerFinishRecord {
   final String text;
 }
 
+final class _PrayerLibrarySelection {
+  const _PrayerLibrarySelection({this.playlistId, this.mediaItemId});
+
+  final String? playlistId;
+  final String? mediaItemId;
+}
+
 class PrayerSessionScreen extends StatefulWidget {
   const PrayerSessionScreen({required this.args, super.key});
 
@@ -22112,8 +24560,17 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
   var _starting = false;
   var _creating = true;
   var _finishing = false;
+  String? _selectedPlaylistId;
+  String? _selectedMediaItemId;
   String? _sessionId;
   String? _error;
+  VideoPlayerController? _inlinePlayerController;
+  ypf.YoutubePlayerController? _inlineYoutubeMobileController;
+  String? _inlineYoutubeVideoId;
+  bool _inlineYoutubePlaying = false;
+  bool _inlinePlayerLoading = false;
+  String? _inlinePlayerError;
+  String? _inlinePlayerErrorDetails;
 
   @override
   void initState() {
@@ -22126,6 +24583,8 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
   @override
   void dispose() {
     _ticker?.cancel();
+    _inlinePlayerController?.dispose();
+    _inlineYoutubeMobileController?.dispose();
     super.dispose();
   }
 
@@ -22229,7 +24688,7 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
         return true;
       }());
       if (!mounted) return;
-      var errorText = 'Não foi possível iniciar a sessão de oração';
+      var errorText = t(context).prayerSessionStartFailed;
       assert(() {
         final short = _shortSupabaseError(e).trim();
         if (short.isNotEmpty) errorText = 'Algo deu errado: $short';
@@ -22244,12 +24703,411 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
         if (short.isEmpty) return true;
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted) return;
-          showAtalaiaSnackBar(context, 'Algo deu errado: $short', kind: AtalaiaSnackKind.error);
+          showAtalaiaSnackBar(context, '${t(context).commonSomethingWentWrong}: $short', kind: AtalaiaSnackKind.error);
         });
         return true;
       }());
     } finally {
       _starting = false;
+    }
+  }
+
+  Future<_PrayerLibrarySelection?> _selectFromPrayerLibrary({required AuthSession session}) async {
+    return showAtalaiaBottomSheet<_PrayerLibrarySelection?>(
+      context,
+      builder: (ctx) {
+        final repo = RepoScope.of(ctx);
+        return SafeArea(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * 0.82),
+            child: DefaultTabController(
+              length: 2,
+              child: Column(
+                children: [
+                  const SizedBox(height: 8),
+                  Text(t(ctx).playlistLibraryTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+                  const SizedBox(height: 10),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () async {
+                              final draft = await showAtalaiaBottomSheet<_PlaylistFormDraft>(
+                                context,
+                                builder: (bctx) => _PlaylistFormSheet(
+                                  initialTitle: '',
+                                  initialDescription: '',
+                                  initialCoverUrl: null,
+                                  initialVisibility: PlaylistVisibility.public,
+                                  actionLabel: t(bctx).playlistLibraryCreateAction,
+                                ),
+                              );
+                              if (!mounted || draft == null) return;
+                              final id = repo.createPlaylist(
+                                ownerId: session.userId,
+                                title: draft.title,
+                                description: draft.description,
+                                coverUrl: draft.coverUrl,
+                                visibility: draft.visibility,
+                                communityId: widget.args.communityId,
+                              );
+                              if (!mounted) return;
+                              showInfoSnackBar(context, t(context).commonSaved);
+                              Navigator.of(ctx).pop();
+                              Navigator.of(context)
+                                  .push(MaterialPageRoute(builder: (_) => PlaylistEditorScreen(playlistId: id)));
+                            },
+                            icon: const Icon(Icons.queue_music_rounded),
+                            label: Text(t(ctx).playlistLibraryCreateAction),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: () async {
+                              final draft = await showAtalaiaBottomSheet<_MediaItemFormDraft>(
+                                context,
+                                builder: (bctx) => _MediaItemFormSheet(
+                                  initialTitle: '',
+                                  initialSubtitle: '',
+                                  initialMediaUrl: '',
+                                  initialThumbnailUrl: '',
+                                  initialType: PlaylistItemType.youtube,
+                                  initialDurationSeconds: null,
+                                  actionLabel: t(bctx).playlistSongAddAction,
+                                ),
+                              );
+                              if (!mounted || draft == null) return;
+                              repo.createMediaLibraryItem(
+                                ownerId: session.userId,
+                                title: draft.title,
+                                subtitle: draft.subtitle,
+                                type: draft.type,
+                                mediaUrl: draft.mediaUrl,
+                                thumbnailUrl: draft.thumbnailUrl,
+                                durationSeconds: draft.durationSeconds,
+                              );
+                              if (!mounted) return;
+                              showInfoSnackBar(context, t(context).commonSaved);
+                            },
+                            icon: const Icon(Icons.music_note_rounded),
+                            label: Text(t(ctx).playlistSongAddAction),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TabBar(
+                    tabs: [
+                      Tab(text: t(ctx).playlistLibraryTabPlaylists),
+                      Tab(text: t(ctx).playlistLibraryTabSongs),
+                    ],
+                  ),
+                  Expanded(
+                    child: AnimatedBuilder(
+                      animation: repo,
+                      builder: (context, _) {
+                        final playlists = repo.playlistsForUser(session, communityId: widget.args.communityId);
+                        final songs = repo.mediaItemsForSession(session, communityId: widget.args.communityId);
+                        return TabBarView(
+                          children: [
+                            playlists.isEmpty
+                                ? Center(
+                                    child: Text(
+                                      t(ctx).playlistLibraryEmpty,
+                                      style: TextStyle(
+                                        color: Theme.of(ctx).colorScheme.outline,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  )
+                                : ListView.separated(
+                                    itemCount: playlists.length,
+                                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                                    itemBuilder: (context, index) {
+                                      final playlist = playlists[index];
+                                      final type = playlist.items.isEmpty
+                                          ? t(ctx).playlistItemTypeAudio
+                                          : _playlistItemTypeLabel(ctx, playlist.items.first.type);
+                                      final canEdit = repo.canManagePlaylist(playlist: playlist, userId: session.userId);
+                                      return ListTile(
+                                        leading: const Icon(Icons.queue_music_rounded),
+                                        title: Text(playlist.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                                        subtitle: Text(t(ctx).playlistSummary(type, playlist.items.length)),
+                                        trailing: canEdit
+                                            ? IconButton(
+                                                icon: const Icon(Icons.edit_rounded),
+                                                onPressed: () {
+                                                  Navigator.of(ctx).pop();
+                                                  Navigator.of(context).push(
+                                                    MaterialPageRoute(
+                                                      builder: (_) => PlaylistEditorScreen(playlistId: playlist.id),
+                                                    ),
+                                                  );
+                                                },
+                                              )
+                                            : null,
+                                        onTap: () => Navigator.of(ctx).pop(_PrayerLibrarySelection(playlistId: playlist.id)),
+                                      );
+                                    },
+                                  ),
+                            songs.isEmpty
+                                ? Center(
+                                    child: Text(
+                                      t(ctx).playlistSongEmpty,
+                                      style: TextStyle(
+                                        color: Theme.of(ctx).colorScheme.outline,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  )
+                                : ListView.separated(
+                                    itemCount: songs.length,
+                                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                                    itemBuilder: (context, index) {
+                                      final song = songs[index];
+                                      final subtitle = song.subtitle?.trim().isNotEmpty == true
+                                          ? song.subtitle!
+                                          : _playlistItemTypeLabel(ctx, song.type);
+                                      return ListTile(
+                                        leading: const Icon(Icons.music_note_rounded),
+                                        title: Text(song.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                                        subtitle: Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
+                                        onTap: () => Navigator.of(ctx).pop(_PrayerLibrarySelection(mediaItemId: song.id)),
+                                      );
+                                    },
+                                  ),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  String _playlistItemTypeLabel(BuildContext context, PlaylistItemType type) {
+    final l10n = t(context);
+    return switch (type) {
+      PlaylistItemType.audio => l10n.playlistItemTypeAudio,
+      PlaylistItemType.youtube => l10n.playlistItemTypeYoutube,
+      PlaylistItemType.spotify => l10n.playlistItemTypeSpotify,
+    };
+  }
+
+  PlaylistItemModel? _selectedPlaybackItem(DemoRepository repo) {
+    final selectedMediaId = _selectedMediaItemId;
+    if (selectedMediaId != null) {
+      final mediaItem = repo.findMediaLibraryItem(selectedMediaId);
+      if (mediaItem != null) {
+        return PlaylistItemModel(
+          id: 'prayer_selected_${mediaItem.id}',
+          mediaItemId: mediaItem.id,
+          title: mediaItem.title,
+          subtitle: mediaItem.subtitle,
+          type: mediaItem.type,
+          mediaUrl: mediaItem.mediaUrl,
+          thumbnailUrl: mediaItem.thumbnailUrl,
+          durationSeconds: mediaItem.durationSeconds,
+          position: 1,
+        );
+      }
+    }
+    final selectedPlaylistId = _selectedPlaylistId;
+    if (selectedPlaylistId == null) return null;
+    final playlist = repo.findPlaylist(selectedPlaylistId);
+    if (playlist == null || playlist.items.isEmpty) return null;
+    return playlist.items.first;
+  }
+
+  Future<void> _playInline(PlaylistItemModel item) async {
+    await _disposeInlinePlayers();
+    if (!_canPlayInline(item)) {
+      if (!mounted) return;
+      setState(() {
+        _inlinePlayerLoading = false;
+        _inlinePlayerError = t(context).commonSomethingWentWrong;
+      });
+      return;
+    }
+    if (item.type == PlaylistItemType.youtube) {
+      final videoId = _extractYoutubeVideoId(item.mediaUrl);
+      if (videoId == null || videoId.isEmpty) {
+        if (!mounted) return;
+        setState(() {
+          _inlinePlayerLoading = false;
+          _inlinePlayerError = t(context).commonInvalidLink;
+        });
+        return;
+      }
+      setState(() {
+        _inlineYoutubeVideoId = videoId;
+        _inlineYoutubePlaying = false;
+        _inlinePlayerLoading = !kIsWeb;
+        _inlinePlayerError = null;
+      });
+      if (!kIsWeb) {
+        await _startInlineYoutubePlayback();
+        if (!mounted) return;
+        setState(() {
+          _inlinePlayerLoading = false;
+        });
+      }
+      return;
+    }
+    final uri = Uri.tryParse(item.mediaUrl);
+    if (uri == null || !uri.hasScheme) {
+      if (!mounted) return;
+      showInfoSnackBar(context, t(context).commonInvalidLink);
+      return;
+    }
+    setState(() {
+      _inlinePlayerLoading = true;
+      _inlinePlayerError = null;
+    });
+    final controller = VideoPlayerController.networkUrl(uri);
+    _inlinePlayerController = controller;
+    try {
+      await controller.initialize();
+      await controller.setLooping(true);
+      await controller.play();
+      if (!mounted) return;
+      setState(() {
+        _inlinePlayerLoading = false;
+        _inlinePlayerError = null;
+      });
+    } catch (_) {
+      await controller.dispose();
+      if (!mounted) return;
+      setState(() {
+        _inlinePlayerController = null;
+        _inlinePlayerLoading = false;
+        _inlinePlayerError = t(context).commonSomethingWentWrong;
+      });
+    }
+  }
+
+  bool _canPlayInline(PlaylistItemModel item) {
+    if (item.type == PlaylistItemType.spotify) {
+      return false;
+    }
+    if (item.type == PlaylistItemType.youtube) return true;
+    final uri = Uri.tryParse(item.mediaUrl);
+    if (uri == null || !uri.hasScheme) return false;
+    return true;
+  }
+
+  String? _extractYoutubeVideoId(String url) {
+    final parsed = ypf.YoutubePlayer.convertUrlToId(url);
+    if (parsed != null && parsed.isNotEmpty) return parsed;
+    final uri = Uri.tryParse(url);
+    if (uri == null) return null;
+    if (uri.host.contains('youtu.be')) {
+      if (uri.pathSegments.isEmpty) return null;
+      return uri.pathSegments.first;
+    }
+    if (uri.host.contains('youtube.com')) {
+      final fromQuery = uri.queryParameters['v'];
+      if (fromQuery != null && fromQuery.isNotEmpty) return fromQuery;
+      final segments = uri.pathSegments;
+      if (segments.length >= 2 && (segments.first == 'embed' || segments.first == 'shorts')) {
+        return segments[1];
+      }
+    }
+    return null;
+  }
+
+  Future<void> _startInlineYoutubePlayback() async {
+    final videoId = _inlineYoutubeVideoId;
+    if (videoId == null || videoId.isEmpty) return;
+    if (_inlineYoutubePlaying) return;
+    try {
+      if (!mounted) return;
+      setState(() {
+        _inlinePlayerLoading = true;
+        _inlinePlayerError = null;
+        _inlinePlayerErrorDetails = null;
+      });
+      if (kIsWeb) {
+        setState(() {
+          _inlineYoutubePlaying = true;
+          _inlinePlayerError = null;
+          _inlinePlayerLoading = false;
+        });
+        return;
+      }
+      final controller = ypf.YoutubePlayerController(
+        initialVideoId: videoId,
+        flags: const ypf.YoutubePlayerFlags(autoPlay: true, mute: false),
+      );
+      if (!mounted) {
+        controller.dispose();
+        return;
+      }
+      controller.load(videoId);
+      controller.play();
+      setState(() {
+        _inlineYoutubeMobileController = controller;
+        _inlineYoutubePlaying = true;
+        _inlinePlayerError = null;
+        _inlinePlayerLoading = false;
+      });
+    } catch (e, st) {
+      if (!mounted) return;
+      setState(() {
+        _inlineYoutubePlaying = false;
+        _inlinePlayerError = t(context).commonSomethingWentWrong;
+        _inlinePlayerErrorDetails = '${e.runtimeType}: $e\n$st';
+        _inlinePlayerLoading = false;
+      });
+    }
+  }
+
+  Future<void> _disposeInlinePlayers() async {
+    final previousVideo = _inlinePlayerController;
+    _inlinePlayerController = null;
+    await previousVideo?.dispose();
+    final previousYoutubeMobile = _inlineYoutubeMobileController;
+    _inlineYoutubeMobileController = null;
+    previousYoutubeMobile?.dispose();
+    _inlineYoutubeVideoId = null;
+    _inlineYoutubePlaying = false;
+    _inlinePlayerErrorDetails = null;
+  }
+
+  Future<void> _openPrayerLibrary() async {
+    final session = SessionScope.of(context).value;
+    if (session is! AuthSession) {
+      await showAuthGate(context);
+      return;
+    }
+    final selected = await _selectFromPrayerLibrary(session: session);
+    if (!mounted || selected == null) return;
+    final repo = RepoScope.of(context);
+    setState(() {
+      if (selected.playlistId != null) {
+        _selectedPlaylistId = selected.playlistId;
+      }
+      if (selected.mediaItemId != null) {
+        _selectedMediaItemId = selected.mediaItemId;
+      } else if (selected.playlistId != null) {
+        _selectedMediaItemId = null;
+      }
+      _inlinePlayerError = null;
+    });
+    final item = _selectedPlaybackItem(repo);
+    if (item != null) {
+      await _playInline(item);
     }
   }
 
@@ -22277,20 +25135,20 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
       context: context,
       builder: (ctx) {
         return AlertDialog(
-          title: const Text('Sessão ativa'),
-          content: const Text('Deseja finalizar ou cancelar?'),
+          title: Text(t(context).prayerSessionActiveTitle),
+          content: Text(t(context).prayerSessionActivePrompt),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(_PrayerExitChoice.keepPraying),
-              child: const Text('Continuar orando'),
+              child: Text(t(context).prayerSessionContinuePraying),
             ),
             TextButton(
               onPressed: () => Navigator.of(ctx).pop(_PrayerExitChoice.cancel),
-              child: const Text('Cancelar sessão'),
+              child: Text(t(context).prayerSessionCancelAction),
             ),
             FilledButton(
               onPressed: () => Navigator.of(ctx).pop(_PrayerExitChoice.finish),
-              child: const Text('Finalizar'),
+              child: Text(t(context).prayerSessionFinishAction),
             ),
           ],
         );
@@ -22390,10 +25248,10 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Text('Finalizar oração', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+                  Text(t(ctx).prayerSessionFinishSheetTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
                   const SizedBox(height: 6),
                   Text(
-                    'Deseja registrar algo sobre esta oração?',
+                    t(ctx).prayerSessionFinishSheetPrompt,
                     style: TextStyle(color: Theme.of(ctx).colorScheme.outline, fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 12),
@@ -22401,14 +25259,14 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
                     builder: (context, setModalState) {
                       return DropdownButtonFormField<String>(
                         initialValue: type,
-                        items: const [
-                          DropdownMenuItem<String>(value: 'record', child: Text('Registro')),
-                          DropdownMenuItem<String>(value: 'revelation', child: Text('Revelação')),
-                          DropdownMenuItem<String>(value: 'testimony', child: Text('Testemunho')),
-                          DropdownMenuItem<String>(value: 'other', child: Text('Outro')),
+                        items: [
+                          DropdownMenuItem<String>(value: 'record', child: Text(t(context).prayerSessionRecordTypeRecord)),
+                          DropdownMenuItem<String>(value: 'revelation', child: Text(t(context).prayerSessionRecordTypeRevelation)),
+                          DropdownMenuItem<String>(value: 'testimony', child: Text(t(context).prayerSessionRecordTypeTestimony)),
+                          DropdownMenuItem<String>(value: 'other', child: Text(t(context).prayerSessionRecordTypeOther)),
                         ],
                         onChanged: (v) => setModalState(() => type = v ?? 'record'),
-                        decoration: const InputDecoration(labelText: 'Tipo'),
+                        decoration: InputDecoration(labelText: t(context).prayerSessionRecordTypeField),
                       );
                     },
                   ),
@@ -22417,14 +25275,14 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
                     controller: recordController,
                     maxLines: 5,
                     textInputAction: TextInputAction.done,
-                    decoration: const InputDecoration(
-                      labelText: 'Registro',
-                      hintText: 'Escreva aqui…',
+                    decoration: InputDecoration(
+                      labelText: t(ctx).prayerSessionRecordField,
+                      hintText: t(ctx).prayerSessionRecordHint,
                     ),
                   ),
                   const SizedBox(height: 12),
                   PrimaryButton(
-                    label: 'Salvar e finalizar',
+                    label: t(ctx).prayerSessionSaveAndFinish,
                     onPressed: () {
                       final text = recordController.text.trim();
                       if (text.isEmpty) {
@@ -22436,13 +25294,13 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
                   ),
                   const SizedBox(height: 8),
                   SecondaryButton(
-                    label: 'Finalizar sem registro',
+                    label: t(ctx).prayerSessionFinishWithoutRecord,
                     onPressed: () => Navigator.of(ctx).pop(const _PrayerFinishRecord(type: 'record', text: '')),
                   ),
                   const SizedBox(height: 8),
                   TextButton(
                     onPressed: () => Navigator.of(ctx).pop(null),
-                    child: const Text('Voltar'),
+                    child: Text(t(ctx).commonBack),
                   ),
                 ],
               ),
@@ -22475,6 +25333,10 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final repo = RepoScope.of(context);
+    final inlinePlayerHeight = kIsWeb ? 168.0 : 220.0;
+    final selectedPlaylist = _selectedPlaylistId == null ? null : repo.findPlaylist(_selectedPlaylistId!);
+    final playbackItem = _selectedPlaybackItem(repo);
     final now = DateTime.now();
     final elapsed = _elapsed(now);
     final breadcrumb = widget.args.contextBreadcrumb;
@@ -22490,7 +25352,7 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
         appBar: AppBar(
           leading: AtalaiaIconButton(
             icon: Icons.arrow_back,
-            label: 'Voltar',
+            label: t(context).commonBack,
             onPressed: _finishing
                 ? null
                 : () {
@@ -22501,7 +25363,14 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
                     }
                   },
           ),
-          title: Text('Orar'),
+                title: Text(t(context).prayerTitle),
+          actions: [
+            AtalaiaIconButton(
+              icon: Icons.library_music_outlined,
+              label: t(context).playlistLibraryTitle,
+                    onPressed: () => unawaited(_openPrayerLibrary()),
+            ),
+          ],
         ),
         body: SafeArea(
           child: Padding(
@@ -22520,7 +25389,7 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
                   const Center(child: CircularProgressIndicator()),
                   const SizedBox(height: 12),
                   Text(
-                    'Iniciando sessão…',
+                    t(context).prayerSessionStarting,
                     textAlign: TextAlign.center,
                     style: TextStyle(color: cs.outline, fontWeight: FontWeight.w700),
                   ),
@@ -22529,10 +25398,10 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
                   const Spacer(),
                   Text(_error!, textAlign: TextAlign.center, style: TextStyle(color: cs.error, fontWeight: FontWeight.w800)),
                   const SizedBox(height: 12),
-                  PrimaryButton(label: 'Tentar novamente', onPressed: _finishing ? null : () => unawaited(_start())),
+                  PrimaryButton(label: t(context).commonTryAgain, onPressed: _finishing ? null : () => unawaited(_start())),
                   const SizedBox(height: 10),
                   SecondaryButton(
-                    label: 'Voltar',
+                    label: t(context).commonBack,
                     onPressed: _finishing
                         ? null
                         : () {
@@ -22541,41 +25410,240 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
                   ),
                   const Spacer(),
                 ] else ...[
-                  Row(
-                    children: [
-                      Container(
-                        width: 10,
-                        height: 10,
-                        decoration: BoxDecoration(
-                          color: _isPaused ? cs.outline : cs.primary,
-                          shape: BoxShape.circle,
-                        ),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Card(
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    t(context).playlistNowPlayingTitle,
+                                    style: TextStyle(color: cs.outline, fontWeight: FontWeight.w800),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    selectedPlaylist?.title ?? playbackItem?.title ?? t(context).playlistStartSubtitle,
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w900,
+                                      fontSize: selectedPlaylist != null || playbackItem != null ? 16 : 14,
+                                      color: selectedPlaylist != null || playbackItem != null ? null : cs.outline,
+                                    ),
+                                  ),
+                                  if (selectedPlaylist != null && selectedPlaylist.items.isNotEmpty) ...[
+                                    const SizedBox(height: 8),
+                                    Wrap(
+                                      spacing: 8,
+                                      runSpacing: 8,
+                                      children: selectedPlaylist.items
+                                          .take(3)
+                                          .map(
+                                            (item) => ActionChip(
+                                              label: Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                                              onPressed: () => unawaited(_playInline(item)),
+                                            ),
+                                          )
+                                          .toList(growable: false),
+                                    ),
+                                  ],
+                                  const SizedBox(height: 10),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: [
+                                      if (selectedPlaylist != null)
+                                        TextButton.icon(
+                                          onPressed: () => unawaited(
+                                            showPlaylistShareSheet(
+                                              context,
+                                              playlist: selectedPlaylist,
+                                              isAuthenticated: SessionScope.of(context).value.isAuthenticated,
+                                            ),
+                                          ),
+                                          icon: const Icon(Icons.share_outlined),
+                                          label: Text(t(context).playlistShareAction),
+                                        ),
+                                      TextButton.icon(
+                                        onPressed: () => unawaited(_openPrayerLibrary()),
+                                        icon: const Icon(Icons.library_music_outlined),
+                                        label: Text(t(context).playlistLibraryAction),
+                                      ),
+                                      if (selectedPlaylist != null)
+                                        TextButton.icon(
+                                          onPressed: () => Navigator.of(context).push(
+                                            MaterialPageRoute(builder: (_) => PlaylistEditorScreen(playlistId: selectedPlaylist.id)),
+                                          ),
+                                          icon: const Icon(Icons.open_in_new_rounded),
+                                          label: Text(t(context).playlistOpenAction),
+                                        ),
+                                    ],
+                                  ),
+                                  if (playbackItem != null) ...[
+                                    const SizedBox(height: 8),
+                                    if (_inlinePlayerLoading ||
+                                        _inlineYoutubeVideoId != null ||
+                                        _inlinePlayerController?.value.isInitialized == true ||
+                                        _inlinePlayerError != null)
+                                      Container(
+                                        width: double.infinity,
+                                        padding: const EdgeInsets.all(10),
+                                        decoration: BoxDecoration(
+                                          borderRadius: BorderRadius.circular(10),
+                                          color: cs.surfaceContainerHighest.withValues(alpha: 0.35),
+                                        ),
+                                        child: _inlinePlayerLoading
+                                            ? const Center(child: Padding(padding: EdgeInsets.all(8), child: CircularProgressIndicator()))
+                                            : _inlineYoutubeVideoId != null
+                                                ? Column(
+                                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                                    children: [
+                                                      Text(playbackItem.title, style: const TextStyle(fontWeight: FontWeight.w800)),
+                                                      const SizedBox(height: 8),
+                                                      if (_inlineYoutubePlaying)
+                                                (kIsWeb
+                                                    ? SizedBox(
+                                                        width: double.infinity,
+                                                        height: inlinePlayerHeight,
+                                                        child: YoutubeEmbedView(videoId: _inlineYoutubeVideoId!, autoplay: true),
+                                                      )
+                                                    : ClipRRect(
+                                                        borderRadius: BorderRadius.circular(10),
+                                                        child: SizedBox(
+                                                          width: double.infinity,
+                                                          height: inlinePlayerHeight,
+                                                          child: ypf.YoutubePlayer(controller: _inlineYoutubeMobileController!),
+                                                        ),
+                                                      ))
+                                                      else
+                                                        SizedBox(
+                                                          width: double.infinity,
+                                                          height: inlinePlayerHeight,
+                                                          child: _YoutubeThumbnail(
+                                                            videoId: _inlineYoutubeVideoId!,
+                                                    onTap: () => unawaited(_startInlineYoutubePlayback()),
+                                                          ),
+                                                        ),
+                                              if (_inlinePlayerError != null) ...[
+                                                const SizedBox(height: 8),
+                                                Text(
+                                                  _inlinePlayerError!,
+                                                  style: TextStyle(color: cs.error, fontWeight: FontWeight.w700),
+                                                ),
+                                                if (_inlinePlayerErrorDetails != null && _inlinePlayerErrorDetails!.trim().isNotEmpty)
+                                                  Padding(
+                                                    padding: const EdgeInsets.only(top: 6),
+                                                    child: Text(
+                                                      _inlinePlayerErrorDetails!,
+                                                      style: TextStyle(color: cs.outline, fontSize: 12, fontWeight: FontWeight.w600),
+                                                    ),
+                                                  ),
+                                              ],
+                                                    ],
+                                                  )
+                                            : _inlinePlayerController?.value.isInitialized == true
+                                                ? Column(
+                                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                                    children: [
+                                                      Text(playbackItem.title, style: const TextStyle(fontWeight: FontWeight.w800)),
+                                                      const SizedBox(height: 8),
+                                                      SizedBox(
+                                                        width: double.infinity,
+                                                        height: inlinePlayerHeight,
+                                                        child: ClipRRect(
+                                                          borderRadius: BorderRadius.circular(10),
+                                                          child: FittedBox(
+                                                            fit: BoxFit.cover,
+                                                            child: SizedBox(
+                                                              width: _inlinePlayerController!.value.size.width,
+                                                              height: _inlinePlayerController!.value.size.height,
+                                                              child: VideoPlayer(_inlinePlayerController!),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                      const SizedBox(height: 8),
+                                                      Wrap(
+                                                        spacing: 8,
+                                                        children: [
+                                                          TextButton.icon(
+                                                            onPressed: () {
+                                                              final vc = _inlinePlayerController;
+                                                              if (vc == null) return;
+                                                              if (vc.value.isPlaying) {
+                                                                vc.pause();
+                                                              } else {
+                                                                vc.play();
+                                                              }
+                                                              setState(() {});
+                                                            },
+                                                            icon: Icon(
+                                                              _inlinePlayerController!.value.isPlaying
+                                                                  ? Icons.pause_rounded
+                                                                  : Icons.play_arrow_rounded,
+                                                            ),
+                                                            label: Text(
+                                                              _inlinePlayerController!.value.isPlaying
+                                                                  ? t(context).prayerSessionPause
+                                                                  : t(context).playlistPlayAction,
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ],
+                                                  )
+                                                : Text(
+                                                    _inlinePlayerError ?? t(context).commonSomethingWentWrong,
+                                                    style: TextStyle(color: cs.error, fontWeight: FontWeight.w700),
+                                                  ),
+                                      ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              Container(
+                                width: 10,
+                                height: 10,
+                                decoration: BoxDecoration(
+                                  color: _isPaused ? cs.outline : cs.primary,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                _isPaused ? t(context).prayerSessionPaused : t(context).prayerSessionLive,
+                                style: TextStyle(color: _isPaused ? cs.outline : cs.primary, fontWeight: FontWeight.w900),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 18),
+                          Text(
+                            _formatDuration(elapsed),
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(fontSize: 56, fontWeight: FontWeight.w900),
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            t(context).prayerSessionIntentHint,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: cs.outline),
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 8),
-                      Text(
-                        _isPaused ? 'Pausado' : 'Ao vivo',
-                        style: TextStyle(color: _isPaused ? cs.outline : cs.primary, fontWeight: FontWeight.w900),
-                      ),
-                    ],
+                    ),
                   ),
-                  const Spacer(),
-                  Text(
-                    _formatDuration(elapsed),
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 56, fontWeight: FontWeight.w900),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    'Ore por esta região com intenção.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: cs.outline),
-                  ),
-                  const Spacer(),
                   Row(
                     children: [
                       Expanded(
                         child: SecondaryButton(
-                          label: _isPaused ? 'Retomar' : 'Pausar',
+                          label: _isPaused ? t(context).prayerSessionResume : t(context).prayerSessionPause,
                           onPressed: _finishing
                               ? null
                               : () {
@@ -22590,7 +25658,7 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
                       const SizedBox(width: 12),
                       Expanded(
                         child: PrimaryButton(
-                          label: 'Finalizar',
+                          label: t(context).prayerSessionFinishAction,
                           loading: _finishing,
                           onPressed: _finishing ? null : () => unawaited(_finish(status: 'finished', outcome: PrayerSessionOutcome.finished)),
                         ),
@@ -22600,6 +25668,1159 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
                 ],
               ],
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+final class _PlaylistFormDraft {
+  const _PlaylistFormDraft({
+    required this.title,
+    required this.description,
+    required this.coverUrl,
+    required this.visibility,
+  });
+
+  final String title;
+  final String description;
+  final String? coverUrl;
+  final PlaylistVisibility visibility;
+}
+
+final class _PlaylistItemFormDraft {
+  const _PlaylistItemFormDraft({
+    required this.mediaItemId,
+  });
+
+  final String mediaItemId;
+}
+
+final class _MediaItemFormDraft {
+  const _MediaItemFormDraft({
+    required this.title,
+    required this.subtitle,
+    required this.mediaUrl,
+    required this.thumbnailUrl,
+    required this.type,
+    this.durationSeconds,
+  });
+
+  final String title;
+  final String subtitle;
+  final String mediaUrl;
+  final String thumbnailUrl;
+  final PlaylistItemType type;
+  final int? durationSeconds;
+}
+
+class _YoutubeThumbnail extends StatelessWidget {
+  const _YoutubeThumbnail({required this.videoId, required this.onTap});
+
+  final String videoId;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: Material(
+        color: Colors.black12,
+        child: InkWell(
+          onTap: onTap,
+          child: AspectRatio(
+            aspectRatio: 16 / 9,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                Image.network(
+                  'https://img.youtube.com/vi/$videoId/hqdefault.jpg',
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => Container(color: Colors.black12),
+                ),
+                Container(color: Colors.black.withValues(alpha: 0.28)),
+                Center(
+                  child: Container(
+                    width: 68,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE53935),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 34),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class PlaylistLibraryScreen extends StatefulWidget {
+  const PlaylistLibraryScreen({super.key});
+
+  @override
+  State<PlaylistLibraryScreen> createState() => _PlaylistLibraryScreenState();
+}
+
+class _PlaylistLibraryScreenState extends State<PlaylistLibraryScreen> {
+  int _selectedTab = 0;
+
+  Future<_PlaylistFormDraft?> _showPlaylistForm({
+    required String title,
+    required String description,
+    String? coverUrl,
+    required PlaylistVisibility visibility,
+    required String actionLabel,
+  }) async {
+    return showAtalaiaBottomSheet<_PlaylistFormDraft>(
+      context,
+      builder: (ctx) => _PlaylistFormSheet(
+        initialTitle: title,
+        initialDescription: description,
+        initialCoverUrl: coverUrl,
+        initialVisibility: visibility,
+        actionLabel: actionLabel,
+      ),
+    );
+  }
+
+  Future<_MediaItemFormDraft?> _showMediaItemForm({
+    String title = '',
+    String subtitle = '',
+    String mediaUrl = '',
+    String thumbnailUrl = '',
+    PlaylistItemType type = PlaylistItemType.youtube,
+    int? durationSeconds,
+    required String actionLabel,
+  }) async {
+    return showAtalaiaBottomSheet<_MediaItemFormDraft>(
+      context,
+      builder: (ctx) => _MediaItemFormSheet(
+        initialTitle: title,
+        initialSubtitle: subtitle,
+        initialMediaUrl: mediaUrl,
+        initialThumbnailUrl: thumbnailUrl,
+        initialType: type,
+        initialDurationSeconds: durationSeconds,
+        actionLabel: actionLabel,
+      ),
+    );
+  }
+
+  Future<void> _createPlaylist(AuthSession session) async {
+    final draft = await _showPlaylistForm(
+      title: '',
+      description: '',
+      coverUrl: null,
+      visibility: PlaylistVisibility.public,
+      actionLabel: t(context).playlistLibraryCreateAction,
+    );
+    if (!mounted || draft == null) return;
+    final repo = RepoScope.of(context);
+    final id = repo.createPlaylist(
+      ownerId: session.userId,
+      title: draft.title,
+      description: draft.description,
+      coverUrl: draft.coverUrl,
+      visibility: draft.visibility,
+    );
+    if (!mounted) return;
+    showInfoSnackBar(context, t(context).commonSaved);
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => PlaylistEditorScreen(playlistId: id)));
+  }
+
+  Future<void> _editPlaylist(AuthSession session, PlaylistModel playlist) async {
+    final draft = await _showPlaylistForm(
+      title: playlist.title,
+      description: playlist.description,
+      coverUrl: playlist.coverUrl,
+      visibility: playlist.visibility,
+      actionLabel: t(context).playlistLibraryUpdateAction,
+    );
+    if (!mounted || draft == null) return;
+    final repo = RepoScope.of(context);
+    final ok = repo.updatePlaylist(
+      playlistId: playlist.id,
+      userId: session.userId,
+      title: draft.title,
+      description: draft.description,
+      coverUrl: draft.coverUrl,
+      visibility: draft.visibility,
+    );
+    if (!mounted) return;
+    if (ok) {
+      showInfoSnackBar(context, t(context).commonSaved);
+    }
+  }
+
+  Future<void> _deletePlaylist(AuthSession session, PlaylistModel playlist) async {
+    final ok = await showAtalaiaConfirmDialog(
+      context,
+      title: t(context).playlistDeleteConfirmTitle,
+      message: t(context).playlistDeleteConfirmBody,
+      confirmLabel: t(context).commonDelete,
+      isDestructive: true,
+    );
+    if (!mounted || ok != true) return;
+    final repo = RepoScope.of(context);
+    final deleted = repo.deletePlaylist(playlistId: playlist.id, userId: session.userId);
+    if (!mounted) return;
+    if (deleted) {
+      showInfoSnackBar(context, t(context).playlistDeletedSnack);
+    }
+  }
+
+  Future<void> _createMediaItem(AuthSession session) async {
+    final draft = await _showMediaItemForm(actionLabel: t(context).playlistSongAddAction);
+    if (!mounted || draft == null) return;
+    final repo = RepoScope.of(context);
+    repo.createMediaLibraryItem(
+      ownerId: session.userId,
+      title: draft.title,
+      subtitle: draft.subtitle,
+      type: draft.type,
+      mediaUrl: draft.mediaUrl,
+      thumbnailUrl: draft.thumbnailUrl,
+      durationSeconds: draft.durationSeconds,
+    );
+    if (!mounted) return;
+    showInfoSnackBar(context, t(context).commonSaved);
+  }
+
+  Future<void> _editMediaItem(AuthSession session, MediaLibraryItemModel item) async {
+    final draft = await _showMediaItemForm(
+      title: item.title,
+      subtitle: item.subtitle ?? '',
+      mediaUrl: item.mediaUrl,
+      thumbnailUrl: item.thumbnailUrl ?? '',
+      type: item.type,
+      durationSeconds: item.durationSeconds,
+      actionLabel: t(context).playlistLibraryUpdateAction,
+    );
+    if (!mounted || draft == null) return;
+    final repo = RepoScope.of(context);
+    final ok = repo.updateMediaLibraryItem(
+      mediaItemId: item.id,
+      userId: session.userId,
+      title: draft.title,
+      subtitle: draft.subtitle,
+      type: draft.type,
+      mediaUrl: draft.mediaUrl,
+      thumbnailUrl: draft.thumbnailUrl,
+      durationSeconds: draft.durationSeconds,
+    );
+    if (!mounted) return;
+    if (ok) {
+      showInfoSnackBar(context, t(context).commonSaved);
+    }
+  }
+
+  Future<void> _deleteMediaItem(AuthSession session, MediaLibraryItemModel item) async {
+    final ok = await showAtalaiaConfirmDialog(
+      context,
+      title: t(context).playlistSongDeleteConfirmTitle,
+      message: t(context).playlistSongDeleteConfirmBody,
+      confirmLabel: t(context).commonDelete,
+      isDestructive: true,
+    );
+    if (!mounted || ok != true) return;
+    final repo = RepoScope.of(context);
+    final deleted = repo.deleteMediaLibraryItem(mediaItemId: item.id, userId: session.userId);
+    if (!mounted) return;
+    if (deleted) {
+      showInfoSnackBar(context, t(context).playlistSongDeletedSnack);
+    }
+  }
+
+  Future<void> _addMediaToPlaylist(AuthSession session, MediaLibraryItemModel item) async {
+    final repo = RepoScope.of(context);
+    final ownedPlaylists = repo
+        .playlistsForUser(session)
+        .where((p) => repo.canManagePlaylist(playlist: p, userId: session.userId))
+        .toList(growable: false);
+    if (ownedPlaylists.isEmpty) {
+      showInfoSnackBar(context, t(context).playlistSongChoosePlaylistEmpty);
+      return;
+    }
+    final selectedPlaylistId = await showAtalaiaBottomSheet<String>(
+      context,
+      builder: (ctx) => _PickPlaylistSheet(playlists: ownedPlaylists),
+    );
+    if (!mounted || selectedPlaylistId == null) return;
+    final ok = repo.addMediaItemToPlaylist(
+      playlistId: selectedPlaylistId,
+      userId: session.userId,
+      mediaItemId: item.id,
+    );
+    if (!mounted) return;
+    if (ok) {
+      showInfoSnackBar(context, t(context).playlistSongAddedToPlaylist);
+    }
+  }
+
+  Future<void> _openMediaItem(String mediaUrl) async {
+    final uri = Uri.tryParse(mediaUrl);
+    if (uri == null || !uri.hasScheme) {
+      showInfoSnackBar(context, t(context).commonInvalidLink);
+      return;
+    }
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!mounted) return;
+    if (!ok) {
+      showInfoSnackBar(context, t(context).commonSomethingWentWrong);
+    }
+  }
+
+  String _visibilityLabel(BuildContext context, PlaylistVisibility visibility) {
+    final l10n = t(context);
+    return switch (visibility) {
+      PlaylistVisibility.private => l10n.playlistVisibilityPrivate,
+      PlaylistVisibility.unlisted => l10n.playlistVisibilityUnlisted,
+      PlaylistVisibility.public => l10n.playlistVisibilityPublic,
+    };
+  }
+
+  String _typeLabel(BuildContext context, PlaylistItemType type) {
+    final l10n = t(context);
+    return switch (type) {
+      PlaylistItemType.audio => l10n.playlistItemTypeAudio,
+      PlaylistItemType.youtube => l10n.playlistItemTypeYoutube,
+      PlaylistItemType.spotify => l10n.playlistItemTypeSpotify,
+    };
+  }
+
+  Future<void> _onPrimaryAction(AuthSession session) async {
+    if (_selectedTab == 0) {
+      await _createPlaylist(session);
+      return;
+    }
+    await _createMediaItem(session);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final repo = RepoScope.of(context);
+    final session = SessionScope.of(context);
+    return AnimatedBuilder(
+      animation: Listenable.merge([repo, session]),
+      builder: (context, _) {
+        final s = session.value;
+        if (s is! AuthSession) {
+          return Scaffold(
+            appBar: AppBar(title: Text(t(context).playlistLibraryTitle)),
+            body: Center(
+              child: PrimaryButton(label: t(context).settingsSignInToContinue, onPressed: () => showAuthGate(context)),
+            ),
+          );
+        }
+        final playlists = repo.playlistsForUser(s);
+        final mediaItems = repo.mediaItemsForSession(s);
+        return Scaffold(
+          appBar: AppBar(title: Text(t(context).playlistLibraryTitle)),
+          floatingActionButton: FloatingActionButton.extended(
+            onPressed: () => unawaited(_onPrimaryAction(s)),
+            icon: const Icon(Icons.add_rounded),
+            label: Text(_selectedTab == 0 ? t(context).playlistLibraryCreateAction : t(context).playlistSongAddAction),
+          ),
+          body: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: ChoiceChip(
+                        label: Text(t(context).playlistLibraryTabPlaylists),
+                        selected: _selectedTab == 0,
+                        onSelected: (_) => setState(() => _selectedTab = 0),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: ChoiceChip(
+                        label: Text(t(context).playlistLibraryTabSongs),
+                        selected: _selectedTab == 1,
+                        onSelected: (_) => setState(() => _selectedTab = 1),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Expanded(
+                child: _selectedTab == 0
+                    ? (playlists.isEmpty
+                        ? Center(
+                            child: EmptyStateCard(
+                              title: t(context).playlistLibraryEmpty,
+                              icon: Icons.queue_music_rounded,
+                              ctaLabel: t(context).playlistLibraryCreateAction,
+                              onCta: () => unawaited(_createPlaylist(s)),
+                            ),
+                          )
+                        : ListView.separated(
+                            padding: const EdgeInsets.all(12),
+                            itemCount: playlists.length,
+                            separatorBuilder: (_, __) => const SizedBox(height: 8),
+                            itemBuilder: (context, index) {
+                              final playlist = playlists[index];
+                              final owner = repo.canManagePlaylist(playlist: playlist, userId: s.userId);
+                              final saved = repo.isPlaylistSaved(userId: s.userId, playlistId: playlist.id);
+                              final subtitle = playlist.description.trim().isEmpty
+                                  ? t(context).playlistSummary(_visibilityLabel(context, playlist.visibility), playlist.items.length)
+                                  : '${playlist.description}\n${t(context).playlistSummary(_visibilityLabel(context, playlist.visibility), playlist.items.length)}';
+                              return Card(
+                                child: ListTile(
+                                  onTap: () => Navigator.of(context).push(
+                                    MaterialPageRoute(builder: (_) => PlaylistEditorScreen(playlistId: playlist.id)),
+                                  ),
+                                  leading: const CircleAvatar(child: Icon(Icons.queue_music_rounded)),
+                                  title: Text(playlist.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                                  subtitle: Text(subtitle, maxLines: 3, overflow: TextOverflow.ellipsis),
+                                  trailing: PopupMenuButton<String>(
+                                    onSelected: (value) async {
+                                      if (value == 'open') {
+                                        if (!context.mounted) return;
+                                        Navigator.of(context).push(
+                                          MaterialPageRoute(builder: (_) => PlaylistEditorScreen(playlistId: playlist.id)),
+                                        );
+                                        return;
+                                      }
+                                      if (value == 'play') {
+                                        if (playlist.items.isEmpty) return;
+                                        await _openMediaItem(playlist.items.first.mediaUrl);
+                                        return;
+                                      }
+                                      if (value == 'share') {
+                                        await showPlaylistShareSheet(context, playlist: playlist, isAuthenticated: true);
+                                        return;
+                                      }
+                                      if (owner) {
+                                        if (value == 'edit') {
+                                          await _editPlaylist(s, playlist);
+                                          return;
+                                        }
+                                        if (value == 'delete') {
+                                          await _deletePlaylist(s, playlist);
+                                          return;
+                                        }
+                                      } else if (value == 'save') {
+                                        final nowSaved = repo.toggleSavePlaylist(playlistId: playlist.id, userId: s.userId);
+                                        if (!context.mounted) return;
+                                        showInfoSnackBar(
+                                          context,
+                                          nowSaved ? t(context).playlistSavedToLibrary : t(context).playlistRemovedFromLibrary,
+                                        );
+                                      }
+                                    },
+                                    itemBuilder: (context) {
+                                      return [
+                                        PopupMenuItem(value: 'open', child: Text(t(context).playlistOpenAction)),
+                                        PopupMenuItem(value: 'play', child: Text(t(context).playlistPlayAction)),
+                                        PopupMenuItem(value: 'share', child: Text(t(context).playlistShareAction)),
+                                        if (owner) ...[
+                                          PopupMenuItem(value: 'edit', child: Text(t(context).playlistLibraryUpdateAction)),
+                                          PopupMenuItem(value: 'delete', child: Text(t(context).commonDelete)),
+                                        ] else ...[
+                                          PopupMenuItem(
+                                            value: 'save',
+                                            child: Text(saved ? t(context).playlistLibraryUnsaveAction : t(context).playlistLibrarySaveAction),
+                                          ),
+                                        ],
+                                      ];
+                                    },
+                                  ),
+                                ),
+                              );
+                            },
+                          ))
+                    : (mediaItems.isEmpty
+                        ? Center(
+                            child: EmptyStateCard(
+                              title: t(context).playlistSongEmpty,
+                              icon: Icons.music_note_rounded,
+                              ctaLabel: t(context).playlistSongAddAction,
+                              onCta: () => unawaited(_createMediaItem(s)),
+                            ),
+                          )
+                        : ListView.separated(
+                            padding: const EdgeInsets.all(12),
+                            itemCount: mediaItems.length,
+                            separatorBuilder: (_, __) => const SizedBox(height: 8),
+                            itemBuilder: (context, index) {
+                              final item = mediaItems[index];
+                              final suffix = item.durationSeconds == null
+                                  ? _typeLabel(context, item.type)
+                                  : '${_typeLabel(context, item.type)} • ${item.durationSeconds}s';
+                              final subtitle = item.subtitle == null || item.subtitle!.trim().isEmpty ? suffix : '${item.subtitle} • $suffix';
+                              return Card(
+                                child: ListTile(
+                                  onTap: () => unawaited(_openMediaItem(item.mediaUrl)),
+                                  leading: const CircleAvatar(child: Icon(Icons.music_note_rounded)),
+                                  title: Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                                  subtitle: Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+                                  trailing: PopupMenuButton<String>(
+                                    onSelected: (value) async {
+                                      if (value == 'play') {
+                                        await _openMediaItem(item.mediaUrl);
+                                        return;
+                                      }
+                                      if (value == 'edit') {
+                                        await _editMediaItem(s, item);
+                                        return;
+                                      }
+                                      if (value == 'add_to_playlist') {
+                                        await _addMediaToPlaylist(s, item);
+                                        return;
+                                      }
+                                      if (value == 'share') {
+                                        await Clipboard.setData(ClipboardData(text: item.mediaUrl));
+                                        if (!mounted) return;
+                                        showInfoSnackBar(context, t(context).commonLinkCopied);
+                                        return;
+                                      }
+                                      if (value == 'delete') {
+                                        await _deleteMediaItem(s, item);
+                                      }
+                                    },
+                                    itemBuilder: (context) => [
+                                      PopupMenuItem(value: 'play', child: Text(t(context).playlistPlayAction)),
+                                      PopupMenuItem(value: 'edit', child: Text(t(context).playlistLibraryUpdateAction)),
+                                      PopupMenuItem(value: 'add_to_playlist', child: Text(t(context).playlistSongAddToPlaylist)),
+                                      PopupMenuItem(value: 'share', child: Text(t(context).playlistShareAction)),
+                                      PopupMenuItem(value: 'delete', child: Text(t(context).commonDelete)),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          )),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class PlaylistEditorScreen extends StatefulWidget {
+  const PlaylistEditorScreen({required this.playlistId, super.key});
+
+  final String playlistId;
+
+  @override
+  State<PlaylistEditorScreen> createState() => _PlaylistEditorScreenState();
+}
+
+class _PlaylistEditorScreenState extends State<PlaylistEditorScreen> {
+  Future<_PlaylistItemFormDraft?> _showAddItemForm(AuthSession session) async {
+    final repo = RepoScope.of(context);
+    final mediaItems = repo.mediaItemsForUser(session);
+    return showAtalaiaBottomSheet<_PlaylistItemFormDraft>(
+      context,
+      builder: (ctx) => _AddPlaylistItemSheet(mediaItems: mediaItems),
+    );
+  }
+
+  String _typeLabel(BuildContext context, PlaylistItemType type) {
+    return switch (type) {
+      PlaylistItemType.audio => t(context).playlistItemTypeAudio,
+      PlaylistItemType.youtube => t(context).playlistItemTypeYoutube,
+      PlaylistItemType.spotify => t(context).playlistItemTypeSpotify,
+    };
+  }
+
+  Future<void> _openItem(PlaylistItemModel item) async {
+    final uri = Uri.tryParse(item.mediaUrl);
+    if (uri == null) {
+      showInfoSnackBar(context, t(context).commonInvalidLink);
+      return;
+    }
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!mounted) return;
+    if (!ok) {
+      showInfoSnackBar(context, t(context).commonSomethingWentWrong);
+    }
+  }
+
+  Future<void> _playPlaylist(PlaylistModel playlist) async {
+    if (playlist.items.isEmpty) return;
+    await _openItem(playlist.items.first);
+  }
+
+  Future<_PlaylistFormDraft?> _showPlaylistForm({
+    required String title,
+    required String description,
+    String? coverUrl,
+    required PlaylistVisibility visibility,
+    required String actionLabel,
+  }) async {
+    return showAtalaiaBottomSheet<_PlaylistFormDraft>(
+      context,
+      builder: (ctx) => _PlaylistFormSheet(
+        initialTitle: title,
+        initialDescription: description,
+        initialCoverUrl: coverUrl,
+        initialVisibility: visibility,
+        actionLabel: actionLabel,
+      ),
+    );
+  }
+
+  String _visibilityLabel(BuildContext context, PlaylistVisibility visibility) {
+    final l10n = t(context);
+    return switch (visibility) {
+      PlaylistVisibility.private => l10n.playlistVisibilityPrivate,
+      PlaylistVisibility.unlisted => l10n.playlistVisibilityUnlisted,
+      PlaylistVisibility.public => l10n.playlistVisibilityPublic,
+    };
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final repo = RepoScope.of(context);
+    final session = SessionScope.of(context).value;
+    final playlist = repo.findPlaylist(widget.playlistId);
+    final ownerSession = session is AuthSession && playlist != null && repo.canManagePlaylist(playlist: playlist, userId: session.userId)
+        ? session
+        : null;
+    final isOwner = ownerSession != null;
+    final items = playlist?.items.toList(growable: false) ?? const <PlaylistItemModel>[];
+
+    return Scaffold(
+      appBar: AppBar(title: Text(t(context).playlistEditorTitle)),
+      body: playlist == null
+          ? Center(
+              child: Text(
+                t(context).playlistEditorMissing,
+                style: TextStyle(color: Theme.of(context).colorScheme.outline, fontWeight: FontWeight.w700),
+              ),
+            )
+          : SafeArea(
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+                    child: Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                CircleAvatar(
+                                  radius: 24,
+                                  child: playlist.coverUrl == null ? const Icon(Icons.queue_music_rounded) : null,
+                                  backgroundImage: playlist.coverUrl == null ? null : NetworkImage(playlist.coverUrl!),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(playlist.title, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+                                      if (playlist.description.trim().isNotEmpty) ...[
+                                        const SizedBox(height: 2),
+                                        Text(playlist.description, maxLines: 2, overflow: TextOverflow.ellipsis),
+                                      ],
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        t(context).playlistSummary(
+                                          _visibilityLabel(context, playlist.visibility),
+                                          playlist.items.length,
+                                        ),
+                                        style: TextStyle(color: Theme.of(context).colorScheme.outline, fontWeight: FontWeight.w700),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                SecondaryButton(
+                                  label: t(context).playlistPlayAction,
+                                  onPressed: playlist.items.isEmpty ? null : () => unawaited(_playPlaylist(playlist)),
+                                ),
+                                SecondaryButton(
+                                  label: t(context).playlistLibraryUpdateAction,
+                                  onPressed: !isOwner
+                                      ? null
+                                      : () async {
+                                          final draft = await _showPlaylistForm(
+                                            title: playlist.title,
+                                            description: playlist.description,
+                                            coverUrl: playlist.coverUrl,
+                                            visibility: playlist.visibility,
+                                            actionLabel: t(context).playlistLibraryUpdateAction,
+                                          );
+                                          if (!mounted || draft == null) return;
+                                          final ok = repo.updatePlaylist(
+                                            playlistId: playlist.id,
+                                            userId: ownerSession.userId,
+                                            title: draft.title,
+                                            description: draft.description,
+                                            coverUrl: draft.coverUrl,
+                                            visibility: draft.visibility,
+                                          );
+                                          if (!mounted) return;
+                                          if (ok) {
+                                            showInfoSnackBar(context, t(context).commonSaved);
+                                            setState(() {});
+                                          }
+                                        },
+                                ),
+                                SecondaryButton(
+                                  label: t(context).playlistShareAction,
+                                  onPressed: () => unawaited(
+                                    showPlaylistShareSheet(context, playlist: playlist, isAuthenticated: true),
+                                  ),
+                                ),
+                                PrimaryButton(
+                                  label: t(context).playlistItemAddAction,
+                                  onPressed: !isOwner
+                                      ? null
+                                      : () async {
+                                          final draft = await _showAddItemForm(ownerSession);
+                                          if (!mounted || draft == null) return;
+                                          final ok = repo.addMediaItemToPlaylist(
+                                            playlistId: playlist.id,
+                                            userId: ownerSession.userId,
+                                            mediaItemId: draft.mediaItemId,
+                                          );
+                                          if (!mounted) return;
+                                          if (ok) {
+                                            showInfoSnackBar(context, t(context).commonSaved);
+                                            setState(() {});
+                                          }
+                                        },
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: ReorderableListView.builder(
+                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                      itemCount: items.length,
+                      onReorder: !isOwner
+                          ? (_, __) {}
+                          : (oldIndex, newIndex) {
+                              final ok = repo.reorderPlaylistItems(
+                                playlistId: playlist.id,
+                                userId: ownerSession.userId,
+                                oldIndex: oldIndex,
+                                newIndex: newIndex,
+                              );
+                              if (ok) {
+                                setState(() {});
+                              }
+                            },
+                      buildDefaultDragHandles: isOwner,
+                      itemBuilder: (context, index) {
+                        final item = items[index];
+                        final suffix = item.durationSeconds == null
+                            ? _typeLabel(context, item.type)
+                            : '${_typeLabel(context, item.type)} • ${item.durationSeconds}s';
+                        final subtitle = item.subtitle == null || item.subtitle!.trim().isEmpty ? suffix : '${item.subtitle} • $suffix';
+                        return Card(
+                          key: ValueKey(item.id),
+                          child: ListTile(
+                            onTap: () => unawaited(_openItem(item)),
+                            leading: Text('${index + 1}', style: const TextStyle(fontWeight: FontWeight.w900)),
+                            title: Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                            subtitle: Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+                            trailing: Wrap(
+                              spacing: 2,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.play_arrow_rounded),
+                                  onPressed: () => unawaited(_openItem(item)),
+                                ),
+                                if (isOwner)
+                                  IconButton(
+                                    icon: const Icon(Icons.delete_outline),
+                                    onPressed: () {
+                                      final ok = repo.removePlaylistItem(
+                                        playlistId: playlist.id,
+                                        itemId: item.id,
+                                        userId: ownerSession.userId,
+                                      );
+                                      if (ok) {
+                                        setState(() {});
+                                      }
+                                    },
+                                  ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+    );
+  }
+}
+
+class _PlaylistFormSheet extends StatefulWidget {
+  const _PlaylistFormSheet({
+    required this.initialTitle,
+    required this.initialDescription,
+    required this.initialCoverUrl,
+    required this.initialVisibility,
+    required this.actionLabel,
+  });
+
+  final String initialTitle;
+  final String initialDescription;
+  final String? initialCoverUrl;
+  final PlaylistVisibility initialVisibility;
+  final String actionLabel;
+
+  @override
+  State<_PlaylistFormSheet> createState() => _PlaylistFormSheetState();
+}
+
+class _PlaylistFormSheetState extends State<_PlaylistFormSheet> {
+  late final TextEditingController _titleController;
+  late final TextEditingController _descriptionController;
+  late final TextEditingController _coverController;
+  late PlaylistVisibility _visibility;
+
+  @override
+  void initState() {
+    super.initState();
+    _titleController = TextEditingController(text: widget.initialTitle);
+    _descriptionController = TextEditingController(text: widget.initialDescription);
+    _coverController = TextEditingController(text: widget.initialCoverUrl ?? '');
+    _visibility = widget.initialVisibility;
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _descriptionController.dispose();
+    _coverController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final insets = MediaQuery.viewInsetsOf(context);
+    return SafeArea(
+      child: AnimatedPadding(
+        duration: const Duration(milliseconds: 200),
+        padding: EdgeInsets.only(bottom: insets.bottom),
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(t(context).playlistLibraryFormTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+                const SizedBox(height: 12),
+                AtalaiaTextField(
+                  controller: _titleController,
+                  labelText: t(context).playlistFieldTitle,
+                  hintText: t(context).playlistFieldTitleHint,
+                ),
+                const SizedBox(height: 10),
+                AtalaiaTextField(
+                  controller: _descriptionController,
+                  labelText: t(context).playlistFieldDescription,
+                  hintText: t(context).playlistFieldDescriptionHint,
+                  maxLines: 3,
+                ),
+                const SizedBox(height: 10),
+                AtalaiaTextField(
+                  controller: _coverController,
+                  labelText: t(context).playlistFieldCoverUrl,
+                  hintText: t(context).playlistFieldCoverUrlHint,
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<PlaylistVisibility>(
+                  initialValue: _visibility,
+                  decoration: InputDecoration(labelText: t(context).playlistFieldVisibility),
+                  items: [
+                    DropdownMenuItem(value: PlaylistVisibility.private, child: Text(t(context).playlistVisibilityPrivate)),
+                    DropdownMenuItem(value: PlaylistVisibility.unlisted, child: Text(t(context).playlistVisibilityUnlisted)),
+                    DropdownMenuItem(value: PlaylistVisibility.public, child: Text(t(context).playlistVisibilityPublic)),
+                  ],
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setState(() => _visibility = value);
+                  },
+                ),
+                const SizedBox(height: 14),
+                PrimaryButton(
+                  label: widget.actionLabel,
+                  onPressed: () {
+                    final resolvedTitle = _titleController.text.trim();
+                    if (resolvedTitle.isEmpty) return;
+                    Navigator.of(context).pop(
+                      _PlaylistFormDraft(
+                        title: resolvedTitle,
+                        description: _descriptionController.text.trim(),
+                        coverUrl: _coverController.text.trim().isEmpty ? null : _coverController.text.trim(),
+                        visibility: _visibility,
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MediaItemFormSheet extends StatefulWidget {
+  const _MediaItemFormSheet({
+    required this.initialTitle,
+    required this.initialSubtitle,
+    required this.initialMediaUrl,
+    required this.initialThumbnailUrl,
+    required this.initialType,
+    required this.initialDurationSeconds,
+    required this.actionLabel,
+  });
+
+  final String initialTitle;
+  final String initialSubtitle;
+  final String initialMediaUrl;
+  final String initialThumbnailUrl;
+  final PlaylistItemType initialType;
+  final int? initialDurationSeconds;
+  final String actionLabel;
+
+  @override
+  State<_MediaItemFormSheet> createState() => _MediaItemFormSheetState();
+}
+
+class _MediaItemFormSheetState extends State<_MediaItemFormSheet> {
+  late final TextEditingController _titleController;
+  late final TextEditingController _subtitleController;
+  late final TextEditingController _urlController;
+  late final TextEditingController _thumbnailController;
+  late final TextEditingController _durationController;
+  late PlaylistItemType _type;
+
+  @override
+  void initState() {
+    super.initState();
+    _titleController = TextEditingController(text: widget.initialTitle);
+    _subtitleController = TextEditingController(text: widget.initialSubtitle);
+    _urlController = TextEditingController(text: widget.initialMediaUrl);
+    _thumbnailController = TextEditingController(text: widget.initialThumbnailUrl);
+    _durationController = TextEditingController(text: widget.initialDurationSeconds?.toString() ?? '');
+    _type = widget.initialType;
+  }
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _subtitleController.dispose();
+    _urlController.dispose();
+    _thumbnailController.dispose();
+    _durationController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final insets = MediaQuery.viewInsetsOf(context);
+    return SafeArea(
+      child: AnimatedPadding(
+        duration: const Duration(milliseconds: 200),
+        padding: EdgeInsets.only(bottom: insets.bottom),
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(t(context).playlistSongFormTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+                const SizedBox(height: 12),
+                AtalaiaTextField(
+                  controller: _titleController,
+                  labelText: t(context).playlistItemFieldTitle,
+                  hintText: t(context).playlistItemFieldTitleHint,
+                ),
+                const SizedBox(height: 10),
+                AtalaiaTextField(
+                  controller: _subtitleController,
+                  labelText: t(context).playlistSongFieldSubtitle,
+                  hintText: t(context).playlistSongFieldSubtitleHint,
+                ),
+                const SizedBox(height: 10),
+                DropdownButtonFormField<PlaylistItemType>(
+                  initialValue: _type,
+                  decoration: InputDecoration(labelText: t(context).playlistItemFieldType),
+                  items: [
+                    DropdownMenuItem(value: PlaylistItemType.audio, child: Text(t(context).playlistItemTypeAudio)),
+                    DropdownMenuItem(value: PlaylistItemType.youtube, child: Text(t(context).playlistItemTypeYoutube)),
+                    DropdownMenuItem(value: PlaylistItemType.spotify, child: Text(t(context).playlistItemTypeSpotify)),
+                  ],
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setState(() => _type = value);
+                  },
+                ),
+                const SizedBox(height: 10),
+                AtalaiaTextField(
+                  controller: _urlController,
+                  labelText: t(context).playlistItemFieldUrl,
+                  hintText: t(context).playlistItemFieldUrlHint,
+                ),
+                const SizedBox(height: 10),
+                AtalaiaTextField(
+                  controller: _thumbnailController,
+                  labelText: t(context).playlistFieldCoverUrl,
+                  hintText: t(context).playlistFieldCoverUrlHint,
+                ),
+                const SizedBox(height: 10),
+                AtalaiaTextField(
+                  controller: _durationController,
+                  labelText: t(context).playlistItemFieldDuration,
+                  hintText: t(context).playlistItemFieldDurationHint,
+                  keyboardType: TextInputType.number,
+                ),
+                const SizedBox(height: 14),
+                PrimaryButton(
+                  label: widget.actionLabel,
+                  onPressed: () {
+                    final title = _titleController.text.trim();
+                    final url = _urlController.text.trim();
+                    if (title.isEmpty || url.isEmpty) return;
+                    final parsed = Uri.tryParse(url);
+                    if (parsed == null || !parsed.hasScheme) return;
+                    Navigator.of(context).pop(
+                      _MediaItemFormDraft(
+                        title: title,
+                        subtitle: _subtitleController.text.trim(),
+                        mediaUrl: url,
+                        thumbnailUrl: _thumbnailController.text.trim(),
+                        type: _type,
+                        durationSeconds: int.tryParse(_durationController.text.trim()),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AddPlaylistItemSheet extends StatelessWidget {
+  const _AddPlaylistItemSheet({required this.mediaItems});
+
+  final List<MediaLibraryItemModel> mediaItems;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.72),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(t(context).playlistItemAddTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+              const SizedBox(height: 12),
+              if (mediaItems.isEmpty)
+                Expanded(
+                  child: Center(
+                    child: Text(
+                      t(context).playlistSongChoosePlaylistEmpty,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Theme.of(context).colorScheme.outline, fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                )
+              else
+                Expanded(
+                  child: ListView.separated(
+                    itemCount: mediaItems.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (context, index) {
+                      final item = mediaItems[index];
+                      return ListTile(
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        tileColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                        title: Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                        subtitle: Text(item.subtitle ?? '', maxLines: 1, overflow: TextOverflow.ellipsis),
+                        trailing: const Icon(Icons.add_rounded),
+                        onTap: () => Navigator.of(context).pop(_PlaylistItemFormDraft(mediaItemId: item.id)),
+                      );
+                    },
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PickPlaylistSheet extends StatelessWidget {
+  const _PickPlaylistSheet({required this.playlists});
+
+  final List<PlaylistModel> playlists;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.72),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(t(context).playlistSongChoosePlaylistTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+              const SizedBox(height: 12),
+              Expanded(
+                child: ListView.separated(
+                  itemCount: playlists.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  itemBuilder: (context, index) {
+                    final playlist = playlists[index];
+                    return ListTile(
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      tileColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                      title: Text(playlist.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                      subtitle: Text(t(context).playlistSummary('', playlist.items.length).replaceFirst(' • ', '')),
+                      onTap: () => Navigator.of(context).pop(playlist.id),
+                    );
+                  },
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -22696,19 +26917,20 @@ class _CommentsScreenState extends State<CommentsScreen> {
     final choice = await showAtalaiaBottomSheet<String>(
       context,
       builder: (context) {
+        final l10n = t(context);
         return SafeArea(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               ListTile(
                 leading: const Icon(Icons.flag_outlined),
-                title: const Text('Denunciar'),
+                title: Text(l10n.postActionReport),
                 onTap: () => Navigator.pop(context, 'report'),
               ),
               if (canDelete)
                 ListTile(
                   leading: const Icon(Icons.delete_outline),
-                  title: const Text('Excluir'),
+                  title: Text(l10n.postActionDelete),
                   onTap: () => Navigator.pop(context, 'delete'),
                 ),
               const SizedBox(height: 8),
@@ -22737,14 +26959,14 @@ class _CommentsScreenState extends State<CommentsScreen> {
             reportedUserId: comment.userId,
           );
           if (!context.mounted) return;
-          showInfoSnackBar(context, 'Denúncia enviada');
+          showInfoSnackBar(context, t(context).postSnackReportSent);
         }
       case 'delete':
         if (!canDelete) return;
         final ok = await showAtalaiaConfirmDialog(
           context,
-          title: 'Excluir comentário?',
-          confirmLabel: 'Excluir',
+          title: t(context).commentDeleteConfirmTitle,
+          confirmLabel: t(context).postActionDelete,
           isDestructive: true,
         );
         if (!context.mounted) return;
@@ -22755,7 +26977,7 @@ class _CommentsScreenState extends State<CommentsScreen> {
             comment.id,
             viewerId: viewerId,
           );
-          showInfoSnackBar(context, 'Comentário excluído');
+          showInfoSnackBar(context, t(context).commentDeletedSnack);
         }
       default:
         return;
@@ -22790,7 +27012,7 @@ class _CommentsScreenState extends State<CommentsScreen> {
 
         return Scaffold(
           appBar: AppBar(
-            title: Text(total == 0 ? 'Comentários' : 'Comentários ($total)'),
+            title: Text(total == 0 ? t(context).commentsTitle : t(context).campaignCommentsTitle(total)),
           ),
           body: Column(
             children: [
@@ -22858,10 +27080,7 @@ class _CommentsScreenState extends State<CommentsScreen> {
                             physics: const AlwaysScrollableScrollPhysics(),
                             children: [
                               SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
-                              const EmptyState(
-                                icon: Icons.chat_bubble_outline,
-                                title: 'Seja o primeiro a comentar.',
-                              ),
+                              EmptyState(icon: Icons.chat_bubble_outline, title: t(context).commentBeFirst),
                             ],
                           )
                         : ListView.builder(
@@ -22878,7 +27097,12 @@ class _CommentsScreenState extends State<CommentsScreen> {
 
                               final c = shown[index];
                               final cs = Theme.of(context).colorScheme;
-                              final identity = _identityForUserId(repo, c.userId, legacyVerified: c.isVerified);
+                              final identity = _identityForUserId(
+                                repo,
+                                c.userId,
+                                legacyVerified: c.isVerified,
+                                userFallback: t(context).commonUserFallback,
+                              );
                               return Padding(
                                 padding: const EdgeInsets.symmetric(vertical: 10),
                                 child: Row(
@@ -22906,13 +27130,13 @@ class _CommentsScreenState extends State<CommentsScreen> {
                                               ],
                                               const SizedBox(width: 8),
                                               Text(
-                                                _relativeTime(c.createdAt),
+                                                _relativeTime(context, c.createdAt),
                                                 style: TextStyle(color: cs.outline),
                                               ),
                                               const Spacer(),
                                               AtalaiaIconButton(
                                                 icon: Icons.more_horiz,
-                                                label: 'Mais opções',
+                                                label: t(context).postMore,
                                                 onPressed: () => _openCommentMenu(
                                                   context,
                                                   comment: c,
@@ -22950,7 +27174,7 @@ class _CommentsScreenState extends State<CommentsScreen> {
                         child: AtalaiaTextField(
                           controller: _text,
                           enabled: isAuthenticated,
-                          hintText: isAuthenticated ? 'Adicione um comentário…' : 'Entrar para comentar',
+                          hintText: isAuthenticated ? t(context).commentAddLabel : t(context).postSignInToComment,
                           minLines: 1,
                           maxLines: 3,
                           keyboardType: TextInputType.multiline,
@@ -22961,7 +27185,7 @@ class _CommentsScreenState extends State<CommentsScreen> {
                       const SizedBox(width: 8),
                       AtalaiaFilledIconButton(
                         icon: Icons.send_rounded,
-                        label: 'Enviar comentário',
+                        label: t(context).postComment,
                         onPressed: _send,
                       ),
                     ],
@@ -23036,8 +27260,9 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
           }
 
           if (_hydrateFuture != null) {
+            final l10n = t(context);
             return Scaffold(
-              appBar: AppBar(title: const Text('Post')),
+              appBar: AppBar(title: Text(l10n.postTitle)),
               body: FutureBuilder<bool>(
                 future: _hydrateFuture,
                 builder: (context, snapshot) {
@@ -23060,9 +27285,9 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Text('Este post não está disponível.'),
+                          Text(l10n.postUnavailable),
                           const SizedBox(height: 12),
-                          PrimaryButton(label: 'Voltar', onPressed: () => Navigator.of(context).maybePop()),
+                          PrimaryButton(label: l10n.commonBack, onPressed: () => Navigator.of(context).maybePop()),
                         ],
                       ),
                     ),
@@ -23079,17 +27304,18 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
               Navigator.of(context).maybePop();
             });
           }
+          final l10n = t(context);
           return Scaffold(
-            appBar: AppBar(title: const Text('Post')),
+            appBar: AppBar(title: Text(l10n.postTitle)),
             body: Center(
               child: Padding(
                 padding: const EdgeInsets.all(20),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Text('Este post não está disponível.'),
+                    Text(l10n.postUnavailable),
                     const SizedBox(height: 12),
-                    PrimaryButton(label: 'Voltar', onPressed: () => Navigator.of(context).maybePop()),
+                    PrimaryButton(label: l10n.commonBack, onPressed: () => Navigator.of(context).maybePop()),
                   ],
                 ),
               ),
@@ -23098,8 +27324,9 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
         }
 
         if (_loading) {
+          final l10n = t(context);
           return Scaffold(
-            appBar: AppBar(title: const Text('Post')),
+            appBar: AppBar(title: Text(l10n.postTitle)),
             body: ListView(
               physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
@@ -23113,12 +27340,13 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
           );
         }
 
+        final l10n = t(context);
         final cs = Theme.of(context).colorScheme;
         final isAuthenticated = session.value.isAuthenticated;
-        final identity = _identityForUserId(repo, post.userId, legacyVerified: post.isVerified);
+        final identity = _identityForUserId(repo, post.userId, legacyVerified: post.isVerified, userFallback: l10n.commonUserFallback);
         final viewer = session.value;
         final viewerProfile = viewer is AuthSession ? repo.profileForUserId(viewer.userId) : null;
-        final viewerName = viewerProfile == null ? null : _displayNameForProfile(viewerProfile).trim();
+        final viewerName = viewerProfile == null ? null : _displayNameForProfile(viewerProfile, userFallback: l10n.commonUserFallback).trim();
 
         Widget actionWithCount({
           required IconData icon,
@@ -23170,7 +27398,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
           if (post.viewerHasPrayed) {
             return actionWithCount(
               icon: Icons.volunteer_activism,
-              label: 'Orei',
+              label: l10n.postPrayAction,
               onTap: () {
                 if (!isAuthenticated) return showCtaSnackBar(context);
                 repo.togglePrayer(post.id, isAuthenticated: true);
@@ -23183,9 +27411,9 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
           final fg = cs.onSurfaceVariant;
           return Semantics(
             button: true,
-            label: showCount ? 'Orei ($count)' : 'Orei',
+            label: showCount ? '${l10n.postPrayAction} ($count)' : l10n.postPrayAction,
             child: Tooltip(
-              message: 'Orei',
+              message: l10n.postPrayAction,
               child: Material(
                 color: Colors.transparent,
                 child: InkWell(
@@ -23211,7 +27439,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                           ],
                           const SizedBox(width: 8),
                           Text(
-                            'Orei',
+                            l10n.postPrayAction,
                             style: TextStyle(color: fg, fontWeight: FontWeight.w900, fontSize: 12, height: 1.0),
                           ),
                         ],
@@ -23233,23 +27461,23 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
           }
           final first = cached.isNotEmpty ? cached.first : (post.viewerHasPrayed ? viewerName : null);
           if (total == 1) {
-            return first == null ? 'Orado por 1 pessoa' : 'Orado por $first';
+            return first == null ? l10n.postPrayedByOnePerson : l10n.postPrayedByName(first);
           }
           if (total == 2) {
-            if (first != null) return 'Orado por $first e outra pessoa';
-            return 'Orado por 2 pessoas';
+            if (first != null) return l10n.postPrayedByNameAndOneOther(first);
+            return l10n.postPrayedByTwoPeople;
           }
-          if (first != null) return 'Orado por $first e outras pessoas';
-          return 'Orado por $total pessoas';
+          if (first != null) return l10n.postPrayedByNameAndOthers(first);
+          return l10n.postPrayedByManyPeople(total);
         }
 
         return Scaffold(
           appBar: AppBar(
-            title: const Text('Post'),
+            title: Text(l10n.postTitle),
             actions: [
               AtalaiaIconButton(
                 icon: Icons.more_horiz,
-                label: 'Mais',
+                label: l10n.postMore,
                 onPressed: () => showPostActionsSheet(context, post: post),
               ),
             ],
@@ -23307,7 +27535,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                                               Icon(Icons.verified, size: 18, color: context.brand.verifiedBlue),
                                             ],
                                             const Spacer(),
-                                            Text(_relativeTime(post.createdAt), style: TextStyle(color: cs.outline)),
+                                            Text(_relativeTime(context, post.createdAt), style: TextStyle(color: cs.outline)),
                                           ],
                                         ),
                                         const SizedBox(height: 2),
@@ -23380,7 +27608,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                                 prayAction(),
                                 actionWithCount(
                                   icon: post.viewerHasLiked ? Icons.favorite : Icons.favorite_border,
-                                  label: 'Curtir',
+                                  label: l10n.postLike,
                                   onTap: () {
                                     if (!isAuthenticated) return showCtaSnackBar(context);
                                     repo.toggleLike(post.id, isAuthenticated: true);
@@ -23390,7 +27618,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                                 ),
                                 actionWithCount(
                                   icon: Icons.chat_bubble_outline,
-                                  label: 'Comentar',
+                                  label: l10n.postComment,
                                   onTap: () {
                                     Navigator.of(context).pushNamed(
                                       Routes.postComments,
@@ -23401,7 +27629,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                                 ),
                                 actionWithCount(
                                   icon: Icons.send_rounded,
-                                  label: 'Compartilhar',
+                                  label: l10n.postShare,
                                   onTap: () async {
                                     await showShareSheet(context, post: post, isAuthenticated: isAuthenticated);
                                   },
@@ -23476,9 +27704,9 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
 
   String get _title {
     return switch (_mode) {
-      _CreateMode.post => 'Novo post',
-      _CreateMode.story => 'Novo story',
-      _CreateMode.video => 'Novo vídeo',
+      _CreateMode.post => t(context).createFlowTitleNewPost,
+      _CreateMode.story => t(context).createFlowTitleNewStory,
+      _CreateMode.video => t(context).createFlowTitleNewVideo,
     };
   }
 
@@ -23644,7 +27872,7 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
     final media = await _pickComposerMediaDraftAny(context);
     if (!context.mounted || media == null) return;
     if (media.kind != ComposerMediaKind.video) {
-      showInfoSnackBar(context, 'Selecione um vídeo');
+      showInfoSnackBar(context, t(context).createFlowSelectVideoSnack);
       return;
     }
     Navigator.of(context).push(
@@ -23656,7 +27884,7 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
 
   Future<void> _createMediaStory({required DemoRepository repo, required AuthSession session}) async {
     if (repo.isOffline) {
-      showErrorSnackBar(context, message: 'Sem conexão', onRetry: () {});
+      showErrorSnackBar(context, message: t(context).commonNoConnection, onRetry: () {});
       return;
     }
     final isMobile = !kIsWeb && (defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS);
@@ -23676,14 +27904,14 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
     }
     final mediaBytes = bytes;
     if (mediaBytes == null || mediaBytes.isEmpty) {
-      showInfoSnackBar(context, 'Arquivo vazio');
+      showInfoSnackBar(context, t(context).createFlowEmptyFileSnack);
       return;
     }
 
     final e = (ext ?? '').trim().toLowerCase();
     final isImage = e == 'jpg' || e == 'jpeg' || e == 'png' || e == 'webp';
     if (!isImage && e.isNotEmpty) {
-      showInfoSnackBar(context, 'Story precisa ser foto');
+      showInfoSnackBar(context, t(context).createFlowStoryMustBePhotoSnack);
       return;
     }
     final normalizedExt = e.isEmpty ? 'jpg' : e;
@@ -23696,6 +27924,7 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
       builder: (ctx) {
         return StatefulBuilder(
           builder: (ctx, setLocalState) {
+            final l10n = t(ctx);
             return SafeArea(
               child: Padding(
                 padding: EdgeInsets.only(
@@ -23708,7 +27937,7 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Text('Story', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                    Text(l10n.storiesShareSheetTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
                     const SizedBox(height: 10),
                     ClipRRect(
                       borderRadius: BorderRadius.circular(16),
@@ -23722,31 +27951,31 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
                     TextField(
                       controller: caption,
                       maxLines: 2,
-                      decoration: const InputDecoration(
-                        hintText: 'Legenda (opcional)…',
-                        border: OutlineInputBorder(),
+                      decoration: InputDecoration(
+                        hintText: l10n.storiesCaptionHintOptional,
+                        border: const OutlineInputBorder(),
                       ),
                     ),
                     const SizedBox(height: 12),
-                    const Text('Compartilhar em', style: TextStyle(fontWeight: FontWeight.w900)),
+                    Text(l10n.storiesShareIn, style: const TextStyle(fontWeight: FontWeight.w900)),
                     const SizedBox(height: 6),
                     RadioGroup<String>(
                       groupValue: shareTarget,
                       onChanged: (v) {
                         setLocalState(() => shareTarget = v ?? shareTarget);
                       },
-                      child: const Column(
+                      child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           RadioListTile<String>(
                             value: 'social',
-                            title: Text('Meu story'),
+                            title: Text(l10n.storiesShareTargetMyStory),
                             contentPadding: EdgeInsets.zero,
                             dense: true,
                           ),
                           RadioListTile<String>(
                             value: 'regional',
-                            title: Text('Região atual'),
+                            title: Text(l10n.storiesShareTargetCurrentRegion),
                             contentPadding: EdgeInsets.zero,
                             dense: true,
                           ),
@@ -23756,7 +27985,7 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
                     const SizedBox(height: 10),
                     FilledButton(
                       onPressed: () => Navigator.of(ctx).pop(true),
-                      child: const Text('Publicar'),
+                      child: Text(l10n.storiesPublish),
                     ),
                   ],
                 ),
@@ -23796,12 +28025,12 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
     if (story == null) {
       showErrorSnackBar(
         context,
-        message: repo.lastStoryCreateError ?? 'Algo deu errado',
+        message: repo.lastStoryCreateError ?? t(context).commonSomethingWentWrong,
         onRetry: () {},
       );
       return;
     }
-    showInfoSnackBar(context, 'Story publicado');
+    showInfoSnackBar(context, t(context).storiesPublished);
     if (shareTarget == 'regional' && (story.cityId == null || story.cityId!.trim().isEmpty)) {
       unawaited(_tryAttachCityToStoryFromFeedInBackground(repo: repo, session: session, storyId: story.id));
     }
@@ -23825,9 +28054,9 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           child: Text(
             switch (mode) {
-              _CreateMode.post => 'POST',
-              _CreateMode.story => 'STORY',
-              _CreateMode.video => 'VÍDEO',
+              _CreateMode.post => t(context).createFlowModePost,
+              _CreateMode.story => t(context).createFlowModeStory,
+              _CreateMode.video => t(context).createFlowModeVideo,
             },
             style: TextStyle(
               fontWeight: selected ? FontWeight.w900 : FontWeight.w700,
@@ -23867,11 +28096,11 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
       builder: (context, value, _) {
         if (!value.isAuthenticated) {
           return Scaffold(
-            appBar: AppBar(title: const Text('Criar')),
+            appBar: AppBar(title: Text(t(context).mainLeadingCreate)),
             body: Center(
               child: PrimaryButton(
-                label: 'Entrar para postar',
-                onPressed: () => showLoginSnackBar(context, message: 'Entre para postar'),
+                label: t(context).createFlowSignInToPost,
+                onPressed: () => showLoginSnackBar(context, message: t(context).createFlowSignInToPost),
               ),
             ),
           );
@@ -23880,7 +28109,7 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
         final auth = value is AuthSession ? value : null;
         if (auth == null) {
           return Scaffold(
-            appBar: AppBar(title: const Text('Criar')),
+            appBar: AppBar(title: Text(t(context).mainLeadingCreate)),
             body: const SizedBox.shrink(),
           );
         }
@@ -23891,7 +28120,7 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
             title: Text(_title),
             leading: AtalaiaIconButton(
               icon: Icons.close,
-              label: 'Fechar',
+              label: t(context).commonClose,
               onPressed: () => Navigator.of(context).pop(),
             ),
           ),
@@ -23905,20 +28134,23 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
                     _CreateMode.post => Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          Text('Post', style: TextStyle(color: cs.onSurface, fontWeight: FontWeight.w900, fontSize: 16)),
+                          Text(
+                            t(context).createFlowSectionPost,
+                            style: TextStyle(color: cs.onSurface, fontWeight: FontWeight.w900, fontSize: 16),
+                          ),
                           const SizedBox(height: 10),
                           PrimaryButton(
-                            label: 'Escrever agora',
+                            label: t(context).createFlowWriteNow,
                             onPressed: _openPostText,
                           ),
                           const SizedBox(height: 10),
                           SecondaryButton(
-                            label: 'Adicionar mídia',
+                            label: t(context).createFlowAddMedia,
                             onPressed: () => unawaited(_openPostMediaAny()),
                           ),
                           const SizedBox(height: 14),
                           Text(
-                            'Você pode publicar só texto ou anexar mídia sem perder o contexto da região/comunidade.',
+                            t(context).createFlowPostHelp,
                             style: TextStyle(color: cs.outline),
                           ),
                         ],
@@ -23935,15 +28167,18 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
                           return Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
-                              Text('Story (24h)', style: TextStyle(color: cs.onSurface, fontWeight: FontWeight.w900, fontSize: 16)),
+                              Text(
+                                t(context).createFlowSectionStory24h,
+                                style: TextStyle(color: cs.onSurface, fontWeight: FontWeight.w900, fontSize: 16),
+                              ),
                               const SizedBox(height: 10),
                               PrimaryButton(
-                                label: 'Abrir galeria',
+                                label: t(context).createFlowOpenGallery,
                                 onPressed: () => unawaited(_createMediaStory(repo: repo, session: auth)),
                               ),
                               const SizedBox(height: 14),
                               Text(
-                                'Stories expiram em 24 horas. Texto é opcional na legenda.',
+                                t(context).createFlowStoryHelp,
                                 style: TextStyle(color: cs.outline),
                               ),
                             ],
@@ -23953,15 +28188,18 @@ class _CreatePostFlowScreenState extends State<CreatePostFlowScreen> {
                     _CreateMode.video => Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          Text('Vídeo', style: TextStyle(color: cs.onSurface, fontWeight: FontWeight.w900, fontSize: 16)),
+                          Text(
+                            t(context).createFlowSectionVideo,
+                            style: TextStyle(color: cs.onSurface, fontWeight: FontWeight.w900, fontSize: 16),
+                          ),
                           const SizedBox(height: 10),
                           PrimaryButton(
-                            label: 'Selecionar vídeo',
+                            label: t(context).createFlowSelectVideo,
                             onPressed: () => unawaited(_openPostVideoAny()),
                           ),
                           const SizedBox(height: 14),
                           Text(
-                            'Você escolhe capa e duração antes de publicar.',
+                            t(context).createFlowVideoHelp,
                             style: TextStyle(color: cs.outline),
                           ),
                         ],
@@ -23992,10 +28230,10 @@ class ShofarIconPreviewScreen extends StatelessWidget {
       appBar: AppBar(
         leading: AtalaiaIconButton(
           icon: Icons.arrow_back,
-          label: 'Voltar',
+          label: t(context).commonBack,
           onPressed: () => Navigator.of(context).maybePop(),
         ),
-        title: const Text('Ícone Shofar'),
+        title: Text(t(context).shofarIconTitle),
       ),
       body: ColoredBox(
         color: cs.surfaceContainerHighest,
@@ -24145,6 +28383,7 @@ final class ComposerDraft {
 }
 
 Future<ComposerMediaDraft?> _pickComposerMediaDraft(BuildContext context, {required ComposerMediaKind kind}) async {
+  final l10n = t(context);
   final picked = await FilePicker.platform.pickFiles(
     type: kind == ComposerMediaKind.photo ? FileType.image : FileType.video,
     allowMultiple: false,
@@ -24160,13 +28399,13 @@ Future<ComposerMediaDraft?> _pickComposerMediaDraft(BuildContext context, {requi
   if (byteLength > maxSize) {
     showInfoSnackBar(
       context,
-      kind == ComposerMediaKind.photo ? 'Imagem muito grande (máx. 5MB)' : 'Vídeo muito grande (máx. 30MB)',
+      kind == ComposerMediaKind.photo ? l10n.composerImageTooLargeMax5mb : l10n.composerVideoTooLargeMax30mb,
     );
     return null;
   }
   final ext = (file.extension ?? '').trim().toLowerCase();
   if (ext.isEmpty) {
-    showInfoSnackBar(context, 'Arquivo sem extensão suportada');
+    showInfoSnackBar(context, l10n.composerFileExtensionUnsupported);
     return null;
   }
   final contentType = switch (kind) {
@@ -24188,8 +28427,8 @@ Future<ComposerMediaDraft?> _pickComposerMediaDraft(BuildContext context, {requi
     showInfoSnackBar(
       context,
       kind == ComposerMediaKind.photo
-          ? 'Formato de imagem não suportado. Use JPG, PNG ou WEBP.'
-          : 'Formato de vídeo não suportado. Use MP4, MOV, WEBM ou M4V.',
+          ? l10n.composerUnsupportedImageFormat
+          : l10n.composerUnsupportedVideoFormat,
     );
     return null;
   }
@@ -24435,10 +28674,10 @@ class _MediaEditScreenState extends State<MediaEditScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Editar mídia'),
+        title: Text(t(context).mediaEditTitle),
         actions: [
           AtalaiaTextButton(
-            label: 'Avançar',
+            label: t(context).mediaEditNext,
             onPressed: () {
               final base = widget.baseDraft ?? const ComposerDraft();
               final route = MaterialPageRoute<void>(
@@ -24517,7 +28756,7 @@ class _MediaEditScreenState extends State<MediaEditScreen> {
             ),
           const SizedBox(height: 14),
           if (isPhoto) ...[
-            const Text('Corte', style: TextStyle(fontWeight: FontWeight.w900)),
+            Text(t(context).mediaEditCropSection, style: const TextStyle(fontWeight: FontWeight.w900)),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
@@ -24538,7 +28777,7 @@ class _MediaEditScreenState extends State<MediaEditScreen> {
                   }),
                 ),
                 ActionChip(
-                  label: const Text('Rotacionar'),
+                  label: Text(t(context).mediaEditRotateAction),
                   avatar: const Icon(Icons.rotate_right, size: 18),
                   onPressed: () => setState(() {
                     _draft = _draft.copyWith(photoQuarterTurns: (_draft.photoQuarterTurns + 1) % 4);
@@ -24547,7 +28786,7 @@ class _MediaEditScreenState extends State<MediaEditScreen> {
               ],
             ),
           ] else ...[
-            const Text('Capa', style: TextStyle(fontWeight: FontWeight.w900)),
+            Text(t(context).mediaEditCoverSection, style: const TextStyle(fontWeight: FontWeight.w900)),
             const SizedBox(height: 8),
             Slider(
               value: _draft.videoCover,
@@ -24556,7 +28795,7 @@ class _MediaEditScreenState extends State<MediaEditScreen> {
               onChanged: (v) => setState(() => _draft = _draft.copyWith(videoCover: v)),
             ),
             const SizedBox(height: 10),
-            const Text('Corte', style: TextStyle(fontWeight: FontWeight.w900)),
+            Text(t(context).mediaEditCropSection, style: const TextStyle(fontWeight: FontWeight.w900)),
             const SizedBox(height: 8),
             RangeSlider(
               values: _draft.videoTrim,
@@ -24635,25 +28874,27 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const ListTile(title: Text('Adicionar local', style: TextStyle(fontWeight: FontWeight.w900))),
               ListTile(
-                leading: const Icon(Icons.place_outlined),
-                title: const Text('Goiânia, GO'),
-                onTap: () => Navigator.of(ctx).pop('Goiânia, GO'),
+                title: Text(t(context).composerAddLocation, style: const TextStyle(fontWeight: FontWeight.w900)),
               ),
               ListTile(
                 leading: const Icon(Icons.place_outlined),
-                title: const Text('São Paulo, SP'),
-                onTap: () => Navigator.of(ctx).pop('São Paulo, SP'),
+                title: Text(t(context).composerLocationGoiania),
+                onTap: () => Navigator.of(ctx).pop(t(context).composerLocationGoiania),
               ),
               ListTile(
                 leading: const Icon(Icons.place_outlined),
-                title: const Text('Brasil'),
-                onTap: () => Navigator.of(ctx).pop('Brasil'),
+                title: Text(t(context).composerLocationSaoPaulo),
+                onTap: () => Navigator.of(ctx).pop(t(context).composerLocationSaoPaulo),
+              ),
+              ListTile(
+                leading: const Icon(Icons.place_outlined),
+                title: Text(t(context).composerLocationBrazil),
+                onTap: () => Navigator.of(ctx).pop(t(context).composerLocationBrazil),
               ),
               ListTile(
                 leading: const Icon(Icons.clear),
-                title: const Text('Remover local'),
+                title: Text(t(context).composerRemoveLocation),
                 onTap: () => Navigator.of(ctx).pop(''),
               ),
               const SizedBox(height: 8),
@@ -24678,15 +28919,17 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const ListTile(title: Text('Mídia', style: TextStyle(fontWeight: FontWeight.w900))),
+              ListTile(
+                title: Text(t(context).composerMediaSheetTitle, style: const TextStyle(fontWeight: FontWeight.w900)),
+              ),
               ListTile(
                 leading: const Icon(Icons.photo_outlined),
-                title: const Text('Foto'),
+                title: Text(t(context).composerPhoto),
                 onTap: () => Navigator.of(ctx).pop(ComposerMediaKind.photo),
               ),
               ListTile(
                 leading: const Icon(Icons.videocam_outlined),
-                title: const Text('Vídeo'),
+                title: Text(t(context).composerVideo),
                 onTap: () => Navigator.of(ctx).pop(ComposerMediaKind.video),
               ),
               const SizedBox(height: 8),
@@ -24721,11 +28964,12 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
   }
 
   String? _regionFromLocation(String? location) {
+    final l10n = t(context);
     return switch (location) {
       null => null,
-      'Brasil' => 'world/sa/br',
-      'Goiânia, GO' => 'world/sa/br/go/goiania',
-      'São Paulo, SP' => 'world/sa/br/sp/sao-paulo',
+      _ when location == l10n.composerLocationBrazil => 'world/sa/br',
+      _ when location == l10n.composerLocationGoiania => 'world/sa/br/go/goiania',
+      _ when location == l10n.composerLocationSaoPaulo => 'world/sa/br/sp/sao-paulo',
       _ => 'world',
     };
   }
@@ -24754,7 +28998,7 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
         final mediaBytes = await _readComposerFileBytes(media.file);
         if (!mounted) return;
         if (mediaBytes == null || mediaBytes.isEmpty) {
-          showInfoSnackBar(context, 'Não foi possível ler a mídia selecionada');
+          showInfoSnackBar(context, t(context).mediaSelectedReadFailed);
           return;
         }
         setState(() {
@@ -24777,7 +29021,7 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
             _progress = 0;
           });
           final code = e.statusCode == null ? '' : ' (${e.statusCode})';
-          showAtalaiaSnackBar(context, 'Falha no upload$code: ${e.message}', kind: AtalaiaSnackKind.error);
+          showAtalaiaSnackBar(context, t(context).uploadFailedWithCode(code, e.message), kind: AtalaiaSnackKind.error);
           return;
         } catch (_) {
           if (!mounted) return;
@@ -24794,7 +29038,7 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
             _uploading = false;
             _progress = 0;
           });
-          showInfoSnackBar(context, 'Não foi possível enviar a mídia');
+          showInfoSnackBar(context, t(context).mediaSendFailed);
           return;
         }
         setState(() => _progress = 1);
@@ -24824,12 +29068,12 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
         final msg = (repo.lastPostUpdateError ?? '').trim();
         showAtalaiaSnackBar(
           context,
-          msg.isEmpty ? 'Falha ao salvar. Verifique a conexão do Supabase.' : 'Falha ao salvar: $msg',
+          msg.isEmpty ? t(context).postSaveFailedCheckSupabase : t(context).postSaveFailedWithMessage(msg),
           kind: AtalaiaSnackKind.error,
         );
         return;
       }
-      showAtalaiaSnackBar(context, 'Salvo', kind: AtalaiaSnackKind.success);
+      showAtalaiaSnackBar(context, t(context).commonSaved, kind: AtalaiaSnackKind.success);
       Navigator.of(context).maybePop();
       return;
     }
@@ -24840,7 +29084,7 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
       final mediaBytes = await _readComposerFileBytes(media.file);
       if (!mounted) return;
       if (mediaBytes == null || mediaBytes.isEmpty) {
-        showInfoSnackBar(context, 'Não foi possível ler a mídia selecionada');
+        showInfoSnackBar(context, t(context).mediaSelectedReadFailed);
         return;
       }
       setState(() {
@@ -24862,7 +29106,7 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
           _progress = 0;
         });
         final code = e.statusCode == null ? '' : ' (${e.statusCode})';
-        showAtalaiaSnackBar(context, 'Falha no upload$code: ${e.message}', kind: AtalaiaSnackKind.error);
+        showAtalaiaSnackBar(context, t(context).uploadFailedWithCode(code, e.message), kind: AtalaiaSnackKind.error);
         return;
       } catch (_) {
         if (!mounted) return;
@@ -24879,7 +29123,7 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
           _uploading = false;
           _progress = 0;
         });
-        showInfoSnackBar(context, 'Não foi possível enviar a mídia');
+        showInfoSnackBar(context, t(context).mediaSendFailed);
         return;
       }
       setState(() => _progress = 1);
@@ -24913,12 +29157,12 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
       final msg = (repo.lastPostCreateError ?? '').trim();
       showAtalaiaSnackBar(
         context,
-        msg.isEmpty ? 'Falha ao publicar. Verifique a conexão do Supabase.' : 'Falha ao publicar: $msg',
+        msg.isEmpty ? t(context).postPublishFailedCheckSupabase : t(context).postPublishFailedWithMessage(msg),
         kind: AtalaiaSnackKind.error,
       );
       return;
     }
-    showAtalaiaSnackBar(context, 'Publicado', kind: AtalaiaSnackKind.success);
+    showAtalaiaSnackBar(context, t(context).commonPublished, kind: AtalaiaSnackKind.success);
     Navigator.of(context).popUntil((r) => r.isFirst);
   }
 
@@ -25005,20 +29249,20 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
           appBar: AppBar(
             title: Text(
               isEditing
-                  ? 'Editar post'
+                  ? t(context).composerEditPostTitle
                   : switch (_kind) {
-                      PostKind.request => 'Novo pedido',
-                      PostKind.testimony => 'Novo testemunho',
+                      PostKind.request => t(context).composerNewRequestTitle,
+                      PostKind.testimony => t(context).composerNewTestimonyTitle,
                     },
             ),
             actions: [
               AtalaiaIconButton(
                 icon: Icons.photo_library_outlined,
-                label: 'Mídia',
+                label: t(context).composerMediaAction,
                 onPressed: _uploading ? null : _changeMedia,
               ),
               AtalaiaTextButton(
-                label: isEditing ? 'Salvar' : 'Publicar',
+                label: isEditing ? t(context).commonSave : t(context).commonPublish,
                 onPressed: _isValid && !_uploading ? () => _publish(isAuthenticated: s.isAuthenticated) : null,
               ),
             ],
@@ -25039,12 +29283,12 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
                 runSpacing: 8,
                 children: [
                   ChoiceChip(
-                    label: const Text('Pedido'),
+                    label: Text(t(context).communityRequest),
                     selected: _kind == PostKind.request,
                     onSelected: isEditing || _uploading ? null : (_) => setState(() => _kind = PostKind.request),
                   ),
                   ChoiceChip(
-                    label: const Text('Testemunho'),
+                    label: Text(t(context).prayerSessionRecordTypeTestimony),
                     selected: _kind == PostKind.testimony,
                     onSelected: isEditing || _uploading ? null : (_) => setState(() => _kind = PostKind.testimony),
                   ),
@@ -25059,14 +29303,14 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
                 textInputAction: TextInputAction.newline,
                 onChanged: (_) => setState(() {}),
                 hintText: switch (_kind) {
-                  PostKind.request => 'Escreva seu pedido de oração…',
-                  PostKind.testimony => 'Compartilhe seu testemunho…',
+                  PostKind.request => t(context).composerRequestHint,
+                  PostKind.testimony => t(context).composerTestimonyHint,
                 },
               ),
               const SizedBox(height: 12),
               AtalaiaTextField(
                 controller: _tagInput,
-                hintText: 'Adicionar tag (ex.: cura)',
+                hintText: t(context).composerAddTagHint,
                 prefixText: '#',
                 textInputAction: TextInputAction.done,
                 onSubmitted: (v) {
@@ -25092,14 +29336,14 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
               const SizedBox(height: 12),
               DropdownButtonFormField<PostVisibility>(
                 initialValue: _visibility,
-                decoration: const InputDecoration(
-                  labelText: 'Visibilidade',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  labelText: t(context).composerVisibilityField,
+                  border: const OutlineInputBorder(),
                 ),
-                items: const [
-                  DropdownMenuItem(value: PostVisibility.public, child: Text('Público')),
-                  DropdownMenuItem(value: PostVisibility.followers, child: Text('Seguidores')),
-                  DropdownMenuItem(value: PostVisibility.church, child: Text('Igreja')),
+                items: [
+                  DropdownMenuItem(value: PostVisibility.public, child: Text(t(context).composerVisibilityPublic)),
+                  DropdownMenuItem(value: PostVisibility.followers, child: Text(t(context).composerVisibilityFollowers)),
+                  DropdownMenuItem(value: PostVisibility.church, child: Text(t(context).composerVisibilityChurch)),
                 ],
                 onChanged: (v) => setState(() => _visibility = v ?? _visibility),
               ),
@@ -25107,7 +29351,7 @@ class _PostComposerScreenState extends State<PostComposerScreen> {
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.place_outlined),
-                title: Text(_location == null ? 'Adicionar local' : _location!),
+                title: Text(_location == null ? t(context).composerAddLocation : _location!),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: _pickLocation,
               ),
@@ -25138,8 +29382,8 @@ class AlertCard extends StatelessWidget {
     final repo = RepoScope.of(context);
     final cs = Theme.of(context).colorScheme;
     final urgencyColor = _alertUrgencyColor(alert.urgency);
-    final followLabel = alert.viewerIsFollowing ? 'Seguindo' : 'Seguir';
-    final identity = _identityForUserId(repo, alert.userId, legacyVerified: alert.isVerified);
+    final followLabel = alert.viewerIsFollowing ? t(context).alertFollowing : t(context).alertFollow;
+    final identity = _identityForUserId(repo, alert.userId, legacyVerified: alert.isVerified, userFallback: t(context).commonUserFallback);
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -25184,7 +29428,7 @@ class AlertCard extends StatelessWidget {
                             ],
                             const Spacer(),
                             Text(
-                              _relativeTime(alert.createdAt),
+                              _relativeTime(context, alert.createdAt),
                               style: TextStyle(color: cs.outline, fontWeight: FontWeight.w600),
                             ),
                           ],
@@ -25208,12 +29452,12 @@ class AlertCard extends StatelessWidget {
                 children: [
                   Chip(
                     avatar: Icon(Icons.warning_amber_rounded, size: 18, color: urgencyColor),
-                    label: Text('Urgência: ${_alertUrgencyLabel(alert.urgency)}'),
+                    label: Text(t(context).alertUrgency(_alertUrgencyLabel(context, alert.urgency))),
                     visualDensity: VisualDensity.compact,
                   ),
                   Chip(
                     avatar: const Icon(Icons.category_outlined, size: 18),
-                    label: Text(_alertCategoryLabel(alert.category)),
+                    label: Text(_alertCategoryLabel(context, alert.category)),
                     visualDensity: VisualDensity.compact,
                   ),
                 ],
@@ -25239,7 +29483,7 @@ class AlertCard extends StatelessWidget {
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      '${alert.locationName} • expira em ${_formatTimestamp(alert.expiresAt.toLocal())}',
+                      '${alert.locationName} • ${t(context).alertExpiresAt(_formatTimestamp(alert.expiresAt.toLocal()))}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(color: cs.outline, fontWeight: FontWeight.w600),
@@ -25252,14 +29496,12 @@ class AlertCard extends StatelessWidget {
                 children: [
                   Expanded(
                     child: SecondaryButton(
-                      label: isAuthenticated ? followLabel : 'Entrar',
+                      label: isAuthenticated ? followLabel : t(context).commonSignIn,
                       onPressed: isAuthenticated ? onFollow : () => showCtaSnackBar(context),
                     ),
                   ),
                   const SizedBox(width: 10),
-                  Expanded(
-                    child: PrimaryButton(label: 'Abrir', onPressed: onOpen),
-                  ),
+                  Expanded(child: PrimaryButton(label: t(context).commonOpen, onPressed: onOpen)),
                 ],
               ),
             ],
@@ -25312,7 +29554,7 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
 
           if (_hydrateFuture != null) {
             return Scaffold(
-              appBar: AppBar(title: const Text('Alerta')),
+              appBar: AppBar(title: Text(t(context).alertDetailTitle)),
               body: FutureBuilder<bool>(
                 future: _hydrateFuture,
                 builder: (context, snapshot) {
@@ -25337,9 +29579,9 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Text('Este alerta não está disponível.'),
+                          Text(t(context).alertNotAvailable),
                           const SizedBox(height: 12),
-                          PrimaryButton(label: 'Voltar', onPressed: () => Navigator.of(context).maybePop()),
+                          PrimaryButton(label: t(context).commonBack, onPressed: () => Navigator.of(context).maybePop()),
                         ],
                       ),
                     ),
@@ -25358,16 +29600,16 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
           }
 
           return Scaffold(
-            appBar: AppBar(title: const Text('Alerta')),
+            appBar: AppBar(title: Text(t(context).alertDetailTitle)),
             body: Center(
               child: Padding(
                 padding: const EdgeInsets.all(20),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Text('Este alerta não está disponível.'),
+                    Text(t(context).alertNotAvailable),
                     const SizedBox(height: 12),
-                    PrimaryButton(label: 'Voltar', onPressed: () => Navigator.of(context).maybePop()),
+                    PrimaryButton(label: t(context).commonBack, onPressed: () => Navigator.of(context).maybePop()),
                   ],
                 ),
               ),
@@ -25377,7 +29619,7 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
 
         if (_loading) {
           return Scaffold(
-            appBar: AppBar(title: const Text('Alerta')),
+            appBar: AppBar(title: Text(t(context).alertDetailTitle)),
             body: ListView(
               physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 16),
@@ -25396,7 +29638,8 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
         final cs = Theme.of(context).colorScheme;
         final isAuthenticated = session.value.isAuthenticated;
         final urgencyColor = _alertUrgencyColor(alert.urgency);
-        final identity = _identityForUserId(repo, alert.userId, legacyVerified: alert.isVerified);
+        final l10n = t(context);
+        final identity = _identityForUserId(repo, alert.userId, legacyVerified: alert.isVerified, userFallback: l10n.commonUserFallback);
 
         Future<void> openAlertMenu() async {
           final choice = await showAtalaiaBottomSheet<String>(
@@ -25408,12 +29651,12 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
                   children: [
                     ListTile(
                       leading: const Icon(Icons.flag_outlined),
-                      title: const Text('Denunciar'),
+                      title: Text(l10n.postActionReport),
                       onTap: () => Navigator.pop(ctx, 'report'),
                     ),
                     ListTile(
                       leading: const Icon(Icons.link),
-                      title: const Text('Copiar link'),
+                      title: Text(l10n.postActionCopyLink),
                       onTap: () => Navigator.pop(ctx, 'copy'),
                     ),
                     const SizedBox(height: 8),
@@ -25442,10 +29685,10 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
                   reportedUserId: alert.userId,
                 );
                 if (!context.mounted) return;
-                showInfoSnackBar(context, 'Denúncia enviada');
+                showInfoSnackBar(context, l10n.postSnackReportSent);
               }
             case 'copy':
-              showInfoSnackBar(context, 'Link copiado');
+              showInfoSnackBar(context, l10n.commonLinkCopied);
             default:
               return;
           }
@@ -25453,21 +29696,24 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
 
         return Scaffold(
           appBar: AppBar(
-            title: const Text('Alerta'),
+            title: Text(t(context).alertDetailTitle),
             actions: [
               AtalaiaIconButton(
                 icon: alert.viewerIsFollowing ? Icons.volunteer_activism : Icons.volunteer_activism_outlined,
-                label: alert.viewerIsFollowing ? 'Seguindo' : 'Seguir',
+                label: alert.viewerIsFollowing ? t(context).alertFollowing : t(context).alertFollow,
                 onPressed: () {
                   if (!isAuthenticated) return showCtaSnackBar(context);
                   final willFollow = !alert.viewerIsFollowing;
                   repo.toggleFollowAlert(alert.id, isAuthenticated: true);
-                  showInfoSnackBar(context, willFollow ? 'Seguindo alerta' : 'Parou de seguir');
+                  showInfoSnackBar(
+                    context,
+                    willFollow ? t(context).alertFollowingStartedSnack : t(context).alertFollowingStoppedSnack,
+                  );
                 },
               ),
               AtalaiaIconButton(
                 icon: Icons.more_horiz,
-                label: 'Mais',
+                label: t(context).postMore,
                 onPressed: () => unawaited(openAlertMenu()),
               ),
             ],
@@ -25518,7 +29764,7 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
                                           ],
                                           const Spacer(),
                                           Text(
-                                            _relativeTime(alert.createdAt),
+                                            _relativeTime(context, alert.createdAt),
                                             style: TextStyle(color: cs.outline, fontWeight: FontWeight.w600),
                                           ),
                                         ],
@@ -25542,17 +29788,17 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
                               children: [
                                 Chip(
                                   avatar: Icon(Icons.warning_amber_rounded, size: 18, color: urgencyColor),
-                                  label: Text('Urgência: ${_alertUrgencyLabel(alert.urgency)}'),
+                                  label: Text(t(context).alertUrgency(_alertUrgencyLabel(context, alert.urgency))),
                                   visualDensity: VisualDensity.compact,
                                 ),
                                 Chip(
                                   avatar: const Icon(Icons.category_outlined, size: 18),
-                                  label: Text(_alertCategoryLabel(alert.category)),
+                                  label: Text(_alertCategoryLabel(context, alert.category)),
                                   visualDensity: VisualDensity.compact,
                                 ),
                                 Chip(
                                   avatar: const Icon(Icons.how_to_vote_outlined, size: 18),
-                                  label: Text('Confiança: ${alert.confidenceScore.toInt()}'),
+                                  label: Text(t(context).alertConfidenceLabel(alert.confidenceScore.toInt().toString())),
                                   visualDensity: VisualDensity.compact,
                                 ),
                               ],
@@ -25565,14 +29811,14 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    const Text('Voto da comunidade', style: TextStyle(fontWeight: FontWeight.w900)),
+                                    Text(t(context).alertCommunityVoteTitle, style: const TextStyle(fontWeight: FontWeight.w900)),
                                     const SizedBox(height: 8),
                                     Wrap(
                                       spacing: 8,
                                       runSpacing: 8,
                                       children: [
                                         ChoiceChip(
-                                          label: const Text('Confirmado'),
+                                          label: Text(t(context).alertVoteConfirmed),
                                           selected: _myVote == AlertVote.confirmado,
                                           onSelected: (_) {
                                             if (!isAuthenticated) return showCtaSnackBar(context);
@@ -25584,13 +29830,13 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
                                             );
                                             showAtalaiaSnackBar(
                                               context,
-                                              'Voto registrado',
+                                              t(context).alertVoteRegisteredSnack,
                                               kind: AtalaiaSnackKind.success,
                                             );
                                           },
                                         ),
                                         ChoiceChip(
-                                          label: const Text('Falso'),
+                                          label: Text(t(context).alertVoteFalse),
                                           selected: _myVote == AlertVote.falso,
                                           onSelected: (_) {
                                             if (!isAuthenticated) return showCtaSnackBar(context);
@@ -25602,13 +29848,13 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
                                             );
                                             showAtalaiaSnackBar(
                                               context,
-                                              'Voto registrado',
+                                              t(context).alertVoteRegisteredSnack,
                                               kind: AtalaiaSnackKind.success,
                                             );
                                           },
                                         ),
                                         ChoiceChip(
-                                          label: const Text('Resolvido'),
+                                          label: Text(t(context).alertVoteResolved),
                                           selected: _myVote == AlertVote.resolvido,
                                           onSelected: (_) {
                                             if (!isAuthenticated) return showCtaSnackBar(context);
@@ -25620,7 +29866,7 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
                                             );
                                             showAtalaiaSnackBar(
                                               context,
-                                              'Voto registrado',
+                                              t(context).alertVoteRegisteredSnack,
                                               kind: AtalaiaSnackKind.success,
                                             );
                                           },
@@ -25629,7 +29875,7 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
                                     ),
                                     const SizedBox(height: 6),
                                     Text(
-                                      'A confiança é calculada a partir dos votos (confirmado − falso).',
+                                      t(context).alertConfidenceHelp,
                                       style: TextStyle(color: cs.outline),
                                     ),
                                   ],
@@ -25660,7 +29906,7 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
                                 const SizedBox(width: 8),
                                 Expanded(
                                   child: Text(
-                                    'Expira: ${_formatTimestamp(alert.expiresAt.toLocal())}',
+                                    t(context).alertExpiresAt(_formatTimestamp(alert.expiresAt.toLocal())),
                                     style: TextStyle(color: cs.outline, fontWeight: FontWeight.w700),
                                   ),
                                 ),
@@ -25672,12 +29918,17 @@ class _AlertDetailScreenState extends State<AlertDetailScreen> {
                     ),
                     const SizedBox(height: 12),
                     PrimaryButton(
-                      label: isAuthenticated ? (alert.viewerIsFollowing ? 'Seguindo' : 'Seguir alerta') : 'Entrar para seguir',
+                      label: isAuthenticated
+                          ? (alert.viewerIsFollowing ? t(context).alertFollowing : t(context).alertFollowAction)
+                          : t(context).alertSignInToFollow,
                       onPressed: () {
                         if (!isAuthenticated) return showCtaSnackBar(context);
                         final willFollow = !alert.viewerIsFollowing;
                         repo.toggleFollowAlert(alert.id, isAuthenticated: true);
-                        showInfoSnackBar(context, willFollow ? 'Seguindo alerta' : 'Parou de seguir');
+                        showInfoSnackBar(
+                          context,
+                          willFollow ? t(context).alertFollowingStartedSnack : t(context).alertFollowingStoppedSnack,
+                        );
                       },
                     ),
                   ],
@@ -26016,11 +30267,11 @@ class _HomeStoriesStrip extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Text('Momentos', style: TextStyle(fontWeight: FontWeight.w900)),
+              Text(t(context).storiesTitleMoments, style: const TextStyle(fontWeight: FontWeight.w900)),
               const Spacer(),
               if (!session.isAuthenticated)
                 AtalaiaTextButton(
-                  label: 'Entrar',
+                  label: t(context).commonSignIn,
                   onPressed: () => Navigator.of(context).pushNamed(Routes.login),
                 ),
             ],
@@ -26032,7 +30283,7 @@ class _HomeStoriesStrip extends StatelessWidget {
               scrollDirection: Axis.horizontal,
               children: [
                 tile(
-                  label: 'Seu story',
+                  label: t(context).storiesYourStory,
                   isAdd: true,
                   avatarUrl: viewerId == null ? null : repo.profileForUserId(viewerId)?.avatarUrl,
                   borderColor: hasMyStories ? cs.primary : cs.outlineVariant,
@@ -26044,7 +30295,7 @@ class _HomeStoriesStrip extends StatelessWidget {
                       Navigator.of(context).push(
                         MaterialPageRoute(
                           builder: (_) => _StoryViewerScreen(
-                            cityName: 'Momentos',
+                            cityName: t(context).storiesTitleMoments,
                             stories: myStories!,
                           ),
                         ),
@@ -26063,20 +30314,27 @@ class _HomeStoriesStrip extends StatelessWidget {
                   tile(
                     label: () {
                       final p = repo.profileForUserId(userId);
-                      if (p == null) return 'Usuário';
-                      return _displayNameForProfile(p);
+                      if (p == null) return t(context).storiesUserFallback;
+                      return _displayNameForProfile(p, userFallback: t(context).storiesUserFallback);
                     }(),
                     avatarUrl: repo.profileForUserId(userId)?.avatarUrl,
                     borderColor: cs.primary,
                     showUnreadDot: true,
                     onTap: () {
-                      final stories = byUser[userId] ?? const <StoryModel>[];
-                      if (stories.isEmpty) return;
+                      final ordered = others;
+                      final nextStories = <StoryModel>[];
+                      for (final id in ordered) {
+                        final list = byUser[id];
+                        if (list != null && list.isNotEmpty) nextStories.addAll(list);
+                      }
+                      if (nextStories.isEmpty) return;
                       Navigator.of(context).push(
                         MaterialPageRoute(
                           builder: (_) => _StoryViewerScreen(
-                            cityName: 'Momentos',
-                            stories: stories,
+                            cityName: t(context).storiesTitleMoments,
+                            stories: nextStories,
+                            orderedUserIds: ordered,
+                            initialUserId: userId,
                           ),
                         ),
                       );
@@ -26087,7 +30345,7 @@ class _HomeStoriesStrip extends StatelessWidget {
                 if (others.isEmpty && !hasMyStories)
                   Padding(
                     padding: const EdgeInsets.only(left: 6, top: 20),
-                    child: Text('Nenhum story ainda', style: TextStyle(color: cs.outline)),
+                    child: Text(t(context).storiesNoStoriesYet, style: TextStyle(color: cs.outline)),
                   ),
               ],
             ),
@@ -26193,15 +30451,17 @@ class _HomeHighlightsRow extends StatelessWidget {
 
     final urgency = maxUrgency();
     final alertAccent = urgency == null ? cs.primary : _alertUrgencyColor(urgency);
-    final alertSubtitle = urgency == null ? '$alertsCount ativos • $locationLabel' : '${_alertUrgencyLabel(urgency)} • $alertsCount ativos';
+    final alertSubtitle = urgency == null
+        ? '${t(context).mapAlertsActiveCount(alertsCount.toString())} • $locationLabel'
+        : '${_alertUrgencyLabel(context, urgency)} • ${t(context).mapAlertsActiveCount(alertsCount.toString())}';
 
     final items = <Widget>[];
     if (campaigns.isNotEmpty) {
       items.add(
         card(
           icon: Icons.volunteer_activism_outlined,
-          title: 'Campanhas',
-          subtitle: '$campaignsCount ativas • $locationLabel',
+          title: t(context).mapCampaignsTitle,
+          subtitle: '${t(context).mapCampaignsActiveCount(campaignsCount.toString())} • $locationLabel',
           preview: campaigns.first.title,
           onTap: onOpenCampaigns,
         ),
@@ -26212,7 +30472,7 @@ class _HomeHighlightsRow extends StatelessWidget {
       items.add(
         card(
           icon: Icons.warning_amber_outlined,
-          title: 'Alertas',
+          title: t(context).mapAlertsTitle,
           subtitle: alertSubtitle,
           preview: alerts.first.title,
           accent: alertAccent,
@@ -26318,25 +30578,26 @@ class _MapScreenState extends State<MapScreen> {
     if (!mounted) return;
     final repo = RepoScope.of(context);
     final session = SessionScope.of(context).value;
+    final l10n = t(context);
     final communityId = _activeCommunityId;
     if (communityId == null) return;
     final c = repo.findCommunity(communityId);
     if (c == null) return;
     if (session is! AuthSession) {
-      showLoginSnackBar(context, message: 'Entre para abrir o chat');
+      showLoginSnackBar(context, message: l10n.chatSignInToChat);
       return;
     }
     if (c.viewerStatus != CommunityViewerStatus.approved) {
-      showInfoSnackBar(context, 'Apenas membros podem abrir o chat');
+      showInfoSnackBar(context, l10n.communityMembersOnlyChat);
       return;
     }
-    final t = repo.openOrCreateCommunityThread(c.id);
+    final thread = repo.openOrCreateCommunityThread(c.id, nameFallback: l10n.communityTitle, usernameFallback: 'group');
     Navigator.of(context).pushNamed(
       Routes.chat,
       arguments: ChatArgs(
-        threadId: t.id,
+        threadId: thread.id,
         peerName: c.name,
-        peerUsername: 'grupo',
+        peerUsername: 'group',
         peerIsVerified: false,
         communityId: c.id,
       ),
@@ -26575,23 +30836,23 @@ class _MapScreenState extends State<MapScreen> {
 
     final items = <Widget>[];
     if (momentsCount > 0) {
-      items.add(pill(icon: Icons.auto_awesome_outlined, label: '$momentsCount momentos'));
+      items.add(pill(icon: Icons.auto_awesome_outlined, label: t(context).mapMomentsCount(momentsCount.toString())));
     }
     if (postsCount > 0) {
-      items.add(pill(icon: Icons.volunteer_activism_outlined, label: '$postsCount pedidos'));
+      items.add(pill(icon: Icons.volunteer_activism_outlined, label: t(context).mapRequestsCount(postsCount.toString())));
     }
     if (alertsCount > 0) {
       items.add(
         pill(
           icon: Icons.warning_amber_outlined,
-          label: '$alertsCount alertas',
+          label: t(context).mapAlertsCount(alertsCount.toString()),
           fg: cs.onErrorContainer,
           bg: cs.errorContainer,
         ),
       );
     }
     if (newsCount > 0) {
-      items.add(pill(icon: Icons.bolt_outlined, label: '$newsCount novidades'));
+      items.add(pill(icon: Icons.bolt_outlined, label: t(context).mapNewsCount(newsCount.toString())));
     }
 
     return Material(
@@ -26604,7 +30865,7 @@ class _MapScreenState extends State<MapScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Atalaia ativa', style: TextStyle(fontWeight: FontWeight.w900)),
+            Text(t(context).mapActiveTitle, style: const TextStyle(fontWeight: FontWeight.w900)),
             const SizedBox(height: 8),
             Wrap(spacing: 8, runSpacing: 8, children: items),
           ],
@@ -26851,7 +31112,7 @@ class _MapScreenState extends State<MapScreen> {
 
     final uri = Uri.tryParse(pin.targetUrl);
     if (uri == null) {
-      showInfoSnackBar(context, 'Link inválido');
+      showInfoSnackBar(context, t(context).commonInvalidLink);
       return;
     }
     final ok = await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
@@ -26859,7 +31120,7 @@ class _MapScreenState extends State<MapScreen> {
     if (!ok) {
       await Clipboard.setData(ClipboardData(text: uri.toString()));
       if (!context.mounted) return;
-      showInfoSnackBar(context, 'Link copiado');
+      showInfoSnackBar(context, t(context).commonLinkCopied);
     }
   }
 
@@ -27295,7 +31556,7 @@ class _MapScreenState extends State<MapScreen> {
     if (repo.isOffline) {
       showErrorSnackBar(
         context,
-        message: 'Sem conexão',
+        message: t(context).commonNoConnection,
         onRetry: () => unawaited(_handleCreateStory(context, repo: repo, session: session)),
       );
       return;
@@ -27357,6 +31618,7 @@ class _MapScreenState extends State<MapScreen> {
               Navigator.of(ctx).pop(story);
             }
 
+            final l10n = t(ctx);
             final cName = (activeCommunityName ?? '').trim();
             return SafeArea(
               child: Padding(
@@ -27370,7 +31632,7 @@ class _MapScreenState extends State<MapScreen> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Text('Story', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                    Text(l10n.storiesShareSheetTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
                     const SizedBox(height: 12),
                     ClipRRect(
                       borderRadius: BorderRadius.circular(16),
@@ -27384,13 +31646,13 @@ class _MapScreenState extends State<MapScreen> {
                     TextField(
                       controller: caption,
                       maxLines: 2,
-                      decoration: const InputDecoration(
-                        hintText: 'Legenda (opcional)…',
-                        border: OutlineInputBorder(),
+                      decoration: InputDecoration(
+                        hintText: l10n.storiesCaptionHintOptional,
+                        border: const OutlineInputBorder(),
                       ),
                     ),
                     const SizedBox(height: 12),
-                    const Text('Compartilhar em', style: TextStyle(fontWeight: FontWeight.w900)),
+                    Text(l10n.storiesShareIn, style: const TextStyle(fontWeight: FontWeight.w900)),
                     const SizedBox(height: 6),
                     RadioGroup<String>(
                       groupValue: shareTarget,
@@ -27401,22 +31663,22 @@ class _MapScreenState extends State<MapScreen> {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const RadioListTile<String>(
+                          RadioListTile<String>(
                             value: 'social',
-                            title: Text('Meu story'),
+                            title: Text(l10n.storiesShareTargetMyStory),
                             contentPadding: EdgeInsets.zero,
                             dense: true,
                           ),
                           if (activeCommunityId != null)
                             RadioListTile<String>(
                               value: 'community',
-                              title: Text(cName.isEmpty ? 'Comunidade' : cName),
+                              title: Text(cName.isEmpty ? l10n.mainTitleCommunity : cName),
                               contentPadding: EdgeInsets.zero,
                               dense: true,
                             ),
-                          const RadioListTile<String>(
+                          RadioListTile<String>(
                             value: 'regional',
-                            title: Text('Região do mapa'),
+                            title: Text(l10n.storiesShareTargetCurrentRegion),
                             contentPadding: EdgeInsets.zero,
                             dense: true,
                           ),
@@ -27426,7 +31688,7 @@ class _MapScreenState extends State<MapScreen> {
                     const SizedBox(height: 10),
                     FilledButton(
                       onPressed: busy ? null : () => unawaited(publish()),
-                      child: Text(busy ? 'Publicando…' : 'Publicar'),
+                      child: Text(busy ? l10n.storiesPublishing : l10n.storiesPublish),
                     ),
                   ],
                 ),
@@ -27444,7 +31706,7 @@ class _MapScreenState extends State<MapScreen> {
       if (story == null) {
         showErrorSnackBar(
           context,
-          message: repo.lastStoryCreateError ?? 'Algo deu errado',
+          message: repo.lastStoryCreateError ?? t(context).commonSomethingWentWrong,
           onRetry: () => unawaited(_handleCreateStory(context, repo: repo, session: session)),
         );
         return;
@@ -27460,20 +31722,23 @@ class _MapScreenState extends State<MapScreen> {
             name = fetched.trim();
             setState(() => _locationNameById[cityId] = name);
           } else {
-            name = 'Cidade';
+            name = t(context).storiesPlaceFallbackCity;
           }
         }
         setState(() => _cityIdsWithStories = {..._cityIdsWithStories, cityId});
         _storyPresenceKey = null;
-        showInfoSnackBar(context, c.isEmpty ? 'Story publicado em $name' : 'Story publicado • $c • $name');
+        showInfoSnackBar(
+          context,
+          c.isEmpty ? t(context).storiesPublishedInPlace(name) : t(context).storiesPublishedWithCommunityAndPlace(c, name),
+        );
         return;
       }
       _storyPresenceKey = null;
       if (share == 'community') {
-        showInfoSnackBar(context, c.isEmpty ? 'Story publicado' : 'Story publicado • $c');
+        showInfoSnackBar(context, c.isEmpty ? t(context).storiesPublished : t(context).storiesPublishedWithCommunity(c));
         return;
       }
-      showInfoSnackBar(context, 'Story publicado');
+      showInfoSnackBar(context, t(context).storiesPublished);
       if (share == 'regional') {
         unawaited(_tryAttachCityToStoryInBackground(repo: repo, session: authSession, storyId: story.id, communityId: activeCommunityId));
       }
@@ -28498,12 +32763,12 @@ class _CommunitiesSheetState extends State<_CommunitiesSheet> {
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
               child: Row(
                 children: [
-                  const Expanded(
-                    child: Text('Comunidades', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+                  Expanded(
+                    child: Text(t(context).mainActionCommunities, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
                   ),
                   if (widget.onCreateCommunity != null)
                     AtalaiaTextButton(
-                      label: 'Criar',
+                      label: t(context).commonCreate,
                       onPressed: () => unawaited(widget.onCreateCommunity!.call()),
                     ),
                 ],
@@ -28513,7 +32778,7 @@ class _CommunitiesSheetState extends State<_CommunitiesSheet> {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: SearchField(
                 controller: widget.search,
-                hintText: 'Buscar comunidades',
+                hintText: t(context).communitiesSearchHint,
                 onChanged: (_) {},
               ),
             ),
@@ -28530,7 +32795,7 @@ class _CommunitiesSheetState extends State<_CommunitiesSheet> {
                           SizedBox(height: MediaQuery.sizeOf(context).height * 0.10),
                           EmptyState(
                             icon: Icons.groups_outlined,
-                            title: widget.search.text.trim().isEmpty ? 'Nenhuma comunidade ainda.' : 'Nenhum resultado\nTente outro termo.',
+                            title: widget.search.text.trim().isEmpty ? t(context).communitiesEmpty : t(context).communitiesEmptySearch,
                           ),
                         ],
                       )
@@ -28544,8 +32809,8 @@ class _CommunitiesSheetState extends State<_CommunitiesSheet> {
                             final isActive = widget.activeCommunityId == null;
                             return ListTile(
                               leading: const Icon(Icons.public),
-                              title: const Text('Sem filtro (Global)', style: TextStyle(fontWeight: FontWeight.w800)),
-                              subtitle: Text('Mostra pedidos públicos', style: TextStyle(color: cs.outline)),
+                              title: Text(t(context).communitiesGlobalFilterTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
+                              subtitle: Text(t(context).communitiesGlobalFilterSubtitle, style: TextStyle(color: cs.outline)),
                               trailing: isActive ? const Icon(Icons.check) : null,
                               onTap: () => widget.onSelectFilter(null),
                             );
@@ -28553,9 +32818,9 @@ class _CommunitiesSheetState extends State<_CommunitiesSheet> {
 
                           final c = list[index - 1];
                           final statusLabel = switch (c.viewerStatus) {
-                            CommunityViewerStatus.none => c.isClosed ? 'Fechada' : 'Aberta',
-                            CommunityViewerStatus.pending => 'Pendente',
-                            CommunityViewerStatus.approved => 'Membro',
+                            CommunityViewerStatus.none => c.isClosed ? t(context).communityPrivacyClosed : t(context).communityPrivacyOpen,
+                            CommunityViewerStatus.pending => t(context).communityStatusPending,
+                            CommunityViewerStatus.approved => t(context).communityStatusMember,
                           };
                           final loc = (c.locationName ?? '').trim();
                           final subtitle = loc.isEmpty ? statusLabel : '$statusLabel • $loc';
@@ -28626,20 +32891,20 @@ class _CreateCommunitySheetState extends State<_CreateCommunitySheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text('Criar comunidade', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+            Text(t(context).communityCreateTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
             const SizedBox(height: 12),
             AtalaiaTextField(
               controller: _name,
-              labelText: 'Nome',
-              hintText: 'Ex.: Intercessores Goiânia',
+              labelText: t(context).communityCreateNameLabel,
+              hintText: t(context).communityCreateNameHint,
               textInputAction: TextInputAction.next,
               onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 10),
             AtalaiaTextField(
               controller: _description,
-              labelText: 'Descrição',
-              hintText: 'Sobre o propósito da comunidade…',
+              labelText: t(context).communityDescription,
+              hintText: t(context).communityCreateDescriptionHint,
               maxLines: 4,
               minLines: 2,
               textInputAction: TextInputAction.newline,
@@ -28647,15 +32912,15 @@ class _CreateCommunitySheetState extends State<_CreateCommunitySheet> {
             const SizedBox(height: 10),
             AtalaiaTextField(
               controller: _locationPath,
-              labelText: 'Local (path)',
-              hintText: 'world/sa/br/go/goiania',
+              labelText: t(context).communityCreateLocationPathLabel,
+              hintText: t(context).communityCreateLocationPathHint,
               textInputAction: TextInputAction.next,
             ),
             const SizedBox(height: 10),
             AtalaiaTextField(
               controller: _imageUrl,
-              labelText: 'Imagem (URL)',
-              hintText: 'https://…',
+              labelText: t(context).communityCreateImageUrlLabel,
+              hintText: t(context).communityCreateImageUrlHint,
               textInputAction: TextInputAction.done,
             ),
             const SizedBox(height: 10),
@@ -28664,26 +32929,26 @@ class _CreateCommunitySheetState extends State<_CreateCommunitySheet> {
                 Expanded(
                   child: DropdownButtonFormField<String>(
                     initialValue: _joinMode,
-                    items: const [
-                      DropdownMenuItem(value: 'public', child: Text('Acesso público')),
-                      DropdownMenuItem(value: 'request', child: Text('Aprovação')),
-                      DropdownMenuItem(value: 'invite', child: Text('Somente convite')),
+                    items: [
+                      DropdownMenuItem(value: 'public', child: Text(t(context).communityCreateJoinModePublic)),
+                      DropdownMenuItem(value: 'request', child: Text(t(context).communityCreateJoinModeRequest)),
+                      DropdownMenuItem(value: 'invite', child: Text(t(context).communityCreateJoinModeInvite)),
                     ],
                     onChanged: _loading ? null : (v) => setState(() => _joinMode = v ?? 'request'),
-                    decoration: const InputDecoration(labelText: 'Entrada'),
+                    decoration: InputDecoration(labelText: t(context).communityCreateJoinModeLabel),
                   ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: DropdownButtonFormField<String>(
                     initialValue: _visibility,
-                    items: const [
-                      DropdownMenuItem(value: 'public', child: Text('Pública')),
-                      DropdownMenuItem(value: 'private', child: Text('Privada')),
-                      DropdownMenuItem(value: 'unlisted', child: Text('Não listada')),
+                    items: [
+                      DropdownMenuItem(value: 'public', child: Text(t(context).communityCreateVisibilityPublic)),
+                      DropdownMenuItem(value: 'private', child: Text(t(context).communityCreateVisibilityPrivate)),
+                      DropdownMenuItem(value: 'unlisted', child: Text(t(context).communityCreateVisibilityUnlisted)),
                     ],
                     onChanged: _loading ? null : (v) => setState(() => _visibility = v ?? 'public'),
-                    decoration: const InputDecoration(labelText: 'Visibilidade'),
+                    decoration: InputDecoration(labelText: t(context).communityPrivacyLabel),
                   ),
                 ),
               ],
@@ -28691,17 +32956,17 @@ class _CreateCommunitySheetState extends State<_CreateCommunitySheet> {
             const SizedBox(height: 10),
             DropdownButtonFormField<String>(
               initialValue: _type,
-              items: const [
-                DropdownMenuItem(value: 'church', child: Text('Igreja')),
-                DropdownMenuItem(value: 'ministry', child: Text('Ministério')),
-                DropdownMenuItem(value: 'prayer', child: Text('Oração')),
+              items: [
+                DropdownMenuItem(value: 'church', child: Text(t(context).communityCreateTypeChurch)),
+                DropdownMenuItem(value: 'ministry', child: Text(t(context).communityCreateTypeMinistry)),
+                DropdownMenuItem(value: 'prayer', child: Text(t(context).communityCreateTypePrayer)),
               ],
               onChanged: _loading ? null : (v) => setState(() => _type = v ?? 'church'),
-              decoration: const InputDecoration(labelText: 'Tipo'),
+              decoration: InputDecoration(labelText: t(context).communityCreateTypeLabel),
             ),
             const SizedBox(height: 14),
             PrimaryButton(
-              label: 'Criar',
+              label: t(context).commonCreate,
               loading: _loading,
               onPressed: _loading || !_valid
                   ? null
@@ -29046,10 +33311,14 @@ class _StoryViewerScreen extends StatefulWidget {
   const _StoryViewerScreen({
     required this.cityName,
     required this.stories,
+    this.orderedUserIds,
+    this.initialUserId,
   });
 
   final String cityName;
   final List<StoryModel> stories;
+  final List<String>? orderedUserIds;
+  final String? initialUserId;
 
   @override
   State<_StoryViewerScreen> createState() => _StoryViewerScreenState();
@@ -29059,11 +33328,38 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with TickerProvi
   late final PageController _pageController;
   late final AnimationController _progressController;
   VideoPlayerController? _videoController;
-  int _index = 0;
+  late final Map<String, List<StoryModel>> _storiesByUserId;
+  late final List<String> _userOrder;
+  int _userIndex = 0;
+  int _storyIndex = 0;
 
   @override
   void initState() {
     super.initState();
+    final byUser = <String, List<StoryModel>>{};
+    for (final s in widget.stories) {
+      (byUser[s.userId] ??= <StoryModel>[]).add(s);
+    }
+    for (final e in byUser.entries) {
+      e.value.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    }
+    _storiesByUserId = byUser;
+
+    final providedOrder = widget.orderedUserIds?.where((id) => (byUser[id] ?? const <StoryModel>[]).isNotEmpty).toList();
+    if (providedOrder != null && providedOrder.isNotEmpty) {
+      _userOrder = List.unmodifiable(providedOrder);
+    } else {
+      final ids = byUser.keys.toList(growable: false)
+        ..sort((a, b) => (byUser[b]?.last.createdAt ?? DateTime(1970)).compareTo(byUser[a]?.last.createdAt ?? DateTime(1970)));
+      _userOrder = List.unmodifiable(ids);
+    }
+
+    final initialUserId = (widget.initialUserId ?? '').trim();
+    if (initialUserId.isNotEmpty) {
+      final i = _userOrder.indexOf(initialUserId);
+      if (i >= 0) _userIndex = i;
+    }
+
     _pageController = PageController();
     _progressController = AnimationController(vsync: this)..addStatusListener(_handleProgressStatus);
     WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_loadCurrent(autoplay: true)));
@@ -29077,7 +33373,13 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with TickerProvi
     super.dispose();
   }
 
-  StoryModel get _current => widget.stories[_index];
+  List<StoryModel> get _currentUserStories {
+    if (_userOrder.isEmpty) return const <StoryModel>[];
+    final userId = _userOrder[_userIndex.clamp(0, _userOrder.length - 1)];
+    return _storiesByUserId[userId] ?? const <StoryModel>[];
+  }
+
+  StoryModel get _current => _currentUserStories[_storyIndex.clamp(0, _currentUserStories.length - 1)];
 
   Duration _durationFor(StoryModel story) {
     return switch (story.mediaType) {
@@ -29154,16 +33456,50 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with TickerProvi
   }
 
   void _goNext() {
-    if (_index >= widget.stories.length - 1) {
+    final currentStories = _currentUserStories;
+    if (currentStories.isEmpty) {
       Navigator.of(context).pop();
       return;
     }
-    _pageController.nextPage(duration: const Duration(milliseconds: 180), curve: Curves.easeOut);
+    if (_storyIndex < currentStories.length - 1) {
+      _pageController.nextPage(duration: const Duration(milliseconds: 180), curve: Curves.easeOut);
+      return;
+    }
+    if (_userIndex >= _userOrder.length - 1) {
+      Navigator.of(context).pop();
+      return;
+    }
+    unawaited(_switchToUser(_userIndex + 1, storyIndex: 0, autoplay: true));
   }
 
   void _goPrev() {
-    if (_index <= 0) return;
-    _pageController.previousPage(duration: const Duration(milliseconds: 180), curve: Curves.easeOut);
+    if (_storyIndex > 0) {
+      _pageController.previousPage(duration: const Duration(milliseconds: 180), curve: Curves.easeOut);
+      return;
+    }
+    if (_userIndex <= 0) return;
+    final prevIndex = _userIndex - 1;
+    final prevUserId = _userOrder[prevIndex];
+    final prevStories = _storiesByUserId[prevUserId] ?? const <StoryModel>[];
+    if (prevStories.isEmpty) return;
+    unawaited(_switchToUser(prevIndex, storyIndex: prevStories.length - 1, autoplay: true));
+  }
+
+  Future<void> _switchToUser(int userIndex, {required int storyIndex, required bool autoplay}) async {
+    final nextUserIndex = userIndex.clamp(0, _userOrder.length - 1);
+    final nextStories = _storiesByUserId[_userOrder[nextUserIndex]] ?? const <StoryModel>[];
+    final nextStoryIndex = nextStories.isEmpty ? 0 : storyIndex.clamp(0, nextStories.length - 1);
+    if (!mounted) return;
+    setState(() {
+      _userIndex = nextUserIndex;
+      _storyIndex = nextStoryIndex;
+    });
+    await Future<void>.delayed(Duration.zero);
+    if (!mounted) return;
+    if (_pageController.hasClients) {
+      _pageController.jumpToPage(nextStoryIndex);
+    }
+    await _loadCurrent(autoplay: autoplay);
   }
 
   Widget _buildStoryBody(StoryModel story) {
@@ -29224,10 +33560,14 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with TickerProvi
 
   @override
   Widget build(BuildContext context) {
+    final repo = RepoScope.of(context);
     final merged = Listenable.merge([
       _progressController,
       if (_videoController != null) _videoController!,
     ]);
+    final headerProfile = repo.profileForUserId(_current.userId);
+    final headerName = headerProfile == null ? widget.cityName : _displayNameForProfile(headerProfile, userFallback: widget.cityName);
+    final headerAvatarUrl = headerProfile?.avatarUrl;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -29236,12 +33576,12 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with TickerProvi
           children: [
             PageView.builder(
               controller: _pageController,
-              itemCount: widget.stories.length,
+              itemCount: _currentUserStories.length,
               onPageChanged: (i) {
-                setState(() => _index = i);
+                setState(() => _storyIndex = i);
                 unawaited(_loadCurrent(autoplay: true));
               },
-              itemBuilder: (context, i) => _buildStoryBody(widget.stories[i]),
+              itemBuilder: (context, i) => _buildStoryBody(_currentUserStories[i]),
             ),
             Positioned.fill(
               child: GestureDetector(
@@ -29271,9 +33611,9 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with TickerProvi
                         final p = _currentProgress();
                         return Row(
                           children: List.generate(
-                            widget.stories.length,
+                            _currentUserStories.length,
                             (i) {
-                              final value = i < _index ? 1.0 : (i > _index ? 0.0 : p);
+                              final value = i < _storyIndex ? 1.0 : (i > _storyIndex ? 0.0 : p);
                               return Expanded(
                                 child: Padding(
                                   padding: EdgeInsets.only(left: i == 0 ? 0 : 4),
@@ -29297,11 +33637,20 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with TickerProvi
                     Row(
                       children: [
                         Expanded(
-                          child: Text(
-                            widget.cityName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Avatar(name: headerName, imageUrl: headerAvatarUrl, size: AvatarSize.s24),
+                              const SizedBox(width: 10),
+                              Flexible(
+                                child: Text(
+                                  headerName,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                         IconButton(
@@ -29314,18 +33663,19 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with TickerProvi
                             final choice = await showAtalaiaBottomSheet<String>(
                               context,
                               builder: (ctx) {
+                                final l10n = t(ctx);
                                 return SafeArea(
                                   child: Column(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
                                       ListTile(
                                         leading: const Icon(Icons.flag_outlined),
-                                        title: const Text('Denunciar'),
+                                        title: Text(l10n.postActionReport),
                                         onTap: () => Navigator.pop(ctx, 'report'),
                                       ),
                                       ListTile(
                                         leading: const Icon(Icons.link),
-                                        title: const Text('Copiar link'),
+                                        title: Text(l10n.postActionCopyLink),
                                         onTap: () => Navigator.pop(ctx, 'copy'),
                                       ),
                                       const SizedBox(height: 8),
@@ -29356,12 +33706,12 @@ class _StoryViewerScreenState extends State<_StoryViewerScreen> with TickerProvi
                                     reportedUserId: _current.userId,
                                   );
                                   if (!context.mounted) return;
-                                  showAtalaiaSnackBar(context, 'Denúncia enviada', kind: AtalaiaSnackKind.success);
+                                  showAtalaiaSnackBar(context, t(context).postSnackReportSent, kind: AtalaiaSnackKind.success);
                                 }
                               case 'copy':
                                 await Clipboard.setData(ClipboardData(text: _current.id));
                                 if (!context.mounted) return;
-                                showAtalaiaSnackBar(context, 'Link copiado', kind: AtalaiaSnackKind.success);
+                                showAtalaiaSnackBar(context, t(context).commonLinkCopied, kind: AtalaiaSnackKind.success);
                               default:
                                 break;
                             }
@@ -29607,12 +33957,13 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
     return AnimatedBuilder(
       animation: Listenable.merge([repo, session]),
       builder: (context, _) {
+        final l10n = t(context);
         final s = session.value;
         final c = repo.findCommunity(widget.args.communityId);
         if (c == null) {
           return Scaffold(
-            appBar: AppBar(title: const Text('Feed da Comunidade')),
-            body: const Center(child: Text('Comunidade não encontrada')),
+            appBar: AppBar(title: Text(l10n.communityFeedTitle)),
+            body: Center(child: Text(l10n.communityNotFound)),
           );
         }
 
@@ -29621,8 +33972,8 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
             appBar: AppBar(title: Text(c.name)),
             body: Center(
               child: PrimaryButton(
-                label: 'Entrar para ver o feed',
-                onPressed: () => showLoginSnackBar(context, message: 'Entre para ver o feed'),
+                label: l10n.communitySignInToSeeFeed,
+                onPressed: () => showLoginSnackBar(context, message: l10n.communitySignInToSeeFeed),
               ),
             ),
           );
@@ -29630,9 +33981,9 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
 
         if (c.isClosed && c.viewerStatus != CommunityViewerStatus.approved) {
           final title = c.viewerStatus == CommunityViewerStatus.pending
-              ? 'Solicitação enviada'
-              : 'Apenas membros veem este feed';
-          final ctaLabel = c.viewerStatus == CommunityViewerStatus.pending ? null : 'Solicitar entrada';
+              ? l10n.communityRequestSent
+              : l10n.communityMembersOnlyFeed;
+          final ctaLabel = c.viewerStatus == CommunityViewerStatus.pending ? null : l10n.communityRequestEntry;
           return Scaffold(
             appBar: AppBar(title: Text(c.name)),
             body: ListView(
@@ -29652,13 +34003,13 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                               onRetry: () {
                                 if (RepoScope.of(context).isOffline) return;
                                 RepoScope.of(context).requestCommunityJoin(c.id, isAuthenticated: true);
-                                showInfoSnackBar(context, 'Solicitação enviada');
+                              showInfoSnackBar(context, l10n.communityRequestSent);
                               },
                             );
                             return;
                           }
                           RepoScope.of(context).requestCommunityJoin(c.id, isAuthenticated: true);
-                          showInfoSnackBar(context, 'Solicitação enviada');
+                        showInfoSnackBar(context, l10n.communityRequestSent);
                         },
                 ),
               ],
@@ -29678,7 +34029,7 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
             actions: [
               if (c.viewerStatus == CommunityViewerStatus.approved)
                 IconButton(
-                  tooltip: 'Criar post',
+                  tooltip: l10n.communityCreatePost,
                   icon: const Icon(Icons.edit_outlined),
                   onPressed: repo.isOffline
                       ? null
@@ -29725,9 +34076,9 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                               physics: const AlwaysScrollableScrollPhysics(),
                               children: [
                                 SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
-                                const EmptyState(
+                                EmptyState(
                                   icon: Icons.feed_outlined,
-                                  title: 'Nenhum post nesta comunidade ainda.',
+                                  title: l10n.communityNoPostsYet,
                                 ),
                               ],
                             )
@@ -29780,7 +34131,7 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                   onPray: () {
                                     if (!useRemote) {
                                       repo.togglePrayer(post.id, isAuthenticated: true);
-                                      showInfoSnackBar(context, 'Oração registrada');
+                                      showInfoSnackBar(context, t(context).prayerRegisteredSnack);
                                       return;
                                     }
                                     final idx = _remotePosts.indexWhere((p) => p.id == post.id);
@@ -29796,7 +34147,7 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                     list[idx] = p.copyWith(viewerHasPrayed: true, prayerCount: p.prayerCount + 1);
                                     setState(() => _remotePosts = List.unmodifiable(list));
                                     unawaited(repo.addPrayerOnPostSupabase(postId: p.id));
-                                    showInfoSnackBar(context, 'Oração registrada');
+                                    showInfoSnackBar(context, t(context).prayerRegisteredSnack);
                                   },
                                   onComment: () {
                                     Navigator.of(context).pushNamed(
@@ -29811,7 +34162,7 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                     if (!useRemote) {
                                       final willSave = !post.viewerHasSaved;
                                       repo.toggleSave(post.id, isAuthenticated: true);
-                                      if (willSave) showInfoSnackBar(context, 'Salvo');
+                                      if (willSave) showInfoSnackBar(context, t(context).commonSaved);
                                       return;
                                     }
                                     final idx = _remotePosts.indexWhere((p) => p.id == post.id);
@@ -29820,7 +34171,7 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                     final list = _remotePosts.toList(growable: true);
                                     list[idx] = p.copyWith(viewerHasSaved: !p.viewerHasSaved);
                                     setState(() => _remotePosts = List.unmodifiable(list));
-                                    if (!p.viewerHasSaved) showInfoSnackBar(context, 'Salvo');
+                                    if (!p.viewerHasSaved) showInfoSnackBar(context, t(context).commonSaved);
                                   },
                                 );
                               },
@@ -29872,22 +34223,19 @@ class _CommunityMembersScreenState extends State<CommunityMembersScreen> {
         final c = repo.findCommunity(widget.args.communityId);
         if (c == null) {
           return Scaffold(
-            appBar: AppBar(title: const Text('Membros')),
-            body: const Center(child: Text('Comunidade não encontrada')),
+            appBar: AppBar(title: Text(t(context).communityMembersTitle)),
+            body: Center(child: Text(t(context).communityNotFound)),
           );
         }
 
         if (s is! AuthSession || c.viewerStatus != CommunityViewerStatus.approved) {
           return Scaffold(
-            appBar: AppBar(title: const Text('Membros')),
+            appBar: AppBar(title: Text(t(context).communityMembersTitle)),
             body: ListView(
               physics: const AlwaysScrollableScrollPhysics(),
               children: [
                 SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
-                const EmptyState(
-                  icon: Icons.lock_outline,
-                  title: 'Apenas membros podem ver esta lista.',
-                ),
+                EmptyState(icon: Icons.lock_outline, title: t(context).communityMembersOnly),
               ],
             ),
           );
@@ -29906,22 +34254,22 @@ class _CommunityMembersScreenState extends State<CommunityMembersScreen> {
               title: Text(c.name),
               bottom: TabBar(
                 tabs: [
-                  const Tab(text: 'Membros'),
-                  if (showRequests) Tab(text: 'Solicitações (${requests.length})'),
+                  Tab(text: t(context).communityMembersTabMembers),
+                  if (showRequests) Tab(text: t(context).communityMembersTabRequests(requests.length)),
                 ],
               ),
             ),
             body: TabBarView(
               children: [
                 members.isEmpty
-                    ? const EmptyState(icon: Icons.people_outline, title: 'Sem membros (demo).')
+                    ? EmptyState(icon: Icons.people_outline, title: t(context).communityMembersEmptyDemo)
                     : ListView.separated(
                         physics: const AlwaysScrollableScrollPhysics(),
                         itemCount: members.length,
                         separatorBuilder: (_, __) => const Divider(height: 1),
                         itemBuilder: (context, index) {
                           final p = members[index];
-                          final displayName = _displayNameForProfile(p);
+                          final displayName = _displayNameForProfile(p, userFallback: t(context).commonUserFallback);
                           final displayUsername = _usernameForProfile(p, userId: p.userId);
                           final isAdmin = repo.isCommunityAdmin(c.id, p.userId);
                           final isMod = repo.isCommunityModerator(c.id, p.userId);
@@ -29955,11 +34303,15 @@ class _CommunityMembersScreenState extends State<CommunityMembersScreen> {
                                       return <PopupMenuEntry<String>>[
                                         PopupMenuItem<String>(
                                           value: isMod ? 'demote' : 'promote',
-                                          child: Text(isMod ? 'Rebaixar para membro' : 'Promover para admin'),
+                                          child: Text(
+                                            isMod
+                                                ? t(context).communityMemberActionDemoteToMember
+                                                : t(context).communityMemberActionPromoteToAdmin,
+                                          ),
                                         ),
-                                        const PopupMenuItem<String>(
+                                        PopupMenuItem<String>(
                                           value: 'transfer',
-                                          child: Text('Transferir propriedade'),
+                                          child: Text(t(context).communityMemberActionTransferOwnership),
                                         ),
                                       ];
                                     },
@@ -29975,7 +34327,7 @@ class _CommunityMembersScreenState extends State<CommunityMembersScreen> {
                                           role: 'admin',
                                         );
                                         if (!context.mounted) return;
-                                        showInfoSnackBar(context, 'Promovido para admin');
+                                        showInfoSnackBar(context, t(context).communityMemberPromotedSnack);
                                         return;
                                       }
                                       if (action == 'demote') {
@@ -29985,23 +34337,23 @@ class _CommunityMembersScreenState extends State<CommunityMembersScreen> {
                                           role: 'member',
                                         );
                                         if (!context.mounted) return;
-                                        showInfoSnackBar(context, 'Rebaixado para membro');
+                                        showInfoSnackBar(context, t(context).communityMemberDemotedSnack);
                                         return;
                                       }
                                       if (action == 'transfer') {
                                         final ok = await showDialog<bool>(
                                           context: context,
                                           builder: (ctx) => AlertDialog(
-                                            title: const Text('Transferir propriedade?'),
-                                            content: Text('A comunidade ficará sob controle de ${p.name}.'),
+                                            title: Text(t(context).communityOwnershipTransferConfirmTitle),
+                                            content: Text(t(context).communityOwnershipTransferConfirmBody(p.name)),
                                             actions: [
                                               TextButton(
                                                 onPressed: () => Navigator.of(ctx).pop(false),
-                                                child: const Text('Cancelar'),
+                                                child: Text(t(context).commonCancel),
                                               ),
                                               FilledButton(
                                                 onPressed: () => Navigator.of(ctx).pop(true),
-                                                child: const Text('Transferir'),
+                                                child: Text(t(context).communityMemberActionTransferOwnership),
                                               ),
                                             ],
                                           ),
@@ -30012,7 +34364,7 @@ class _CommunityMembersScreenState extends State<CommunityMembersScreen> {
                                           newOwnerId: p.userId,
                                         );
                                         if (!context.mounted) return;
-                                        showInfoSnackBar(context, 'Propriedade transferida');
+                                        showInfoSnackBar(context, t(context).communityOwnershipTransferredSnack);
                                       }
                                     },
                                   ),
@@ -30027,14 +34379,14 @@ class _CommunityMembersScreenState extends State<CommunityMembersScreen> {
                       ),
                 if (showRequests)
                   requests.isEmpty
-                      ? const EmptyState(icon: Icons.inbox_outlined, title: 'Nenhuma solicitação pendente.')
+                      ? EmptyState(icon: Icons.inbox_outlined, title: t(context).communityRequestsEmpty)
                       : ListView.separated(
                           physics: const AlwaysScrollableScrollPhysics(),
                           itemCount: requests.length,
                           separatorBuilder: (_, __) => const Divider(height: 1),
                           itemBuilder: (context, index) {
                             final p = requests[index];
-                            final displayName = _displayNameForProfile(p);
+                            final displayName = _displayNameForProfile(p, userFallback: t(context).commonUserFallback);
                             final displayUsername = _usernameForProfile(p, userId: p.userId);
                             return ListTile(
                               leading: Avatar(name: displayName, imageUrl: p.avatarUrl, size: AvatarSize.s44),
@@ -30044,7 +34396,7 @@ class _CommunityMembersScreenState extends State<CommunityMembersScreen> {
                                 spacing: 8,
                                 children: [
                                   SecondaryButton(
-                                    label: 'Aprovar',
+                                    label: t(context).communityRequestApproveAction,
                                     onPressed: () {
                                       if (repo.isOffline) {
                                         showErrorSnackBar(
@@ -30052,17 +34404,17 @@ class _CommunityMembersScreenState extends State<CommunityMembersScreen> {
                                           onRetry: () {
                                             if (RepoScope.of(context).isOffline) return;
                                             RepoScope.of(context).approveCommunityJoinRequest(c.id, p.userId);
-                                            showInfoSnackBar(context, 'Aprovado');
+                                            showInfoSnackBar(context, t(context).communityRequestApprovedSnack);
                                           },
                                         );
                                         return;
                                       }
                                       RepoScope.of(context).approveCommunityJoinRequest(c.id, p.userId);
-                                      showInfoSnackBar(context, 'Aprovado');
+                                      showInfoSnackBar(context, t(context).communityRequestApprovedSnack);
                                     },
                                   ),
                                   AtalaiaTextButton(
-                                    label: 'Recusar',
+                                    label: t(context).communityRequestRejectAction,
                                     onPressed: () {
                                       if (repo.isOffline) {
                                         showErrorSnackBar(
@@ -30070,13 +34422,13 @@ class _CommunityMembersScreenState extends State<CommunityMembersScreen> {
                                           onRetry: () {
                                             if (RepoScope.of(context).isOffline) return;
                                             RepoScope.of(context).refuseCommunityJoinRequest(c.id, p.userId);
-                                            showInfoSnackBar(context, 'Recusado');
+                                            showInfoSnackBar(context, t(context).communityRequestRejectedSnack);
                                           },
                                         );
                                         return;
                                       }
                                       RepoScope.of(context).refuseCommunityJoinRequest(c.id, p.userId);
-                                      showInfoSnackBar(context, 'Recusado');
+                                      showInfoSnackBar(context, t(context).communityRequestRejectedSnack);
                                     },
                                   ),
                                 ],
@@ -30218,13 +34570,13 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
 
   String _weekdayLabel(int weekday) {
     return switch (weekday) {
-      DateTime.monday => 'Segunda',
-      DateTime.tuesday => 'Terça',
-      DateTime.wednesday => 'Quarta',
-      DateTime.thursday => 'Quinta',
-      DateTime.friday => 'Sexta',
-      DateTime.saturday => 'Sábado',
-      _ => 'Domingo',
+      DateTime.monday => t(context).commonWeekdayMonday,
+      DateTime.tuesday => t(context).commonWeekdayTuesday,
+      DateTime.wednesday => t(context).commonWeekdayWednesday,
+      DateTime.thursday => t(context).commonWeekdayThursday,
+      DateTime.friday => t(context).commonWeekdayFriday,
+      DateTime.saturday => t(context).commonWeekdaySaturday,
+      _ => t(context).commonWeekdaySunday,
     };
   }
 
@@ -30245,11 +34597,11 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
   String _statusLabelForRun(_CommunityPrayerRunRow r) {
     final now = DateTime.now();
     final isActiveWindow = r.startsAt.isBefore(now) && r.endsAt.isAfter(now);
-    if (r.status == 'cancelled') return 'Cancelada';
-    if (r.status == 'completed') return 'Cumprida';
-    if (r.status == 'missed') return 'Não cumprida';
-    if (isActiveWindow) return 'Em andamento';
-    return 'Agendada';
+    if (r.status == 'cancelled') return t(context).prayerRunStatusCancelled;
+    if (r.status == 'completed') return t(context).prayerRunStatusCompleted;
+    if (r.status == 'missed') return t(context).prayerRunStatusMissed;
+    if (isActiveWindow) return t(context).prayerRunStatusInProgress;
+    return t(context).prayerRunStatusScheduled;
   }
 
   ({Color bg, Color fg, Color? border, Color stripe}) _statusColors({required ColorScheme cs, required _CommunityPrayerRunRow r, required bool isMine}) {
@@ -30273,8 +34625,8 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
     required String viewerUserId,
   }) async {
     final cs = Theme.of(context).colorScheme;
-    final title = (run.title == null || run.title!.trim().isEmpty) ? 'Escala de oração' : run.title!.trim();
-    final displayName = assigned == null ? 'Usuário' : _profileDisplayLabel(assigned);
+    final title = (run.title == null || run.title!.trim().isEmpty) ? t(context).prayerRunDefaultTitle : run.title!.trim();
+    final displayName = assigned == null ? t(context).commonUserFallback : _profileDisplayLabel(assigned, userFallback: t(context).commonUserFallback);
     final isMine = (run.assignedUserId ?? '') == viewerUserId;
     final statusLabel = _statusLabelForRun(run);
     final statusColors = _statusColors(cs: cs, r: run, isMine: isMine);
@@ -30338,19 +34690,19 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
                     children: [
                       Text(whenLine, style: const TextStyle(fontWeight: FontWeight.w900)),
                       const SizedBox(height: 6),
-                      Text('Duração: ${durationMins} min', style: TextStyle(color: cs.onSurfaceVariant)),
+                      Text(t(context).prayerRunDetailsDurationLine(durationMins), style: TextStyle(color: cs.onSurfaceVariant)),
                       const SizedBox(height: 6),
-                      Text('Comunidade: ${c.name}', style: TextStyle(color: cs.onSurfaceVariant)),
+                      Text(t(context).prayerRunDetailsCommunityLine(c.name), style: TextStyle(color: cs.onSurfaceVariant)),
                       if (canModerate) ...[
                         const SizedBox(height: 6),
-                        Text('ID: ${run.id}', style: TextStyle(color: cs.onSurfaceVariant)),
+                        Text(t(context).prayerRunDetailsIdLine(run.id), style: TextStyle(color: cs.onSurfaceVariant)),
                       ],
                     ],
                   ),
                 ),
                 const SizedBox(height: 14),
                 PrimaryButton(
-                  label: canStart ? 'Iniciar oração' : 'Fechar',
+                  label: canStart ? t(context).prayerRunDetailsStartPrayer : t(context).commonClose,
                   onPressed: () {
                     Navigator.of(context).pop();
                     if (canStart) {
@@ -30610,19 +34962,19 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
         final c = repo.findCommunity(widget.args.communityId);
         if (c == null) {
           return Scaffold(
-            appBar: AppBar(title: const Text('Escalas')),
-            body: const Center(child: Text('Comunidade não encontrada')),
+            appBar: AppBar(title: Text(t(context).prayerRunsTitleShort)),
+            body: Center(child: Text(t(context).communityNotFound)),
           );
         }
         final s = session.value;
         if (s is! AuthSession || c.viewerStatus != CommunityViewerStatus.approved) {
           return Scaffold(
-            appBar: AppBar(title: const Text('Escalas')),
+            appBar: AppBar(title: Text(t(context).prayerRunsTitleShort)),
             body: ListView(
               physics: const AlwaysScrollableScrollPhysics(),
               children: [
                 SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
-                const EmptyState(icon: Icons.lock_outline, title: 'Apenas membros podem ver.'),
+                EmptyState(icon: Icons.lock_outline, title: t(context).prayerRunsMembersOnly),
               ],
             ),
           );
@@ -30639,8 +34991,11 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
               title: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Escalas de oração', style: TextStyle(fontWeight: FontWeight.w900)),
-                  Text('Organize, acompanhe e cumpra os turnos', style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                  Text(t(context).prayerRunsTitle, style: const TextStyle(fontWeight: FontWeight.w900)),
+                  Text(
+                    t(context).prayerRunsSubtitle,
+                    style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  ),
                 ],
               ),
               actions: [
@@ -30650,7 +35005,7 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
                     child: Builder(
                       builder: (context) {
                         final w = MediaQuery.sizeOf(context).width;
-                        final label = w >= 420 ? 'Nova escala' : null;
+                        final label = w >= 420 ? t(context).prayerRunsNew : null;
                         if (label == null) {
                           return IconButton(
                             icon: const Icon(Icons.add),
@@ -30668,9 +35023,9 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
               ],
               bottom: TabBar(
                 tabs: [
-                  const Tab(text: 'Agenda'),
-                  const Tab(text: 'Meu turno'),
-                  if (canModerate) const Tab(text: 'Relatório'),
+                  Tab(text: t(context).prayerRunsTabSchedule),
+                  Tab(text: t(context).prayerRunsTabMyShift),
+                  if (canModerate) Tab(text: t(context).prayerRunsTabReport),
                 ],
               ),
             ),
@@ -30726,7 +35081,7 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
                                 physics: const AlwaysScrollableScrollPhysics(),
                                 children: [
                                   SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
-                                  const EmptyState(icon: Icons.bar_chart_outlined, title: 'Sem dados de relatório.'),
+                                  EmptyState(icon: Icons.bar_chart_outlined, title: t(context).prayerRunsReportEmpty),
                                 ],
                               )
                             : ListView(
@@ -30739,29 +35094,29 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
                                       child: Column(
                                         crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
-                                          const Text('Dashboard', style: TextStyle(fontWeight: FontWeight.w900)),
+                                          Text(t(context).prayerRunsReportDashboardTitle, style: const TextStyle(fontWeight: FontWeight.w900)),
                                           const SizedBox(height: 10),
                                           Wrap(
                                             spacing: 10,
                                             runSpacing: 10,
                                             children: [
                                               _StatPill(
-                                                label: 'Tempo orado',
+                                                label: t(context).prayerRunsReportPrayedTime,
                                                 value: _formatTotalDuration(_dashTotalDurationSeconds),
                                                 cs: Theme.of(context).colorScheme,
                                               ),
                                               _StatPill(
-                                                label: 'Sessões',
+                                                label: t(context).prayerRunsReportSessions,
                                                 value: _dashTotalSessions.toString(),
                                                 cs: Theme.of(context).colorScheme,
                                               ),
                                               _StatPill(
-                                                label: 'Cumpridas',
+                                                label: t(context).prayerRunsReportCompleted,
                                                 value: _dashTotalScalesCompleted.toString(),
                                                 cs: Theme.of(context).colorScheme,
                                               ),
                                               _StatPill(
-                                                label: 'Perdidas',
+                                                label: t(context).prayerRunsReportMissed,
                                                 value: _dashTotalScalesMissed.toString(),
                                                 cs: Theme.of(context).colorScheme,
                                               ),
@@ -30772,15 +35127,19 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
                                     ),
                                   ),
                                   const SizedBox(height: 12),
-                                  const Text('Por membro', style: TextStyle(fontWeight: FontWeight.w900)),
+                                  Text(t(context).prayerRunsReportByMember, style: const TextStyle(fontWeight: FontWeight.w900)),
                                   const SizedBox(height: 6),
                                   if (_memberReport.isEmpty)
-                                    Text('Sem dados por membro.', style: TextStyle(color: Theme.of(context).colorScheme.outline))
+                                    Text(t(context).prayerRunsReportEmptyByMember, style: TextStyle(color: Theme.of(context).colorScheme.outline))
                                   else
                                     ..._memberReport.map((m) {
                                       final minutes = (m.totalDurationSeconds / 60).floor();
-                                      final subtitle =
-                                          'Tempo: ${minutes} min • Sessões: ${m.totalSessions} • Cumpridas: ${m.scalesCompleted} • Perdidas: ${m.scalesMissed}';
+                                      final subtitle = t(context).prayerRunsReportMemberSubtitle(
+                                        minutes,
+                                        m.totalSessions,
+                                        m.scalesCompleted,
+                                        m.scalesMissed,
+                                      );
                                       return ListTile(
                                         contentPadding: EdgeInsets.zero,
                                         leading: Avatar(name: m.name, size: AvatarSize.s44),
@@ -30795,36 +35154,44 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
                                       );
                                     }),
                                   const Divider(height: 24),
-                                  const Text('Por ocorrência', style: TextStyle(fontWeight: FontWeight.w900)),
+                                  Text(t(context).prayerRunsReportByOccurrence, style: const TextStyle(fontWeight: FontWeight.w900)),
                                   const SizedBox(height: 6),
                                   if (_occurrenceReport.isEmpty)
-                                    Text('Sem ocorrências no período.', style: TextStyle(color: Theme.of(context).colorScheme.outline))
+                                    Text(t(context).prayerRunsReportEmptyByOccurrence, style: TextStyle(color: Theme.of(context).colorScheme.outline))
                                   else
                                     ..._occurrenceReport.map((o) {
                                       final expected = '${_formatShortDateTime(o.scheduledStartAt)} – ${_formatShortDateTime(o.scheduledEndAt)}';
                                       final actual = (o.actualStartAt == null || o.actualEndAt == null)
-                                          ? 'Real: —'
-                                          : 'Real: ${_formatShortDateTime(o.actualStartAt!)} – ${_formatShortDateTime(o.actualEndAt!)}';
+                                          ? t(context).prayerRunsReportActualEmpty
+                                          : t(context).prayerRunsReportActualRange(
+                                              _formatShortDateTime(o.actualStartAt!),
+                                              _formatShortDateTime(o.actualEndAt!),
+                                            );
                                       final plannedMin = (o.plannedDurationSeconds / 60).floor();
                                       final actualMin = o.actualDurationSeconds == null ? null : (o.actualDurationSeconds! / 60).floor();
+                                      final actualPart =
+                                          actualMin == null ? '' : t(context).prayerRunsReportActualDurationPart(actualMin);
                                       final statusLabel = switch (o.status) {
-                                        'completed' => 'Concluída',
-                                        'missed' => 'Perdida',
-                                        'cancelled' => 'Cancelada',
-                                        _ => 'Agendada',
+                                        'completed' => t(context).prayerRunsReportStatusCompleted,
+                                        'missed' => t(context).prayerRunsReportStatusMissed,
+                                        'cancelled' => t(context).prayerRunsReportStatusCancelled,
+                                        _ => t(context).prayerRunsReportStatusScheduled,
                                       };
                                       final parts = <String>[
                                         expected,
                                         actual,
-                                        'Status: $statusLabel • Planejado: ${plannedMin} min${actualMin == null ? '' : ' • Real: ${actualMin} min'}',
-                                        if ((o.prayerNote ?? '').trim().isNotEmpty) 'Registro: ${o.prayerNote!.trim()}',
-                                        if ((o.assignedUserName ?? '').trim().isNotEmpty) 'Responsável: ${o.assignedUserName!.trim()}',
+                                        t(context).prayerRunsReportStatusLine(statusLabel, plannedMin, actualPart),
+                                        if ((o.prayerNote ?? '').trim().isNotEmpty) t(context).prayerRunsReportNoteLine(o.prayerNote!.trim()),
+                                        if ((o.assignedUserName ?? '').trim().isNotEmpty)
+                                          t(context).prayerRunsReportAssigneeLine(o.assignedUserName!.trim()),
                                       ];
                                       return ListTile(
                                         contentPadding: EdgeInsets.zero,
                                         leading: const Icon(Icons.event_note_outlined),
                                         title: Text(
-                                          (o.scheduleTitle == null || o.scheduleTitle!.trim().isEmpty) ? 'Escala de oração' : o.scheduleTitle!.trim(),
+                                          (o.scheduleTitle == null || o.scheduleTitle!.trim().isEmpty)
+                                              ? t(context).prayerRunDefaultTitle
+                                              : o.scheduleTitle!.trim(),
                                           style: const TextStyle(fontWeight: FontWeight.w800),
                                         ),
                                         subtitle: Text(parts.join('\n')),
@@ -30861,10 +35228,10 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Agenda', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 22)),
+          Text(t(context).prayerRunsAgendaTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 22)),
           const SizedBox(height: 6),
           Text(
-            'Comunidade: ${c.name}',
+            t(context).prayerRunsAgendaCommunityLine(c.name),
             style: TextStyle(color: cs.onSurfaceVariant, fontWeight: FontWeight.w700),
           ),
         ],
@@ -30877,14 +35244,14 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
         scrollDirection: Axis.horizontal,
         child: Row(
           children: [
-            _SummaryCard(label: 'Hoje', value: todayCount.toString(), cs: cs),
+            _SummaryCard(label: t(context).prayerRunsSummaryToday, value: todayCount.toString(), cs: cs),
             const SizedBox(width: 10),
-            _SummaryCard(label: 'Próximas', value: upcomingCount.toString(), cs: cs),
+            _SummaryCard(label: t(context).prayerRunsSummaryUpcoming, value: upcomingCount.toString(), cs: cs),
             const SizedBox(width: 10),
-            _SummaryCard(label: 'Cumpridas', value: completedCount.toString(), cs: cs),
+            _SummaryCard(label: t(context).prayerRunsSummaryCompleted, value: completedCount.toString(), cs: cs),
             if (canModerate && _dashTotalDurationSeconds > 0) ...[
               const SizedBox(width: 10),
-              _SummaryCard(label: 'Tempo orado', value: _formatTotalDuration(_dashTotalDurationSeconds), cs: cs),
+              _SummaryCard(label: t(context).prayerRunsSummaryPrayedTime, value: _formatTotalDuration(_dashTotalDurationSeconds), cs: cs),
             ],
           ],
         ),
@@ -30899,8 +35266,8 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
           padding: const EdgeInsets.fromLTRB(12, 0, 12, 14),
           child: _HighlightRunCard(
             cs: cs,
-            label: 'Seu próximo turno',
-            title: (nextMine.title == null || nextMine.title!.trim().isEmpty) ? 'Escala de oração' : nextMine.title!.trim(),
+            label: t(context).prayerRunsHighlightMyNextShift,
+            title: (nextMine.title == null || nextMine.title!.trim().isEmpty) ? t(context).prayerRunDefaultTitle : nextMine.title!.trim(),
             subtitle: _formatDateLine(start: nextMine.startsAt, end: nextMine.endsAt),
             statusLabel: _statusLabelForRun(nextMine),
             stripeColor: _statusColors(cs: cs, r: nextMine, isMine: true).stripe,
@@ -30926,7 +35293,7 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
       children.add(
         Padding(
           padding: EdgeInsets.only(top: MediaQuery.sizeOf(context).height * 0.12),
-          child: const EmptyState(icon: Icons.event_outlined, title: 'Sem escalas por enquanto.'),
+          child: EmptyState(icon: Icons.event_outlined, title: t(context).prayerRunsEmptyNoSchedules),
         ),
       );
       return ListView(
@@ -30951,8 +35318,8 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
                     run: r,
                     viewerUserId: viewerUserId,
                     assigned: r.assignedUserId == null ? null : repo.findProfile(r.assignedUserId!),
-                    title: (r.title == null || r.title!.trim().isEmpty) ? 'Escala de oração' : r.title!.trim(),
-                    badgeLabel: _isSameDay(r.startsAt, now) ? 'Hoje' : _weekdayLabel(r.startsAt.weekday),
+                    title: (r.title == null || r.title!.trim().isEmpty) ? t(context).prayerRunDefaultTitle : r.title!.trim(),
+                    badgeLabel: _isSameDay(r.startsAt, now) ? t(context).prayerRunsSummaryToday : _weekdayLabel(r.startsAt.weekday),
                     whenLine: _formatDateLine(start: r.startsAt, end: r.endsAt),
                     statusLabel: _statusLabelForRun(r),
                     statusColors: _statusColors(cs: cs, r: r, isMine: (r.assignedUserId ?? '') == viewerUserId),
@@ -30978,9 +35345,9 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
       );
     }
 
-    addSection('Hoje', groups.today);
-    addSection('Próximas', groups.upcoming);
-    addSection('Histórico recente', groups.recent.take(6).toList(growable: false), compact: true);
+    addSection(t(context).prayerRunsSummaryToday, groups.today);
+    addSection(t(context).prayerRunsSummaryUpcoming, groups.upcoming);
+    addSection(t(context).prayerRunsSectionRecentHistory, groups.recent.take(6).toList(growable: false), compact: true);
 
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
@@ -31003,14 +35370,14 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
     final recent = mine.where((r) => r.startsAt.isBefore(now)).toList()..sort((a, b) => b.startsAt.compareTo(a.startsAt));
 
     final children = <Widget>[
-      const Padding(
+      Padding(
         padding: EdgeInsets.fromLTRB(16, 14, 16, 8),
-        child: Text('Meu turno', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 22)),
+        child: Text(t(context).prayerRunsTabMyShift, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 22)),
       ),
       Padding(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
         child: Text(
-          'Seus compromissos nesta comunidade',
+          t(context).prayerRunsMyShiftSubtitle,
           style: TextStyle(color: cs.onSurfaceVariant, fontWeight: FontWeight.w700),
         ),
       ),
@@ -31020,7 +35387,7 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
       children.add(
         Padding(
           padding: EdgeInsets.only(top: MediaQuery.sizeOf(context).height * 0.12),
-          child: const EmptyState(icon: Icons.person_outline, title: 'Nenhum turno atribuído para você.'),
+          child: EmptyState(icon: Icons.person_outline, title: t(context).prayerRunsMyShiftEmptyAssigned),
         ),
       );
       return ListView(physics: const AlwaysScrollableScrollPhysics(), children: children);
@@ -31032,8 +35399,8 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
           padding: const EdgeInsets.fromLTRB(12, 0, 12, 14),
           child: _HighlightRunCard(
             cs: cs,
-            label: 'Seu próximo turno',
-            title: (next.title == null || next.title!.trim().isEmpty) ? 'Escala de oração' : next.title!.trim(),
+            label: t(context).prayerRunsHighlightMyNextShift,
+            title: (next.title == null || next.title!.trim().isEmpty) ? t(context).prayerRunDefaultTitle : next.title!.trim(),
             subtitle: _formatDateLine(start: next.startsAt, end: next.endsAt),
             statusLabel: _statusLabelForRun(next),
             stripeColor: _statusColors(cs: cs, r: next, isMine: true).stripe,
@@ -31070,8 +35437,8 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
                     run: r,
                     viewerUserId: viewerUserId,
                     assigned: r.assignedUserId == null ? null : repo.findProfile(r.assignedUserId!),
-                    title: (r.title == null || r.title!.trim().isEmpty) ? 'Escala de oração' : r.title!.trim(),
-                    badgeLabel: _isSameDay(r.startsAt, now) ? 'Hoje' : _weekdayLabel(r.startsAt.weekday),
+                    title: (r.title == null || r.title!.trim().isEmpty) ? t(context).prayerRunDefaultTitle : r.title!.trim(),
+                    badgeLabel: _isSameDay(r.startsAt, now) ? t(context).prayerRunsSummaryToday : _weekdayLabel(r.startsAt.weekday),
                     whenLine: _formatDateLine(start: r.startsAt, end: r.endsAt),
                     statusLabel: _statusLabelForRun(r),
                     statusColors: _statusColors(cs: cs, r: r, isMine: true),
@@ -31097,8 +35464,8 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
       );
     }
 
-    addSection('Próximos', upcoming);
-    addSection('Histórico recente', recent.take(8).toList(growable: false), compact: true);
+    addSection(t(context).prayerRunsSectionUpcomingMyShift, upcoming);
+    addSection(t(context).prayerRunsSectionRecentHistory, recent.take(8).toList(growable: false), compact: true);
 
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
@@ -31288,7 +35655,7 @@ class _PrayerRunSocialCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final assignedProfile = assigned;
-    final displayName = assignedProfile == null ? 'Usuário' : _profileDisplayLabel(assignedProfile);
+    final displayName = assignedProfile == null ? t(context).commonUserFallback : _profileDisplayLabel(assignedProfile, userFallback: t(context).commonUserFallback);
     final avatarName =
         assignedProfile == null ? displayName : _normalizeDisplayUsername(assignedProfile.username, fallback: assignedProfile.userId);
     final durationMins = run.endsAt.difference(run.startsAt).inMinutes.clamp(1, 24 * 60);
@@ -31405,12 +35772,12 @@ class _PrayerRunSocialCard extends StatelessWidget {
                           statusPill,
                           TextButton(
                             onPressed: onDetails,
-                            child: const Text('Ver detalhes'),
+                            child: Text(t(context).commonViewDetails),
                           ),
                           if (canStart)
                             FilledButton(
                               onPressed: onStart,
-                              child: const Text('Iniciar oração'),
+                              child: Text(t(context).prayerStart),
                             ),
                         ],
                       ),
@@ -31530,6 +35897,18 @@ class _CreateCommunityPrayerRunSheetState extends State<_CreateCommunityPrayerRu
 
   @override
   Widget build(BuildContext context) {
+    String weekdayLabel(int value) {
+      return switch (value) {
+        0 => t(context).commonWeekdaySunday,
+        1 => t(context).commonWeekdayMonday,
+        2 => t(context).commonWeekdayTuesday,
+        3 => t(context).commonWeekdayWednesday,
+        4 => t(context).commonWeekdayThursday,
+        5 => t(context).commonWeekdayFriday,
+        _ => t(context).commonWeekdaySaturday,
+      };
+    }
+
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.only(
@@ -31542,19 +35921,19 @@ class _CreateCommunityPrayerRunSheetState extends State<_CreateCommunityPrayerRu
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text('Criar escala', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+            Text(t(context).prayerRunsCreateSheetTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
             const SizedBox(height: 12),
             AtalaiaTextField(
               controller: _title,
-              labelText: 'Título',
-              hintText: 'Ex.: Oração da semana',
+              labelText: t(context).prayerRunsCreateTitleLabel,
+              hintText: t(context).prayerRunsCreateTitleHint,
               onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 10),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('Semanal fixa'),
-              subtitle: const Text('Gera automaticamente as próximas escalas da semana'),
+              title: Text(t(context).prayerRunsCreateWeeklyFixedTitle),
+              subtitle: Text(t(context).prayerRunsCreateWeeklyFixedSubtitle),
               value: _weeklyFixed,
               onChanged: _loading
                   ? null
@@ -31573,19 +35952,19 @@ class _CreateCommunityPrayerRunSheetState extends State<_CreateCommunityPrayerRu
                 ...widget.members.map(
                   (m) => DropdownMenuItem<String?>(
                     value: m.userId,
-                    child: Text(_profileDisplayLabel(m)),
+                    child: Text(_profileDisplayLabel(m, userFallback: t(context).commonUserFallback)),
                   ),
                 ),
               ],
               onChanged: _loading ? null : (v) => setState(() => _assignedUserId = v),
-              decoration: const InputDecoration(labelText: 'Responsável'),
+              decoration: InputDecoration(labelText: t(context).prayerRunsCreateAssigneeLabel),
             ),
             const SizedBox(height: 10),
             if (!_weeklyFixed)
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.schedule),
-                title: const Text('Início'),
+                title: Text(t(context).prayerRunsCreateStartLabel),
                 subtitle: Text(_formatShort(_start)),
                 onTap: _loading
                     ? null
@@ -31601,17 +35980,14 @@ class _CreateCommunityPrayerRunSheetState extends State<_CreateCommunityPrayerRu
                   Expanded(
                     child: DropdownButtonFormField<int>(
                       initialValue: _weeklyWeekday,
-                      items: const [
-                        DropdownMenuItem<int>(value: 0, child: Text('Domingo')),
-                        DropdownMenuItem<int>(value: 1, child: Text('Segunda')),
-                        DropdownMenuItem<int>(value: 2, child: Text('Terça')),
-                        DropdownMenuItem<int>(value: 3, child: Text('Quarta')),
-                        DropdownMenuItem<int>(value: 4, child: Text('Quinta')),
-                        DropdownMenuItem<int>(value: 5, child: Text('Sexta')),
-                        DropdownMenuItem<int>(value: 6, child: Text('Sábado')),
+                      items: [
+                        ...List.generate(
+                          7,
+                          (value) => DropdownMenuItem<int>(value: value, child: Text(weekdayLabel(value))),
+                        ),
                       ],
                       onChanged: _loading ? null : (v) => setState(() => _weeklyWeekday = v ?? (_start.weekday % 7)),
-                      decoration: const InputDecoration(labelText: 'Dia'),
+                      decoration: InputDecoration(labelText: t(context).prayerRunsCreateDayLabel),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -31619,7 +35995,7 @@ class _CreateCommunityPrayerRunSheetState extends State<_CreateCommunityPrayerRu
                     child: ListTile(
                       contentPadding: EdgeInsets.zero,
                       leading: const Icon(Icons.access_time),
-                      title: const Text('Hora'),
+                      title: Text(t(context).prayerRunsCreateTimeLabel),
                       subtitle: Text(_formatTimeOfDay(_weeklyTime)),
                       onTap: _loading
                           ? null
@@ -31641,11 +36017,11 @@ class _CreateCommunityPrayerRunSheetState extends State<_CreateCommunityPrayerRu
                 DropdownMenuItem<int>(value: 60, child: Text('60 min')),
               ],
               onChanged: _loading ? null : (v) => setState(() => _durationMinutes = v ?? 60),
-              decoration: const InputDecoration(labelText: 'Duração'),
+              decoration: InputDecoration(labelText: t(context).prayerRunsCreateDurationLabel),
             ),
             const SizedBox(height: 14),
             PrimaryButton(
-              label: 'Criar',
+              label: t(context).commonCreate,
               loading: _loading,
               onPressed: _loading
                   ? null
@@ -31659,12 +36035,12 @@ class _CreateCommunityPrayerRunSheetState extends State<_CreateCommunityPrayerRu
                       }
                       final assignedId = _assignedUserId;
                       if (assignedId == null || assignedId.trim().isEmpty) {
-                        showInfoSnackBar(context, 'Selecione um responsável');
+                        showInfoSnackBar(context, t(context).prayerRunsCreateSelectAssignee);
                         return;
                       }
                       setState(() => _loading = true);
                       try {
-                        final title = _title.text.trim().isEmpty ? 'Escala de oração' : _title.text.trim();
+                        final title = _title.text.trim().isEmpty ? t(context).prayerRunDefaultTitle : _title.text.trim();
                         final tzName = (UserLocalePrefsScope.of(context).value.timezoneName ?? '').trim();
                         final timezone = tzName.isEmpty ? 'UTC' : tzName;
                         dynamic result;
@@ -31722,7 +36098,11 @@ class _CreateCommunityPrayerRunSheetState extends State<_CreateCommunityPrayerRu
                           showErrorSnackBar(context, onRetry: () {});
                           return;
                         }
-                        showAtalaiaSnackBar(context, 'Algo deu errado: $short', kind: AtalaiaSnackKind.error);
+                        showAtalaiaSnackBar(
+                          context,
+                          t(context).commonSomethingWentWrongWithReason(short),
+                          kind: AtalaiaSnackKind.error,
+                        );
                       }
                     },
             ),
@@ -31775,8 +36155,8 @@ class _CommunityEventsScreenState extends State<CommunityEventsScreen> {
         final c = repo.findCommunity(widget.args.communityId);
         if (c == null) {
           return Scaffold(
-            appBar: AppBar(title: const Text('Eventos')),
-            body: const Center(child: Text('Comunidade não encontrada')),
+            appBar: AppBar(title: Text(t(context).communityEventsTitle)),
+            body: Center(child: Text(t(context).communityNotFound)),
           );
         }
 
@@ -31786,7 +36166,7 @@ class _CommunityEventsScreenState extends State<CommunityEventsScreen> {
 
         return Scaffold(
           appBar: AppBar(
-            title: Text('${c.name} • Eventos'),
+            title: Text(t(context).communityEventsTitleWithCommunity(c.name)),
             actions: [
               if (canCreate)
                 IconButton(
@@ -31813,7 +36193,7 @@ class _CommunityEventsScreenState extends State<CommunityEventsScreen> {
                     physics: const AlwaysScrollableScrollPhysics(),
                     children: [
                       SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
-                      const EmptyState(icon: Icons.event_outlined, title: 'Nenhum evento por enquanto.'),
+                      EmptyState(icon: Icons.event_outlined, title: t(context).communityEventsEmpty),
                     ],
                   )
                 : ListView.separated(
@@ -31905,33 +36285,33 @@ class _CreateCommunityEventSheetState extends State<_CreateCommunityEventSheet> 
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text('Criar evento', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
+            Text(t(context).communityEventCreateSheetTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
             const SizedBox(height: 12),
             AtalaiaTextField(
               controller: _title,
-              labelText: 'Título',
-              hintText: 'Ex.: Vigília de oração',
+              labelText: t(context).communityEventCreateTitleLabel,
+              hintText: t(context).communityEventCreateTitleHint,
               onChanged: (_) => setState(() {}),
             ),
             const SizedBox(height: 10),
             AtalaiaTextField(
               controller: _description,
-              labelText: 'Descrição',
-              hintText: 'Detalhes do evento…',
+              labelText: t(context).communityEventCreateDescriptionLabel,
+              hintText: t(context).communityEventCreateDescriptionHint,
               maxLines: 4,
               minLines: 2,
             ),
             const SizedBox(height: 10),
             AtalaiaTextField(
               controller: _location,
-              labelText: 'Local',
-              hintText: 'Endereço / link',
+              labelText: t(context).communityEventCreateLocationLabel,
+              hintText: t(context).communityEventCreateLocationHint,
             ),
             const SizedBox(height: 10),
             ListTile(
               contentPadding: EdgeInsets.zero,
               leading: const Icon(Icons.schedule),
-              title: const Text('Início'),
+              title: Text(t(context).communityEventCreateStartLabel),
               subtitle: Text(_formatShort(_start)),
               onTap: _loading
                   ? null
@@ -31944,7 +36324,7 @@ class _CreateCommunityEventSheetState extends State<_CreateCommunityEventSheet> 
             ListTile(
               contentPadding: EdgeInsets.zero,
               leading: const Icon(Icons.schedule_outlined),
-              title: const Text('Fim (opcional)'),
+              title: Text(t(context).communityEventCreateEndOptionalLabel),
               subtitle: Text(_end == null ? '—' : _formatShort(_end!)),
               onTap: _loading
                   ? null
@@ -31963,7 +36343,7 @@ class _CreateCommunityEventSheetState extends State<_CreateCommunityEventSheet> 
             ),
             const SizedBox(height: 14),
             PrimaryButton(
-              label: 'Criar',
+              label: t(context).communityEventCreateSubmit,
               loading: _loading,
               onPressed: _loading || !_valid
                   ? null
@@ -32155,15 +36535,17 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
       builder: (context, _) {
         final c = repo.findCommunity(widget.args.communityId);
         if (c == null) {
+          final l10n = t(context);
           return Scaffold(
-            appBar: AppBar(title: const Text('Comunidade')),
-            body: const Center(child: Text('Comunidade não encontrada')),
+            appBar: AppBar(title: Text(l10n.communityTitle)),
+            body: Center(child: Text(l10n.communityNotFound)),
           );
         }
 
         final s = session.value;
         final isAuthenticated = s.isAuthenticated;
         final cs = Theme.of(context).colorScheme;
+        final l10n = t(context);
         final viewerId = s is AuthSession ? s.userId : null;
         if (viewerId != null && repo.supabase != null && !repo.isOffline) {
           unawaited(repo.refreshCommunityMembers(c.id));
@@ -32175,8 +36557,8 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
         final prayerSum = posts.fold<int>(0, (sum, p) => sum + p.prayerCount);
 
         final primaryLabel = switch (c.viewerStatus) {
-          CommunityViewerStatus.none => c.isClosed ? 'Solicitar entrada' : 'Entrar',
-          CommunityViewerStatus.pending => 'Solicitação enviada',
+          CommunityViewerStatus.none => c.isClosed ? l10n.communityRequestEntry : l10n.communityJoin,
+          CommunityViewerStatus.pending => l10n.communityRequestSent,
           CommunityViewerStatus.approved => null,
         };
 
@@ -32187,7 +36569,7 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
               if (c.viewerStatus == CommunityViewerStatus.approved && s is AuthSession && !repo.isOffline)
                 IconButton(
                   icon: const Icon(Icons.add),
-                  tooltip: 'Criar post',
+                  tooltip: l10n.communityCreatePost,
                   onPressed: () {
                     Navigator.of(context).push(
                       MaterialPageRoute<void>(
@@ -32246,7 +36628,7 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
                                             children: [
                                               Expanded(
                                                 child: _StatPill(
-                                                  label: 'Membros',
+                                                  label: t(context).communityMembersTitle,
                                                   value: c.memberCount.toString(),
                                                   cs: cs,
                                                   onTap: () {
@@ -32260,7 +36642,7 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
                                               const SizedBox(width: 10),
                                               Expanded(
                                                 child: _StatPill(
-                                                  label: 'Orações',
+                                                  label: t(context).regionPrayersTitleShort,
                                                   value: prayerSum.toString(),
                                                   cs: cs,
                                                   onTap: () {
@@ -32283,7 +36665,7 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
                                   SizedBox(
                                     width: double.infinity,
                                     child: SecondaryButton(
-                                      label: 'Editar comunidade',
+                                      label: t(context).communityEditTitle,
                                       onPressed: () {
                                         Navigator.of(context).pushNamed(
                                           Routes.editCommunity,
@@ -32307,11 +36689,11 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  const Row(
+                                  Row(
                                     children: [
-                                      Icon(Icons.info_outline, size: 18),
-                                      SizedBox(width: 8),
-                                      Text('Descrição', style: TextStyle(fontWeight: FontWeight.w800)),
+                                      const Icon(Icons.info_outline, size: 18),
+                                      const SizedBox(width: 8),
+                                      Text(t(context).communityDescription, style: const TextStyle(fontWeight: FontWeight.w800)),
                                     ],
                                   ),
                                   const SizedBox(height: 10),
@@ -32330,16 +36712,16 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Row(
+                                Row(
                                   children: [
-                                    Icon(Icons.rule_outlined, size: 18),
-                                    SizedBox(width: 8),
-                                    Text('Regras', style: TextStyle(fontWeight: FontWeight.w800)),
+                                    const Icon(Icons.rule_outlined, size: 18),
+                                    const SizedBox(width: 8),
+                                    Text(t(context).communityRules, style: const TextStyle(fontWeight: FontWeight.w800)),
                                   ],
                                 ),
                                 const SizedBox(height: 10),
                                 if (c.rules.isEmpty)
-                                  Text('Sem regras por enquanto.', style: TextStyle(color: cs.outline))
+                                  Text(t(context).communityNoRulesYet, style: TextStyle(color: cs.outline))
                                 else
                                   ...c.rules.map(
                                     (r) => Padding(
@@ -32359,7 +36741,7 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
                                 ? null
                                 : () {
                                     if (!isAuthenticated) {
-                                      showLoginSnackBar(context, message: 'Entre para continuar');
+                                      showLoginSnackBar(context, message: t(context).settingsSignInToContinue);
                                       return;
                                     }
 
@@ -32371,7 +36753,7 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
                                           RepoScope.of(context).requestCommunityJoin(c.id, isAuthenticated: true);
                                           showInfoSnackBar(
                                             context,
-                                            c.isClosed ? 'Solicitação enviada' : 'Você entrou na comunidade',
+                                            c.isClosed ? t(context).communityRequestSent : t(context).communityJoinedMessage,
                                           );
                                         },
                                       );
@@ -32381,7 +36763,7 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
                                     RepoScope.of(context).requestCommunityJoin(c.id, isAuthenticated: true);
                                     showInfoSnackBar(
                                       context,
-                                      c.isClosed ? 'Solicitação enviada' : 'Você entrou na comunidade',
+                                      c.isClosed ? t(context).communityRequestSent : t(context).communityJoinedMessage,
                                     );
                                   },
                           ),
@@ -32389,38 +36771,40 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
                         if (c.viewerStatus == CommunityViewerStatus.pending) ...[
                           const SizedBox(height: 10),
                           SecondaryButton(
-                            label: 'Cancelar solicitação',
+                            label: t(context).communityCancelRequest,
                             onPressed: () {
                               if (!isAuthenticated) {
-                                showLoginSnackBar(context, message: 'Entre para continuar');
+                                showLoginSnackBar(context, message: t(context).settingsSignInToContinue);
                                 return;
                               }
                               RepoScope.of(context).cancelCommunityJoinRequest(c.id, isAuthenticated: true);
-                              showInfoSnackBar(context, 'Solicitação cancelada');
+                              showInfoSnackBar(context, t(context).communityRequestCanceled);
                             },
                           ),
                         ] else if (c.viewerStatus == CommunityViewerStatus.none && c.isClosed) ...[
                           const SizedBox(height: 10),
                           SecondaryButton(
-                            label: 'Enviar mensagem ao admin',
+                            label: t(context).communityMessageAdmin,
                             onPressed: () {
                               if (!isAuthenticated) {
-                                showLoginSnackBar(context, message: 'Entre para enviar mensagem');
+                                showLoginSnackBar(context, message: t(context).communitySignInToMessage);
                                 return;
                               }
+                              final l10n = t(context);
                               final admin = RepoScope.of(context).findProfile(c.ownerId);
                               if (admin == null) {
-                                showInfoSnackBar(context, 'Admin indisponível (demo)');
+                                showInfoSnackBar(context, l10n.communityAdminUnavailableDemo);
                                 return;
                               }
-                              final t = RepoScope.of(context).openOrCreateThreadWith(admin);
+                              final thread = RepoScope.of(context).openOrCreateThreadWith(admin);
                               Navigator.of(context).pushNamed(
                                 Routes.chat,
                                 arguments: ChatArgs(
-                                  threadId: t.id,
-                                  peerName: t.peerName,
-                                  peerUsername: t.peerUsername,
-                                  peerIsVerified: t.peerIsVerified,
+                                  threadId: thread.id,
+                                  peerName: thread.peerName,
+                                  peerUsername: thread.peerUsername,
+                                  peerIsVerified: thread.peerIsVerified,
+                                  peerAvatarUrl: admin.avatarUrl,
                                 ),
                               );
                             },
@@ -32431,21 +36815,21 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
                           children: [
                             Expanded(
                               child: SecondaryButton(
-                                label: 'Trocar comunidade',
+                                label: t(context).communitySwitch,
                                 onPressed: _openCommunitySwitcherSheet,
                               ),
                             ),
                             const SizedBox(width: 10),
                             Expanded(
                               child: SecondaryButton(
-                                label: 'Sair da comunidade',
+                                label: t(context).communityLeave,
                                 onPressed: () => Navigator.of(context).pop(true),
                               ),
                             ),
                           ],
                         ),
                         const SizedBox(height: 14),
-                        const Text('Feed', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                        Text(t(context).communityFeedSectionTitle, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
                         const SizedBox(height: 8),
                       ],
                     ),
@@ -32459,8 +36843,8 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
                           padding: const EdgeInsets.fromLTRB(12, 0, 12, 18),
                           child: Center(
                             child: PrimaryButton(
-                              label: 'Entrar para ver o feed',
-                              onPressed: () => showLoginSnackBar(context, message: 'Entre para ver o feed'),
+                              label: t(context).communitySignInToSeeFeed,
+                              onPressed: () => showLoginSnackBar(context, message: t(context).communitySignInToSeeFeed),
                             ),
                           ),
                         ),
@@ -32474,10 +36858,7 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
                           child: Column(
                             children: [
                               SizedBox(height: MediaQuery.sizeOf(context).height * 0.04),
-                              const EmptyState(
-                                icon: Icons.lock_outline,
-                                title: 'Apenas membros veem este feed',
-                              ),
+                              EmptyState(icon: Icons.lock_outline, title: t(context).communityMembersOnlyFeed),
                             ],
                           ),
                         ),
@@ -32508,7 +36889,7 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
                           child: Column(
                             children: [
                               SizedBox(height: MediaQuery.sizeOf(context).height * 0.06),
-                              const EmptyState(icon: Icons.feed_outlined, title: 'Nenhum post nesta comunidade ainda.'),
+                              EmptyState(icon: Icons.feed_outlined, title: t(context).communityNoPostsYet),
                             ],
                           ),
                         ),
@@ -32562,7 +36943,7 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
                             onPray: () {
                               if (!useRemote) {
                                 repo.togglePrayer(post.id, isAuthenticated: true);
-                                showInfoSnackBar(context, 'Oração registrada');
+                    showInfoSnackBar(context, t(context).prayerRegisteredSnack);
                                 return;
                               }
                               final idx = _feedRemotePosts.indexWhere((p) => p.id == post.id);
@@ -32578,7 +36959,7 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
                               list[idx] = p.copyWith(viewerHasPrayed: true, prayerCount: p.prayerCount + 1);
                               setState(() => _feedRemotePosts = List.unmodifiable(list));
                               unawaited(repo.addPrayerOnPostSupabase(postId: p.id));
-                              showInfoSnackBar(context, 'Oração registrada');
+                  showInfoSnackBar(context, t(context).prayerRegisteredSnack);
                             },
                             onComment: () {
                               Navigator.of(context).pushNamed(
@@ -32593,7 +36974,7 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
                               if (!useRemote) {
                                 final willSave = !post.viewerHasSaved;
                                 repo.toggleSave(post.id, isAuthenticated: true);
-                                if (willSave) showInfoSnackBar(context, 'Salvo');
+                    if (willSave) showInfoSnackBar(context, t(context).commonSaved);
                                 return;
                               }
                               final idx = _feedRemotePosts.indexWhere((p) => p.id == post.id);
@@ -32602,7 +36983,7 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
                               final list = _feedRemotePosts.toList(growable: true);
                               list[idx] = p.copyWith(viewerHasSaved: !p.viewerHasSaved);
                               setState(() => _feedRemotePosts = List.unmodifiable(list));
-                              if (!p.viewerHasSaved) showInfoSnackBar(context, 'Salvo');
+                  if (!p.viewerHasSaved) showInfoSnackBar(context, t(context).commonSaved);
                             },
                           );
                         },
@@ -32662,29 +37043,29 @@ class _CommunityMapScreenState extends State<CommunityMapScreen> {
             children: [
               ListTile(
                 leading: const Icon(Icons.open_in_new),
-                title: const Text('Abrir pedido'),
+                title: Text(t(ctx).prayerRequestActionOpen),
                 onTap: () => Navigator.of(ctx).pop('open'),
               ),
               ListTile(
                 leading: const Icon(Icons.volunteer_activism_outlined),
-                title: const Text('Orar'),
+                title: Text(t(ctx).prayerRequestActionPray),
                 onTap: () => Navigator.of(ctx).pop('pray'),
               ),
               ListTile(
                 leading: Icon(isHidden ? Icons.visibility_outlined : Icons.visibility_off_outlined),
-                title: Text(isHidden ? 'Reexibir' : 'Ocultar'),
+                title: Text(isHidden ? t(ctx).commonUnhide : t(ctx).commonHide),
                 onTap: () => Navigator.of(ctx).pop(isHidden ? 'unhide' : 'hide'),
               ),
               if (reportCount > 0)
                 ListTile(
                   leading: const Icon(Icons.flag_outlined),
-                  title: Text('Ver denúncias ($reportCount)'),
+                  title: Text(t(ctx).reportsViewCount(reportCount)),
                   onTap: () => Navigator.of(ctx).pop('reports'),
                 ),
               const Divider(height: 18),
               ListTile(
                 leading: const Icon(Icons.copy_all_outlined),
-                title: const Text('Copiar ID do pedido'),
+                title: Text(t(ctx).prayerRequestCopyId),
                 onTap: () => Navigator.of(ctx).pop('copy'),
               ),
               const SizedBox(height: 8),
@@ -32704,45 +37085,46 @@ class _CommunityMapScreenState extends State<CommunityMapScreen> {
         );
       case 'pray':
         repo.togglePrayer(post.id, isAuthenticated: true);
-        showInfoSnackBar(context, 'Oração registrada');
+        showInfoSnackBar(context, t(context).prayerRegisteredSnack);
       case 'hide':
         repo.hidePost(post.id);
         showAtalaiaSnackBar(
           context,
-          'Post ocultado',
-          actionLabel: 'Desfazer',
+          t(context).postSnackPostHidden,
+          actionLabel: t(context).postSnackUndo,
           onAction: () => repo.unhidePost(post.id),
         );
       case 'unhide':
         repo.unhidePost(post.id);
-        showInfoSnackBar(context, 'Post reexibido');
+        showInfoSnackBar(context, t(context).postSnackPostUnhidden);
       case 'reports':
         if (reportsForPost.isEmpty) return;
         unawaited(
           showAtalaiaBottomSheet<void>(
             context,
             builder: (ctx) {
+              final l10n = t(ctx);
               return SafeArea(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const ListTile(
-                      title: Text('Denúncias', style: TextStyle(fontWeight: FontWeight.w900)),
+                    ListTile(
+                      title: Text(l10n.reportsTitle, style: const TextStyle(fontWeight: FontWeight.w900)),
                     ),
                     ...reportsForPost.map(
                       (r) {
                         final statusLabel = switch (r.status) {
-                          ReportStatus.open => 'aberta',
-                          ReportStatus.reviewing => 'em análise',
-                          ReportStatus.resolved => 'resolvida',
-                          ReportStatus.dismissed => 'dispensada',
+                          ReportStatus.open => l10n.reportsStatusOpen,
+                          ReportStatus.reviewing => l10n.reportsStatusReviewing,
+                          ReportStatus.resolved => l10n.reportsStatusResolved,
+                          ReportStatus.dismissed => l10n.reportsStatusDismissed,
                         };
                         final desc = (r.description ?? '').trim();
                         return ListTile(
                           leading: const Icon(Icons.flag_outlined),
-                          title: Text(r.reason.isEmpty ? 'Sem motivo' : r.reason),
+                          title: Text(r.reason.isEmpty ? l10n.reportsNoReason : r.reason),
                           subtitle: Text(
-                            'Status: $statusLabel${desc.isEmpty ? '' : '\n$desc'}',
+                            '${l10n.reportsStatus(statusLabel)}${desc.isEmpty ? '' : '\n$desc'}',
                             maxLines: 3,
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -32759,7 +37141,7 @@ class _CommunityMapScreenState extends State<CommunityMapScreen> {
       case 'copy':
         await Clipboard.setData(ClipboardData(text: post.id));
         if (!context.mounted) return;
-        showInfoSnackBar(context, 'ID copiado');
+        showInfoSnackBar(context, t(context).commonIdCopied);
       default:
         return;
     }
@@ -32777,8 +37159,8 @@ class _CommunityMapScreenState extends State<CommunityMapScreen> {
         final c = repo.findCommunity(widget.args.communityId);
         if (c == null) {
           return Scaffold(
-            appBar: AppBar(title: const Text('Mapa da Comunidade')),
-            body: const Center(child: Text('Comunidade não encontrada')),
+            appBar: AppBar(title: Text(t(context).communityMapTitle)),
+            body: Center(child: Text(t(context).communityNotFound)),
           );
         }
 
@@ -32800,7 +37182,7 @@ class _CommunityMapScreenState extends State<CommunityMapScreen> {
                 Padding(
                   padding: const EdgeInsets.only(right: 6),
                   child: IconButton(
-                    tooltip: 'Novo pedido',
+                    tooltip: t(context).communityRequestsScreenNewRequestTooltip,
                     icon: const Icon(Icons.add),
                     onPressed: repo.isOffline
                         ? null
@@ -32816,9 +37198,13 @@ class _CommunityMapScreenState extends State<CommunityMapScreen> {
               ],
               bottom: TabBar(
                 tabs: [
-                  const Tab(text: 'Mapa'),
-                  Tab(text: requestPosts.isEmpty ? 'Pedidos' : 'Pedidos (${requestPosts.length})'),
-                  if (canModerate) const Tab(text: 'Triagem'),
+                  Tab(text: t(context).communityRequestsScreenTabMap),
+                  Tab(
+                    text: requestPosts.isEmpty
+                        ? t(context).communityRequestsScreenTabRequests
+                        : t(context).communityRequestsScreenTabRequestsWithCount(requestPosts.length),
+                  ),
+                  if (canModerate) Tab(text: t(context).communityRequestsScreenTabTriage),
                 ],
               ),
             ),
@@ -32828,7 +37214,7 @@ class _CommunityMapScreenState extends State<CommunityMapScreen> {
                 requestPosts.isEmpty
                     ? Center(
                         child: Text(
-                          'Nenhum pedido nesta comunidade ainda.',
+                          t(context).communityRequestsTriageEmptyCommunity,
                           style: TextStyle(color: Theme.of(context).colorScheme.outline),
                         ),
                       )
@@ -32849,7 +37235,7 @@ class _CommunityMapScreenState extends State<CommunityMapScreen> {
                             onLike: () => repo.toggleLike(post.id, isAuthenticated: true),
                             onPray: () {
                               repo.togglePrayer(post.id, isAuthenticated: true);
-                              showInfoSnackBar(context, 'Oração registrada');
+                              showInfoSnackBar(context, t(context).prayerRegisteredSnack);
                             },
                             onComment: () {
                               Navigator.of(context).pushNamed(
@@ -32863,7 +37249,7 @@ class _CommunityMapScreenState extends State<CommunityMapScreen> {
                             onSave: () {
                               final willSave = !post.viewerHasSaved;
                               repo.toggleSave(post.id, isAuthenticated: true);
-                              if (willSave) showInfoSnackBar(context, 'Salvo');
+                              if (willSave) showInfoSnackBar(context, t(context).commonSaved);
                             },
                           );
                         },
@@ -32910,10 +37296,10 @@ class _CommunityMapScreenState extends State<CommunityMapScreen> {
 
                       String labelForSort(_CommunityRequestTriageSort s) {
                         return switch (s) {
-                          _CommunityRequestTriageSort.newest => 'Mais recentes',
-                          _CommunityRequestTriageSort.leastPrayed => 'Menos orações',
-                          _CommunityRequestTriageSort.mostPrayed => 'Mais orações',
-                          _CommunityRequestTriageSort.mostCommented => 'Mais comentários',
+                          _CommunityRequestTriageSort.newest => t(context).communityRequestsTriageSortNewest,
+                          _CommunityRequestTriageSort.leastPrayed => t(context).communityRequestsTriageSortLeastPrayed,
+                          _CommunityRequestTriageSort.mostPrayed => t(context).communityRequestsTriageSortMostPrayed,
+                          _CommunityRequestTriageSort.mostCommented => t(context).communityRequestsTriageSortMostCommented,
                         };
                       }
 
@@ -32923,7 +37309,7 @@ class _CommunityMapScreenState extends State<CommunityMapScreen> {
                             padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
                             child: SearchField(
                               controller: _triageSearch,
-                              hintText: 'Buscar pedidos',
+                              hintText: t(context).communityRequestsTriageSearchHint,
                               onChanged: (_) => setState(() {}),
                             ),
                           ),
@@ -32933,10 +37319,16 @@ class _CommunityMapScreenState extends State<CommunityMapScreen> {
                               children: [
                                 Expanded(
                                   child: SegmentedButton<_CommunityRequestTriageFilter>(
-                                    segments: const [
-                                      ButtonSegment(value: _CommunityRequestTriageFilter.all, label: Text('Todos')),
-                                      ButtonSegment(value: _CommunityRequestTriageFilter.reported, label: Text('Denúncias')),
-                                      ButtonSegment(value: _CommunityRequestTriageFilter.hidden, label: Text('Ocultos')),
+                                    segments: [
+                                      ButtonSegment(value: _CommunityRequestTriageFilter.all, label: Text(t(context).communityRequestsTriageFilterAll)),
+                                      ButtonSegment(
+                                        value: _CommunityRequestTriageFilter.reported,
+                                        label: Text(t(context).communityRequestsTriageFilterReported),
+                                      ),
+                                      ButtonSegment(
+                                        value: _CommunityRequestTriageFilter.hidden,
+                                        label: Text(t(context).communityRequestsTriageFilterHidden),
+                                      ),
                                     ],
                                     selected: {_triageFilter},
                                     onSelectionChanged: (s) => setState(() => _triageFilter = s.first),
@@ -32944,7 +37336,7 @@ class _CommunityMapScreenState extends State<CommunityMapScreen> {
                                 ),
                                 const SizedBox(width: 8),
                                 PopupMenuButton<_CommunityRequestTriageSort>(
-                                  tooltip: 'Ordenar',
+                                  tooltip: t(context).communityRequestsTriageSortTooltip,
                                   icon: const Icon(Icons.sort),
                                   initialValue: _triageSort,
                                   onSelected: (v) => setState(() => _triageSort = v),
@@ -32961,10 +37353,10 @@ class _CommunityMapScreenState extends State<CommunityMapScreen> {
                                 ? Center(
                                     child: Text(
                                       _triageFilter == _CommunityRequestTriageFilter.reported
-                                          ? 'Nenhuma denúncia em pedidos.'
+                                          ? t(context).communityRequestsTriageEmptyReported
                                           : _triageFilter == _CommunityRequestTriageFilter.hidden
-                                              ? 'Nenhum pedido oculto.'
-                                              : 'Nenhum pedido nesta comunidade ainda.',
+                                              ? t(context).communityRequestsTriageEmptyHidden
+                                              : t(context).communityRequestsTriageEmptyCommunity,
                                       style: TextStyle(color: Theme.of(context).colorScheme.outline),
                                     ),
                                   )
@@ -32975,7 +37367,7 @@ class _CommunityMapScreenState extends State<CommunityMapScreen> {
                                     itemBuilder: (context, index) {
                                       final post = filtered[index];
                                       final firstLine = post.body.trim().split('\n').first.trim();
-                                      final title = firstLine.isEmpty ? 'Pedido de oração' : firstLine;
+                                      final title = firstLine.isEmpty ? t(context).communityRequestsTriagePrayerRequestFallback : firstLine;
                                       final shortTitle = title.length > 120 ? '${title.substring(0, 120)}…' : title;
                                       final when = _formatRelativeTimeForUser(context, post.createdAt);
                                       final reportCount = reportCountByPostId[post.id] ?? 0;
@@ -33019,7 +37411,7 @@ class _CommunityMapScreenState extends State<CommunityMapScreen> {
                                                   if (isHidden)
                                                     _TriageMetricChip(
                                                       icon: Icons.visibility_off_outlined,
-                                                      label: 'Oculto',
+                                                      label: t(context).communityRequestsTriageHiddenChip,
                                                       fg: cs.onSurfaceVariant,
                                                       bg: cs.surfaceContainerHighest,
                                                     ),
@@ -33113,6 +37505,7 @@ class _ExpandableTextState extends State<_ExpandableText> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = t(context);
     return LayoutBuilder(
       builder: (context, constraints) {
         final tp = TextPainter(
@@ -33135,7 +37528,7 @@ class _ExpandableTextState extends State<_ExpandableText> {
               Align(
                 alignment: Alignment.centerLeft,
                 child: AtalaiaTextButton(
-                  label: _expanded ? 'Ver menos' : 'Ver mais',
+                  label: _expanded ? l10n.commonSeeLess : l10n.commonSeeMore,
                   onPressed: () => setState(() => _expanded = !_expanded),
                 ),
               ),
@@ -33161,11 +37554,11 @@ class ProfileScreen extends StatelessWidget {
       builder: (context, value, _) {
         if (value is! AuthSession) {
           final content = Center(
-            child: PrimaryButton(label: 'Entrar para ver seu perfil', onPressed: () => showCtaSnackBar(context)),
+            child: PrimaryButton(label: t(context).profileSignInToView, onPressed: () => showCtaSnackBar(context)),
           );
           if (embedded) return content;
           return Scaffold(
-            appBar: AppBar(title: const Text('Perfil', style: TextStyle(fontWeight: FontWeight.w800))),
+            appBar: AppBar(title: Text(t(context).profileTitle, style: const TextStyle(fontWeight: FontWeight.w800))),
             body: content,
           );
         }
@@ -33204,21 +37597,22 @@ class UserProfileScreen extends StatelessWidget {
     return AnimatedBuilder(
       animation: Listenable.merge([repo, session]),
       builder: (context, _) {
+        final l10n = t(context);
         final profile = repo.profileForUserId(args.userId);
         if (profile == null) {
-          if (embedded) return const Center(child: Text('Perfil não encontrado'));
+          if (embedded) return Center(child: Text(l10n.profileNotFound));
           return Scaffold(
             appBar: AppBar(
               leading: showBack
                   ? AtalaiaIconButton(
                       icon: Icons.arrow_back,
-                      label: 'Voltar',
+                      label: l10n.commonBack,
                       onPressed: () => Navigator.of(context).maybePop(),
                     )
                   : null,
-              title: const Text('Perfil'),
+              title: Text(l10n.profileTitle),
             ),
-            body: const Center(child: Text('Perfil não encontrado')),
+            body: Center(child: Text(l10n.profileNotFound)),
           );
         }
 
@@ -33265,24 +37659,24 @@ class UserProfileScreen extends StatelessWidget {
                   reportedUserId: profile.userId,
                 );
                 if (!context.mounted) return;
-                showInfoSnackBar(context, 'Denúncia enviada');
+                showInfoSnackBar(context, l10n.postSnackReportSent);
               }
             case 'copy':
-              showInfoSnackBar(context, 'Link copiado');
+              showInfoSnackBar(context, l10n.commonLinkCopied);
           }
         }
 
         List<PopupMenuEntry<String>> menuItems() {
           if (isMe) {
-            return const [
-              PopupMenuItem(value: 'settings', child: Text('Configurações')),
-              PopupMenuItem(value: 'verification', child: Text('Verificação')),
-              PopupMenuItem(value: 'logout', child: Text('Sair')),
+            return [
+              PopupMenuItem(value: 'settings', child: Text(l10n.profileSettings)),
+              PopupMenuItem(value: 'verification', child: Text(l10n.profileVerification)),
+              PopupMenuItem(value: 'logout', child: Text(l10n.profileLogout)),
             ];
           }
-          return const [
-            PopupMenuItem(value: 'report', child: Text('Denunciar')),
-            PopupMenuItem(value: 'copy', child: Text('Copiar link do perfil')),
+          return [
+            PopupMenuItem(value: 'report', child: Text(l10n.profileReport)),
+            PopupMenuItem(value: 'copy', child: Text(l10n.profileCopyProfileLink)),
           ];
         }
 
@@ -33297,19 +37691,33 @@ class UserProfileScreen extends StatelessWidget {
                 isMe: isMe,
                 isAuthenticated: isAuthenticated,
                 isFollowing: repo.isFollowingUser(profile.userId),
+                followLoading: repo.isFollowTogglingUser(profile.userId),
                 onToggleFollow: () {
                   if (!isAuthenticated) {
-                    return showLoginSnackBar(context, message: 'Entre para continuar');
+                    return showLoginSnackBar(context, message: l10n.profileFollowToggleSignIn);
                   }
-                  repo.toggleFollowUser(profile.userId, isAuthenticated: true);
-                  showInfoSnackBar(
-                    context,
-                    repo.isFollowingUser(profile.userId) ? 'Seguindo' : 'Deixou de seguir',
-                  );
+                  if (repo.isFollowTogglingUser(profile.userId)) return;
+                  unawaited(() async {
+                    final ok = await repo.toggleFollowUser(profile.userId, isAuthenticated: true);
+                    if (!context.mounted) return;
+                    if (!ok) {
+                      final msg = repo.lastFollowToggleError?.trim();
+                      showAtalaiaSnackBar(
+                        context,
+                        msg == null || msg.isEmpty ? t(context).commonSomethingWentWrong : msg,
+                        kind: AtalaiaSnackKind.error,
+                      );
+                      return;
+                    }
+                    showInfoSnackBar(
+                      context,
+                      repo.isFollowingUser(profile.userId) ? l10n.profileSnackFollowing : l10n.profileSnackUnfollowed,
+                    );
+                  }());
                 },
                 onMessage: () {
                   if (!isAuthenticated) {
-                    return showLoginSnackBar(context, message: 'Entre para continuar');
+                    return showLoginSnackBar(context, message: l10n.profileFollowToggleSignIn);
                   }
                   final t = repo.openOrCreateThreadWith(profile);
                   Navigator.of(context).pushNamed(
@@ -33319,6 +37727,7 @@ class UserProfileScreen extends StatelessWidget {
                       peerName: t.peerName,
                       peerUsername: t.peerUsername,
                       peerIsVerified: t.peerIsVerified,
+                      peerAvatarUrl: profile.avatarUrl,
                     ),
                   );
                 },
@@ -33412,7 +37821,7 @@ class UserProfileScreen extends StatelessWidget {
             leading: showBack
                 ? AtalaiaIconButton(
                     icon: Icons.arrow_back,
-                    label: 'Voltar',
+                    label: t(context).commonBack,
                     onPressed: () => Navigator.of(context).maybePop(),
                   )
                 : null,
@@ -33447,6 +37856,7 @@ class _ProfileHeader extends StatelessWidget {
     required this.isMe,
     required this.isAuthenticated,
     required this.isFollowing,
+    required this.followLoading,
     required this.onToggleFollow,
     required this.onMessage,
     required this.onEditProfile,
@@ -33456,14 +37866,16 @@ class _ProfileHeader extends StatelessWidget {
   final bool isMe;
   final bool isAuthenticated;
   final bool isFollowing;
+  final bool followLoading;
   final VoidCallback onToggleFollow;
   final VoidCallback onMessage;
   final VoidCallback onEditProfile;
 
   @override
   Widget build(BuildContext context) {
+    final l10n = t(context);
     final cs = Theme.of(context).colorScheme;
-    final displayName = _displayNameForProfile(profile);
+    final displayName = _displayNameForProfile(profile, userFallback: l10n.commonUserFallback);
     final displayUsername = _usernameForProfile(profile, userId: profile.userId);
     return Card(
       color: cs.surface,
@@ -33519,7 +37931,7 @@ class _ProfileHeader extends StatelessWidget {
                       if (profile.verificationType != VerificationType.none) ...[
                         const SizedBox(height: 8),
                         Text(
-                          _verificationTypeLabel(profile.verificationType),
+                          _verificationTypeLabel(context, profile.verificationType),
                           style: TextStyle(color: cs.onSurfaceVariant, fontWeight: FontWeight.w800),
                         ),
                       ],
@@ -33545,19 +37957,19 @@ class _ProfileHeader extends StatelessWidget {
             if (isMe)
               SizedBox(
                 width: double.infinity,
-                child: SecondaryButton(label: 'Editar perfil', onPressed: onEditProfile),
+                child: SecondaryButton(label: l10n.profileEditProfile, onPressed: onEditProfile),
               )
             else
               Row(
                 children: [
                   Expanded(
                     child: isFollowing
-                        ? SecondaryButton(label: 'Seguindo', onPressed: onToggleFollow)
-                        : PrimaryButton(label: 'Seguir', onPressed: onToggleFollow),
+                        ? SecondaryButton(label: l10n.profileFollowing, loading: followLoading, onPressed: onToggleFollow)
+                        : PrimaryButton(label: l10n.profileFollow, loading: followLoading, onPressed: onToggleFollow),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: SecondaryButton(label: 'Mensagem', onPressed: onMessage),
+                    child: SecondaryButton(label: l10n.profileMessage, onPressed: onMessage),
                   ),
                 ],
               ),
@@ -33587,6 +37999,7 @@ class _ProfileStatsRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = t(context);
     final cs = Theme.of(context).colorScheme;
     return Card(
       color: cs.surface,
@@ -33600,14 +38013,20 @@ class _ProfileStatsRow extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
         child: Row(
           children: [
-            Expanded(child: _ProfileStat(label: 'Posts', value: postsCount.toString(), onTap: () {})),
-            Expanded(child: _ProfileStat(label: 'Seguidores', value: followersCount.toString(), onTap: onTapFollowers)),
-            Expanded(child: _ProfileStat(label: 'Seguindo', value: followingCount.toString(), onTap: onTapFollowing)),
+            Expanded(child: _ProfileStat(label: l10n.profilePosts, value: postsCount.toString(), onTap: () {})),
+            Expanded(child: _ProfileStat(label: l10n.profileFollowers, value: followersCount.toString(), onTap: onTapFollowers)),
             Expanded(
               child: _ProfileStat(
-                label: 'Orações',
+                label: l10n.profileFollowingLabel,
+                value: followingCount.toString(),
+                onTap: onTapFollowing,
+              ),
+            ),
+            Expanded(
+              child: _ProfileStat(
+                label: l10n.profilePrayers,
                 value: prayersReceivedCount.toString(),
-                onTap: () => showInfoSnackBar(context, 'Orações recebidas'),
+                onTap: () => showInfoSnackBar(context, l10n.profilePrayersReceived),
               ),
             ),
           ],
@@ -33701,8 +38120,8 @@ class _ProfilePostsListState extends State<_ProfilePostsList> {
                     SizedBox(height: MediaQuery.sizeOf(context).height * 0.14),
                     EmptyState(
                       icon: Icons.inbox_outlined,
-                      title: 'Ainda não há posts.',
-                      ctaLabel: widget.canCreate ? 'Criar post' : null,
+                                      title: t(context).feedEmptyPosts,
+                                      ctaLabel: widget.canCreate ? t(context).feedCreatePost : null,
                       onCta: widget.canCreate ? widget.onCreate : null,
                     ),
                   ],
@@ -33731,7 +38150,7 @@ class _ProfilePostsListState extends State<_ProfilePostsList> {
                       onPray: () {
                         if (!widget.isAuthenticated) return showCtaSnackBar(context);
                         repo.togglePrayer(post.id, isAuthenticated: true);
-                        showInfoSnackBar(context, 'Oração registrada');
+                        showInfoSnackBar(context, t(context).prayerRegisteredSnack);
                       },
                       onComment: () {
                         Navigator.of(context).pushNamed(
@@ -33746,7 +38165,7 @@ class _ProfilePostsListState extends State<_ProfilePostsList> {
                         if (!widget.isAuthenticated) return showCtaSnackBar(context);
                         final willSave = !post.viewerHasSaved;
                         repo.toggleSave(post.id, isAuthenticated: true);
-                        if (willSave) showInfoSnackBar(context, 'Salvo');
+                        if (willSave) showInfoSnackBar(context, t(context).commonSaved);
                       },
                     );
                   },
@@ -33849,9 +38268,19 @@ class _FollowersFollowingScreenState extends State<FollowersFollowingScreen> wit
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this, initialIndex: widget.args.initialTab);
-    Future<void>.delayed(const Duration(milliseconds: 260)).then((_) {
-      if (!mounted) return;
-      setState(() => _loading = false);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(() async {
+        final startedAt = DateTime.now();
+        final repo = RepoScope.of(context);
+        await repo.refreshFollowsForUser(widget.args.userId);
+        final elapsed = DateTime.now().difference(startedAt);
+        final minWait = const Duration(milliseconds: 260);
+        if (elapsed < minWait) {
+          await Future<void>.delayed(minWait - elapsed);
+        }
+        if (!mounted) return;
+        setState(() => _loading = false);
+      }());
     });
   }
 
@@ -33872,7 +38301,7 @@ class _FollowersFollowingScreenState extends State<FollowersFollowingScreen> wit
         final isAuthenticated = session.value.isAuthenticated;
         final profile = repo.profileForUserId(widget.args.userId);
         final title = profile == null
-            ? 'Seguidores'
+            ? t(context).profileFollowers
             : '@${_usernameForProfile(profile, userId: profile.userId)}';
 
         final followers = repo.followersForUser(widget.args.userId, query: _query);
@@ -33882,15 +38311,15 @@ class _FollowersFollowingScreenState extends State<FollowersFollowingScreen> wit
           appBar: AppBar(
             leading: AtalaiaIconButton(
               icon: Icons.arrow_back,
-              label: 'Voltar',
+              label: t(context).commonBack,
               onPressed: () => Navigator.of(context).maybePop(),
             ),
             title: Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
             bottom: TabBar(
               controller: _tabController,
-              tabs: const [
-                Tab(text: 'Seguidores'),
-                Tab(text: 'Seguindo'),
+              tabs: [
+                Tab(text: t(context).profileFollowers),
+                Tab(text: t(context).profileFollowingLabel),
               ],
             ),
           ),
@@ -33901,7 +38330,7 @@ class _FollowersFollowingScreenState extends State<FollowersFollowingScreen> wit
                 padding: const EdgeInsets.all(AtalaiaSpacing.md),
                 child: SearchField(
                   controller: _search,
-                  hintText: 'Buscar',
+                  hintText: t(context).commonSearch,
                   onChanged: (v) => setState(() => _query = v),
                 ),
               ),
@@ -33912,13 +38341,13 @@ class _FollowersFollowingScreenState extends State<FollowersFollowingScreen> wit
                     _PeopleList(
                       people: followers,
                       isAuthenticated: isAuthenticated,
-                      emptyLabel: 'Sem seguidores ainda.',
+                      emptyLabel: t(context).followersEmptyFollowers,
                       loading: _loading,
                     ),
                     _PeopleList(
                       people: following,
                       isAuthenticated: isAuthenticated,
-                      emptyLabel: 'Sem seguindo ainda.',
+                      emptyLabel: t(context).followersEmptyFollowing,
                       loading: _loading,
                     ),
                   ],
@@ -34022,13 +38451,13 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
             appBar: AppBar(
               leading: AtalaiaIconButton(
                 icon: Icons.arrow_back,
-                label: 'Voltar',
+                label: t(context).commonBack,
                 onPressed: () => Navigator.of(context).maybePop(),
               ),
-              title: const Text('Editar perfil'),
+              title: Text(t(context).profileEditProfile),
             ),
             body: Center(
-              child: PrimaryButton(label: 'Entrar para continuar', onPressed: () => showCtaSnackBar(context)),
+              child: PrimaryButton(label: t(context).settingsSignInToContinue, onPressed: () => showCtaSnackBar(context)),
             ),
           );
         }
@@ -34039,12 +38468,12 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
             appBar: AppBar(
               leading: AtalaiaIconButton(
                 icon: Icons.arrow_back,
-                label: 'Voltar',
+                label: t(context).commonBack,
                 onPressed: () => Navigator.of(context).maybePop(),
               ),
-              title: const Text('Editar perfil'),
+              title: Text(t(context).profileEditProfile),
             ),
-            body: const Center(child: Text('Perfil não encontrado')),
+            body: Center(child: Text(t(context).profileNotFound)),
           );
         }
 
@@ -34057,7 +38486,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
         final canSave = _isValid() && !_saving;
         final cs = Theme.of(context).colorScheme;
-        final displayName = _displayNameForProfile(profile);
+        final displayName = _displayNameForProfile(profile, userFallback: t(context).commonUserFallback);
         final displayUsername = _usernameForProfile(profile, userId: profile.userId);
 
         Future<void> onSave() async {
@@ -34086,7 +38515,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
             _saving = false;
             _savingProgress = null;
           });
-          showInfoSnackBar(context, 'Perfil atualizado');
+          showInfoSnackBar(context, t(context).profileEditUpdated);
           Navigator.of(context).maybePop();
         }
 
@@ -34094,12 +38523,12 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
           appBar: AppBar(
             leading: AtalaiaIconButton(
               icon: Icons.arrow_back,
-              label: 'Voltar',
+              label: t(context).commonBack,
               onPressed: _saving ? null : () => Navigator.of(context).maybePop(),
             ),
-            title: const Text('Editar perfil', style: TextStyle(fontWeight: FontWeight.w800)),
+            title: Text(t(context).profileEditProfile, style: const TextStyle(fontWeight: FontWeight.w800)),
             actions: [
-              AtalaiaTextButton(label: 'Salvar', onPressed: canSave ? onSave : null),
+              AtalaiaTextButton(label: t(context).commonSave, onPressed: canSave ? onSave : null),
             ],
           ),
           body: ListView(
@@ -34124,7 +38553,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                         ),
                       ),
                       SecondaryButton(
-                        label: 'Alterar foto',
+                        label: t(context).profileEditChangePhoto,
                         onPressed: _saving
                             ? null
                             : () => _changeAvatar(
@@ -34139,16 +38568,16 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               const SizedBox(height: 12),
               AtalaiaTextField(
                 controller: _name,
-                labelText: 'Nome',
-                hintText: 'Seu nome',
+                labelText: t(context).profileEditNameLabel,
+                hintText: t(context).profileEditNameHint,
                 textInputAction: TextInputAction.next,
                 onChanged: (_) => setState(() {}),
               ),
               const SizedBox(height: 12),
               AtalaiaTextField(
                 controller: _bio,
-                labelText: 'Bio',
-                hintText: 'Conte um pouco sobre você…',
+                labelText: t(context).profileEditBioLabel,
+                hintText: t(context).profileEditBioHint,
                 errorText: null,
                 minLines: 3,
                 maxLines: 6,
@@ -34158,8 +38587,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               const SizedBox(height: 12),
               AtalaiaTextField(
                 controller: _church,
-                labelText: 'Igreja (opcional)',
-                hintText: 'Ex.: Assembleia de Deus',
+                labelText: t(context).profileEditChurchOptionalLabel,
+                hintText: t(context).profileEditChurchHint,
                 textInputAction: TextInputAction.done,
                 onChanged: (_) => setState(() {}),
               ),
@@ -34167,7 +38596,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               SizedBox(
                 width: double.infinity,
                 child: PrimaryButton(
-                  label: 'Salvar',
+                  label: t(context).commonSave,
                   onPressed: canSave ? onSave : null,
                   loading: _saving,
                 ),
@@ -34189,7 +38618,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       return;
     }
     if (repo.supabase == null) {
-      showInfoSnackBar(context, 'Upload disponível apenas com Supabase configurado');
+      showInfoSnackBar(context, t(context).uploadSupabaseOnly);
       return;
     }
 
@@ -34197,18 +38626,19 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
       context,
       isScrollControlled: false,
       builder: (context) {
+        final l10n = t(context);
         return SafeArea(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               ListTile(
                 leading: const Icon(Icons.photo_camera_outlined),
-                title: const Text('Câmera'),
+                title: Text(l10n.commonCamera),
                 onTap: () => Navigator.of(context).pop('camera'),
               ),
               ListTile(
                 leading: const Icon(Icons.photo_library_outlined),
-                title: const Text('Galeria'),
+                title: Text(l10n.commonGallery),
                 onTap: () => Navigator.of(context).pop('gallery'),
               ),
               const SizedBox(height: 8),
@@ -34232,12 +38662,12 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     final originalBytes = await _bytesFromPlatformFile(file);
     if (!mounted) return;
     if (originalBytes == null || originalBytes.isEmpty) {
-      showInfoSnackBar(context, 'Não foi possível ler a imagem');
+      showInfoSnackBar(context, t(context).imageReadFailed);
       return;
     }
 
     if (originalBytes.lengthInBytes > 10 * 1024 * 1024) {
-      showInfoSnackBar(context, 'Foto muito grande (máx. 10MB)');
+      showInfoSnackBar(context, t(context).photoTooLargeMax10mb);
       return;
     }
 
@@ -34245,7 +38675,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     try {
       processed = _prepareProfileAvatarJpeg(originalBytes);
     } catch (_) {
-      showInfoSnackBar(context, 'Imagem inválida');
+      showInfoSnackBar(context, t(context).imageInvalid);
       return;
     }
 
@@ -34268,7 +38698,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         final code = e.statusCode == null ? '' : ' (${e.statusCode})';
         showAtalaiaSnackBar(
           context,
-          'Falha no upload$code: ${e.message}',
+          t(context).uploadFailedWithCode(code, e.message),
           kind: AtalaiaSnackKind.error,
         );
         return;
@@ -34285,7 +38715,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         return;
       }
       setState(() => _savingProgress = 1);
-      showInfoSnackBar(context, 'Foto atualizada');
+      showInfoSnackBar(context, t(context).photoUpdated);
     } finally {
       if (!mounted) return;
       setState(() {
@@ -34377,13 +38807,13 @@ class _EditCommunityScreenState extends State<EditCommunityScreen> {
             appBar: AppBar(
               leading: AtalaiaIconButton(
                 icon: Icons.arrow_back,
-                label: 'Voltar',
+                label: t(context).commonBack,
                 onPressed: () => Navigator.of(context).maybePop(),
               ),
-              title: const Text('Editar comunidade'),
+              title: Text(t(context).communityEditTitle),
             ),
             body: Center(
-              child: PrimaryButton(label: 'Entrar para continuar', onPressed: () => showCtaSnackBar(context)),
+              child: PrimaryButton(label: t(context).settingsSignInToContinue, onPressed: () => showCtaSnackBar(context)),
             ),
           );
         }
@@ -34394,12 +38824,12 @@ class _EditCommunityScreenState extends State<EditCommunityScreen> {
             appBar: AppBar(
               leading: AtalaiaIconButton(
                 icon: Icons.arrow_back,
-                label: 'Voltar',
+                label: t(context).commonBack,
                 onPressed: () => Navigator.of(context).maybePop(),
               ),
-              title: const Text('Editar comunidade'),
+              title: Text(t(context).communityEditTitle),
             ),
-            body: const Center(child: Text('Comunidade não encontrada')),
+            body: Center(child: Text(t(context).communityNotFound)),
           );
         }
 
@@ -34413,12 +38843,12 @@ class _EditCommunityScreenState extends State<EditCommunityScreen> {
             appBar: AppBar(
               leading: AtalaiaIconButton(
                 icon: Icons.arrow_back,
-                label: 'Voltar',
+                label: t(context).commonBack,
                 onPressed: () => Navigator.of(context).maybePop(),
               ),
-              title: const Text('Editar comunidade'),
+              title: Text(t(context).communityEditTitle),
             ),
-            body: const Center(child: Text('Você não tem permissão para editar esta comunidade')),
+            body: Center(child: Text(t(context).communityEditNoPermission)),
           );
         }
 
@@ -34482,12 +38912,12 @@ class _EditCommunityScreenState extends State<EditCommunityScreen> {
           appBar: AppBar(
             leading: AtalaiaIconButton(
               icon: Icons.arrow_back,
-              label: 'Voltar',
+              label: t(context).commonBack,
               onPressed: _saving ? null : () => Navigator.of(context).maybePop(),
             ),
-            title: const Text('Editar comunidade', style: TextStyle(fontWeight: FontWeight.w800)),
+            title: Text(t(context).communityEditTitle, style: const TextStyle(fontWeight: FontWeight.w800)),
             actions: [
-              AtalaiaTextButton(label: 'Salvar', onPressed: canSave ? onSave : null),
+              AtalaiaTextButton(label: t(context).commonSave, onPressed: canSave ? onSave : null),
             ],
           ),
           body: ListView(
@@ -34507,12 +38937,12 @@ class _EditCommunityScreenState extends State<EditCommunityScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(c.name, style: const TextStyle(fontWeight: FontWeight.w900)),
-                            Text('Editar dados e regras', style: TextStyle(color: cs.outline)),
+                            Text(t(context).communityEditSubtitle, style: TextStyle(color: cs.outline)),
                           ],
                         ),
                       ),
                       SecondaryButton(
-                        label: 'Alterar foto',
+                        label: t(context).communityEditChangePhoto,
                         onPressed: _saving ? null : () => _changeAvatar(repo: repo, communityId: c.id),
                       ),
                     ],
@@ -34522,27 +38952,27 @@ class _EditCommunityScreenState extends State<EditCommunityScreen> {
               const SizedBox(height: 12),
               AtalaiaTextField(
                 controller: _name,
-                hintText: 'Nome',
+                hintText: t(context).communityEditNameHint,
                 textInputAction: TextInputAction.next,
                 onChanged: (_) => setState(() {}),
               ),
               const SizedBox(height: 12),
               MultiLineComposer(
                 controller: _description,
-                hintText: 'Descrição',
+                hintText: t(context).communityEditDescriptionHint,
                 errorText: null,
               ),
               const SizedBox(height: 12),
               MultiLineComposer(
                 controller: _rules,
-                hintText: 'Regras (uma por linha)',
+                hintText: t(context).communityEditRulesHint,
                 errorText: null,
               ),
               const SizedBox(height: 18),
               SizedBox(
                 width: double.infinity,
                 child: PrimaryButton(
-                  label: 'Salvar',
+                  label: t(context).commonSave,
                   onPressed: canSave ? onSave : null,
                   loading: _saving,
                 ),
@@ -34564,7 +38994,7 @@ class _EditCommunityScreenState extends State<EditCommunityScreen> {
       return;
     }
     if (repo.supabase == null) {
-      showInfoSnackBar(context, 'Upload disponível apenas com Supabase configurado');
+      showInfoSnackBar(context, t(context).uploadSupabaseOnly);
       return;
     }
 
@@ -34572,18 +39002,19 @@ class _EditCommunityScreenState extends State<EditCommunityScreen> {
       context,
       isScrollControlled: false,
       builder: (context) {
+        final l10n = t(context);
         return SafeArea(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               ListTile(
                 leading: const Icon(Icons.photo_camera_outlined),
-                title: const Text('Câmera'),
+                title: Text(l10n.commonCamera),
                 onTap: () => Navigator.of(context).pop('camera'),
               ),
               ListTile(
                 leading: const Icon(Icons.photo_library_outlined),
-                title: const Text('Galeria'),
+                title: Text(l10n.commonGallery),
                 onTap: () => Navigator.of(context).pop('gallery'),
               ),
               const SizedBox(height: 8),
@@ -34607,12 +39038,12 @@ class _EditCommunityScreenState extends State<EditCommunityScreen> {
     final originalBytes = await _bytesFromPlatformFile(file);
     if (!mounted) return;
     if (originalBytes == null || originalBytes.isEmpty) {
-      showInfoSnackBar(context, 'Não foi possível ler a imagem');
+      showInfoSnackBar(context, t(context).imageReadFailed);
       return;
     }
 
     if (originalBytes.lengthInBytes > 10 * 1024 * 1024) {
-      showInfoSnackBar(context, 'Foto muito grande (máx. 10MB)');
+      showInfoSnackBar(context, t(context).photoTooLargeMax10mb);
       return;
     }
 
@@ -34620,7 +39051,7 @@ class _EditCommunityScreenState extends State<EditCommunityScreen> {
     try {
       processed = _prepareCommunityAvatarJpeg(originalBytes);
     } catch (_) {
-      showInfoSnackBar(context, 'Imagem inválida');
+      showInfoSnackBar(context, t(context).imageInvalid);
       return;
     }
 
@@ -34643,7 +39074,7 @@ class _EditCommunityScreenState extends State<EditCommunityScreen> {
         final code = e.statusCode == null ? '' : ' (${e.statusCode})';
         showAtalaiaSnackBar(
           context,
-          'Falha no upload$code: ${e.message}',
+          t(context).uploadFailedWithCode(code, e.message),
           kind: AtalaiaSnackKind.error,
         );
         return;
@@ -34665,14 +39096,14 @@ class _EditCommunityScreenState extends State<EditCommunityScreen> {
             context,
             msg,
             kind: AtalaiaSnackKind.error,
-            actionLabel: 'Tentar',
+            actionLabel: t(context).commonRetry,
             onAction: retry,
           );
         }
         return;
       }
       setState(() => _savingProgress = 1);
-      showInfoSnackBar(context, 'Foto atualizada');
+      showInfoSnackBar(context, t(context).photoUpdated);
     } finally {
       if (!mounted) return;
       setState(() {
@@ -34821,20 +39252,27 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
         final posts = hasQuery ? repo.searchPosts(session.value, query) : const <PostModel>[];
         final communities = hasQuery ? repo.searchCommunities(query) : const <CommunityModel>[];
 
-        final topics = const ['cura', 'família', 'trabalho', 'ansiedade', 'gratidão', 'finanças'];
+        final topics = [
+          t(context).searchTopicHealing,
+          t(context).searchTopicFamily,
+          t(context).searchTopicWork,
+          t(context).searchTopicAnxiety,
+          t(context).searchTopicGratitude,
+          t(context).searchTopicFinances,
+        ];
 
         return Scaffold(
           appBar: AppBar(
             leading: AtalaiaIconButton(
               icon: Icons.arrow_back,
-              label: 'Voltar',
+              label: t(context).commonBack,
               onPressed: () => Navigator.of(context).maybePop(),
             ),
             titleSpacing: 0,
             title: AtalaiaTextField(
               controller: _text,
               focusNode: _focusNode,
-              hintText: 'Pesquisar',
+              hintText: t(context).commonSearch,
               prefixIcon: Icons.search,
               textInputAction: TextInputAction.search,
               onChanged: _setQuery,
@@ -34842,7 +39280,7 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
                   ? null
                   : AtalaiaIconButton(
                       icon: Icons.close,
-                      label: 'Limpar busca',
+                      label: t(context).commonClearSearch,
                       onPressed: () {
                         _text.clear();
                         _setQuery('');
@@ -34853,11 +39291,11 @@ class _SearchScreenState extends State<SearchScreen> with SingleTickerProviderSt
             bottom: TabBar(
               controller: _tabController,
               isScrollable: true,
-              tabs: const [
-                Tab(text: 'Tudo'),
-                Tab(text: 'Pessoas'),
-                Tab(text: 'Posts'),
-                Tab(text: 'Comunidades'),
+              tabs: [
+                Tab(text: t(context).searchTabAll),
+                Tab(text: t(context).searchTabPeople),
+                Tab(text: t(context).searchTabPosts),
+                Tab(text: t(context).searchTabCommunities),
               ],
             ),
           ),
@@ -34956,16 +39394,16 @@ class _SearchTabAll extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Expanded(
-                child: Text('Sugestões', style: TextStyle(fontWeight: FontWeight.w900)),
+              Expanded(
+                child: Text(t(context).searchSuggestionsTitle, style: const TextStyle(fontWeight: FontWeight.w900)),
               ),
               AtalaiaTextButton(
-                label: 'Mapa',
+                label: t(context).searchMapButton,
                 onPressed: () {
                   Navigator.of(context).push(
                     MaterialPageRoute<void>(
                       builder: (_) => Scaffold(
-                        appBar: AppBar(title: const Text('Mapa')),
+                        appBar: AppBar(title: Text(t(context).searchMapButton)),
                         body: const MapScreen(),
                       ),
                     ),
@@ -34977,7 +39415,7 @@ class _SearchTabAll extends StatelessWidget {
           const SizedBox(height: 8),
           ...suggestions.map((p) => PeopleResultRow(profile: p, isAuthenticated: isAuthenticated)),
           const SizedBox(height: 18),
-          const Text('Tópicos', style: TextStyle(fontWeight: FontWeight.w900)),
+          Text(t(context).searchTopicsTitle, style: const TextStyle(fontWeight: FontWeight.w900)),
           const SizedBox(height: 8),
           Wrap(
             spacing: 8,
@@ -35006,7 +39444,7 @@ class _SearchTabAll extends StatelessWidget {
                     SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
                     EmptyState(
                       icon: Icons.search_off_outlined,
-                      title: 'Nenhum resultado para “$query”',
+                      title: t(context).searchNoResults(query),
                     ),
                   ],
                 )
@@ -35015,19 +39453,19 @@ class _SearchTabAll extends StatelessWidget {
                   padding: const EdgeInsets.all(12),
                   children: [
                     if (people.isNotEmpty) ...[
-                      const Text('Pessoas', style: TextStyle(fontWeight: FontWeight.w900)),
+                      Text(t(context).searchSectionPeople, style: const TextStyle(fontWeight: FontWeight.w900)),
                       const SizedBox(height: 8),
                       ...people.take(4).map((p) => PeopleResultRow(profile: p, isAuthenticated: isAuthenticated)),
                       const SizedBox(height: 14),
                     ],
                     if (posts.isNotEmpty) ...[
-                      const Text('Posts', style: TextStyle(fontWeight: FontWeight.w900)),
+                      Text(t(context).searchSectionPosts, style: const TextStyle(fontWeight: FontWeight.w900)),
                       const SizedBox(height: 8),
                       ...posts.take(6).map((p) => PostResultRow(post: p)),
                     ],
                     if (communities.isNotEmpty) ...[
                       const SizedBox(height: 14),
-                      const Text('Comunidades', style: TextStyle(fontWeight: FontWeight.w900)),
+                      Text(t(context).searchSectionCommunities, style: const TextStyle(fontWeight: FontWeight.w900)),
                       const SizedBox(height: 8),
                       ...communities
                           .take(4)
@@ -35058,7 +39496,7 @@ class _SearchTabPeople extends StatelessWidget {
   Widget build(BuildContext context) {
     final hasQuery = query.trim().isNotEmpty;
     if (!hasQuery) {
-      return const Center(child: Text('Pesquise pessoas'));
+      return Center(child: Text(t(context).searchHintPeople));
     }
     return RefreshIndicator(
       onRefresh: onRefresh,
@@ -35071,7 +39509,7 @@ class _SearchTabPeople extends StatelessWidget {
                     SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
                     EmptyState(
                       icon: Icons.search_off_outlined,
-                      title: 'Nenhum resultado para “$query”',
+                      title: t(context).searchNoResults(query),
                     ),
                   ],
                 )
@@ -35104,7 +39542,7 @@ class _SearchTabPosts extends StatelessWidget {
   Widget build(BuildContext context) {
     final hasQuery = query.trim().isNotEmpty;
     if (!hasQuery) {
-      return const Center(child: Text('Pesquise posts'));
+      return Center(child: Text(t(context).searchHintPosts));
     }
     return RefreshIndicator(
       onRefresh: onRefresh,
@@ -35126,7 +39564,7 @@ class _SearchTabPosts extends StatelessWidget {
                     SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
                     EmptyState(
                       icon: Icons.search_off_outlined,
-                      title: 'Nenhum resultado para “$query”',
+                      title: t(context).searchNoResults(query),
                     ),
                   ],
                 )
@@ -35176,7 +39614,7 @@ class _SearchTabCommunities extends StatelessWidget {
   Widget build(BuildContext context) {
     final hasQuery = query.trim().isNotEmpty;
     if (!hasQuery) {
-      return const Center(child: Text('Pesquise comunidades'));
+      return Center(child: Text(t(context).searchHintCommunities));
     }
     return RefreshIndicator(
       onRefresh: onRefresh,
@@ -35189,7 +39627,7 @@ class _SearchTabCommunities extends StatelessWidget {
                     SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
                     EmptyState(
                       icon: Icons.search_off_outlined,
-                      title: 'Nenhum resultado para “$query”',
+                      title: t(context).searchNoResults(query),
                     ),
                   ],
                 )
@@ -35234,7 +39672,7 @@ class PeopleResultRow extends StatelessWidget {
     final repo = RepoScope.of(context);
     final cs = Theme.of(context).colorScheme;
     final following = repo.isFollowingUser(profile.userId);
-    final displayName = _displayNameForProfile(profile);
+    final displayName = _displayNameForProfile(profile, userFallback: t(context).commonUserFallback);
     final displayUsername = _usernameForProfile(profile, userId: profile.userId);
 
     return Padding(
@@ -35285,14 +39723,28 @@ class PeopleResultRow extends StatelessWidget {
             SizedBox(
               height: 34,
               child: SecondaryButton(
-                label: following ? 'Seguindo' : 'Seguir',
+                label: following ? t(context).profileFollowing : t(context).profileFollow,
+                loading: repo.isFollowTogglingUser(profile.userId),
                 onPressed: () {
                   if (!isAuthenticated) {
-                    return showLoginSnackBar(context, message: 'Entre para continuar');
+                    return showLoginSnackBar(context, message: t(context).profileFollowToggleSignIn);
                   }
-                  repo.toggleFollowUser(profile.userId, isAuthenticated: true);
-                  final nowFollowing = repo.isFollowingUser(profile.userId);
-                  showInfoSnackBar(context, nowFollowing ? 'Seguindo' : 'Deixou de seguir');
+                  if (repo.isFollowTogglingUser(profile.userId)) return;
+                  unawaited(() async {
+                    final ok = await repo.toggleFollowUser(profile.userId, isAuthenticated: true);
+                    if (!context.mounted) return;
+                    if (!ok) {
+                      final msg = repo.lastFollowToggleError?.trim();
+                      showAtalaiaSnackBar(
+                        context,
+                        msg == null || msg.isEmpty ? t(context).commonSomethingWentWrong : msg,
+                        kind: AtalaiaSnackKind.error,
+                      );
+                      return;
+                    }
+                    final nowFollowing = repo.isFollowingUser(profile.userId);
+                    showInfoSnackBar(context, nowFollowing ? t(context).profileSnackFollowing : t(context).profileSnackUnfollowed);
+                  }());
                 },
               ),
             ),
@@ -35313,7 +39765,7 @@ class PostResultRow extends StatelessWidget {
     final repo = RepoScope.of(context);
     final cs = Theme.of(context).colorScheme;
     final hasMedia = post.mediaKind != null;
-    final identity = _identityForUserId(repo, post.userId, legacyVerified: post.isVerified);
+    final identity = _identityForUserId(repo, post.userId, legacyVerified: post.isVerified, userFallback: t(context).commonUserFallback);
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
@@ -35344,7 +39796,7 @@ class PostResultRow extends StatelessWidget {
                         Icon(Icons.verified, size: 16, color: context.brand.verifiedBlue),
                       ],
                       const SizedBox(width: 8),
-                      Text(_relativeTime(post.createdAt), style: TextStyle(color: cs.outline)),
+                      Text(_relativeTime(context, post.createdAt), style: TextStyle(color: cs.outline)),
                     ],
                   ),
                   const SizedBox(height: 6),
@@ -35425,7 +39877,8 @@ class CommunityResultRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final label = community.isClosed ? 'Fechada' : 'Aberta';
+    final l10n = t(context);
+    final label = community.isClosed ? l10n.communityPrivacyClosed : l10n.communityPrivacyOpen;
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
@@ -35445,20 +39898,20 @@ class CommunityResultRow extends StatelessWidget {
                     children: [
                       Text(community.name, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18)),
                       const SizedBox(height: 6),
-                      Text('Privacidade: $label', style: TextStyle(color: cs.outline)),
+                      Text('${l10n.communityPrivacyLabel}: $label', style: TextStyle(color: cs.outline)),
                       const SizedBox(height: 14),
                       SizedBox(
                         width: double.infinity,
                         child: PrimaryButton(
-                          label: community.isClosed ? 'Solicitar' : 'Entrar',
+                          label: community.isClosed ? l10n.communityRequest : l10n.communityJoin,
                           onPressed: () {
                             if (!isAuthenticated) {
                               Navigator.of(context).pop();
-                              showLoginSnackBar(context, message: 'Entre para continuar');
+                              showLoginSnackBar(context, message: l10n.settingsSignInToContinue);
                               return;
                             }
                             Navigator.of(context).pop();
-                            showInfoSnackBar(context, community.isClosed ? 'Solicitação enviada' : 'Entrou');
+                            showInfoSnackBar(context, community.isClosed ? l10n.communityRequestSent : l10n.communityJoined);
                           },
                         ),
                       ),
@@ -35493,10 +39946,10 @@ class CommunityResultRow extends StatelessWidget {
             ),
             const SizedBox(width: 10),
             SecondaryButton(
-              label: community.isClosed ? 'Solicitar' : 'Entrar',
+              label: community.isClosed ? l10n.communityRequest : l10n.communityJoin,
               onPressed: () {
-                if (!isAuthenticated) return showLoginSnackBar(context, message: 'Entre para continuar');
-                showInfoSnackBar(context, community.isClosed ? 'Solicitação enviada' : 'Entrou');
+                if (!isAuthenticated) return showLoginSnackBar(context, message: l10n.settingsSignInToContinue);
+                showInfoSnackBar(context, community.isClosed ? l10n.communityRequestSent : l10n.communityJoined);
               },
             ),
           ],
@@ -35718,15 +40171,16 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             leading: widget.showBack
                 ? AtalaiaIconButton(
                     icon: Icons.arrow_back,
-                    label: 'Voltar',
+                    label: t(context).commonBack,
                     onPressed: () => Navigator.of(context).maybePop(),
                   )
                 : null,
-            title: const Text('Notificações'),
+            title: Text(t(context).notificationsTitle),
             actions: [
               PopupMenuButton<String>(
                 icon: const Icon(Icons.more_horiz),
                 onSelected: (v) {
+                  final l10n = t(context);
                   if (v == 'markAll') {
                     if (!isAuthenticated) {
                       showCtaSnackBar(context);
@@ -35737,7 +40191,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                       return;
                     }
                     repo.markAllNotificationsRead(viewerId);
-                    showInfoSnackBar(context, 'Marcadas como lidas');
+                    showInfoSnackBar(context, l10n.notificationsMarkedAllReadSnack);
                     return;
                   }
                   if (v == 'settings') {
@@ -35745,9 +40199,10 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                   }
                 },
                 itemBuilder: (context) {
-                  return const [
-                    PopupMenuItem(value: 'markAll', child: Text('Marcar todas como lidas')),
-                    PopupMenuItem(value: 'settings', child: Text('Configurações')),
+                  final l10n = t(context);
+                  return [
+                    PopupMenuItem(value: 'markAll', child: Text(l10n.notificationsMarkAllRead)),
+                    PopupMenuItem(value: 'settings', child: Text(l10n.settingsTitle)),
                   ];
                 },
               ),
@@ -35765,32 +40220,32 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     children: [
                       AtalaiaFilterChip(
                         selected: _filter == _NotificationsFilter.all,
-                        label: 'Todas',
+                        label: t(context).notificationsFilterAll,
                         onSelected: (_) => setState(() => _filter = _NotificationsFilter.all),
                       ),
                       AtalaiaFilterChip(
                         selected: _filter == _NotificationsFilter.unread,
-                        label: 'Não lidas',
+                        label: t(context).notificationsFilterUnread,
                         onSelected: (_) => setState(() => _filter = _NotificationsFilter.unread),
                       ),
                       AtalaiaFilterChip(
                         selected: _filter == _NotificationsFilter.social,
-                        label: 'Social',
+                        label: t(context).notificationsFilterSocial,
                         onSelected: (_) => setState(() => _filter = _NotificationsFilter.social),
                       ),
                       AtalaiaFilterChip(
                         selected: _filter == _NotificationsFilter.prayer,
-                        label: 'Oração',
+                        label: t(context).notificationsFilterPrayer,
                         onSelected: (_) => setState(() => _filter = _NotificationsFilter.prayer),
                       ),
                       AtalaiaFilterChip(
                         selected: _filter == _NotificationsFilter.alerts,
-                        label: 'Alertas',
+                        label: t(context).notificationsFilterAlerts,
                         onSelected: (_) => setState(() => _filter = _NotificationsFilter.alerts),
                       ),
                       AtalaiaFilterChip(
                         selected: _filter == _NotificationsFilter.scales,
-                        label: 'Escalas',
+                        label: t(context).notificationsFilterScales,
                         onSelected: (_) => setState(() => _filter = _NotificationsFilter.scales),
                       ),
                     ],
@@ -35800,7 +40255,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 child: !isAuthenticated
                     ? Center(
                         child: PrimaryButton(
-                          label: 'Entrar para ver notificações',
+                          label: t(context).notificationsSignInToSee,
                           onPressed: () => showCtaSnackBar(context),
                         ),
                       )
@@ -35822,9 +40277,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                       EmptyState(
                                         icon: Icons.volunteer_activism_outlined,
                                         title: _filter == _NotificationsFilter.unread
-                                            ? 'Você não tem notificações não lidas.'
-                                            : 'Você ainda não tem notificações.',
-                                        ctaLabel: _filter == _NotificationsFilter.all ? null : 'Ver todas',
+                                            ? t(context).notificationsEmptyUnread
+                                            : t(context).notificationsEmptyAll,
+                                        ctaLabel: _filter == _NotificationsFilter.all ? null : t(context).notificationsCtaViewAll,
                                         onCta: _filter == _NotificationsFilter.all ? null : () => setState(() => _filter = _NotificationsFilter.all),
                                       ),
                                     ],
@@ -35886,11 +40341,12 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     required ColorScheme cs,
   }) {
     final out = <Widget>[];
+    final l10n = t(context);
 
     final buckets = <String, Map<String, Map<String, _NotificationGroup>>>{};
     for (final n in notifications) {
-      final header = _notificationBucketLabel(n.createdAt);
-      final category = _notificationCategoryLabel(n);
+      final header = _notificationBucketLabel(l10n, n.createdAt);
+      final category = _notificationCategoryLabel(l10n, n);
       final byCategory = buckets.putIfAbsent(header, () => <String, Map<String, _NotificationGroup>>{});
       final groups = byCategory.putIfAbsent(category, () => <String, _NotificationGroup>{});
       final key = _notificationGroupKey(n);
@@ -35944,6 +40400,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 post: post,
                 groupCount: count,
                 isFollowingActor: actorId == null ? false : repo.isFollowingUser(actorId),
+                followBackLoading: actorId == null ? false : repo.isFollowTogglingUser(actorId),
                 onTap: () {
                   for (final it in g.items) {
                     repo.markNotificationRead(it.id, viewerId: viewerId);
@@ -35979,14 +40436,40 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                     showErrorSnackBar(
                       context,
                       onRetry: () {
-                        repo.toggleFollowUser(actorId, isAuthenticated: true);
-                        showInfoSnackBar(context, 'Seguindo');
+                        if (repo.isFollowTogglingUser(actorId)) return;
+                        unawaited(() async {
+                          final ok = await repo.toggleFollowUser(actorId, isAuthenticated: true);
+                          if (!context.mounted) return;
+                          if (!ok) {
+                            final msg = repo.lastFollowToggleError?.trim();
+                            showAtalaiaSnackBar(
+                              context,
+                              msg == null || msg.isEmpty ? t(context).commonSomethingWentWrong : msg,
+                              kind: AtalaiaSnackKind.error,
+                            );
+                            return;
+                          }
+                          showInfoSnackBar(context, t(context).profileSnackFollowing);
+                        }());
                       },
                     );
                     return;
                   }
-                  repo.toggleFollowUser(actorId, isAuthenticated: true);
-                  showInfoSnackBar(context, 'Seguindo');
+                  if (repo.isFollowTogglingUser(actorId)) return;
+                  unawaited(() async {
+                    final ok = await repo.toggleFollowUser(actorId, isAuthenticated: true);
+                    if (!context.mounted) return;
+                    if (!ok) {
+                      final msg = repo.lastFollowToggleError?.trim();
+                      showAtalaiaSnackBar(
+                        context,
+                        msg == null || msg.isEmpty ? t(context).commonSomethingWentWrong : msg,
+                        kind: AtalaiaSnackKind.error,
+                      );
+                      return;
+                    }
+                    showInfoSnackBar(context, t(context).profileSnackFollowing);
+                  }());
                 },
                 onHide: () {
                   if (repo.isOffline) {
@@ -35994,13 +40477,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                       context,
                       onRetry: () {
                         repo.hideNotification(n.id, viewerId: viewerId);
-                        showInfoSnackBar(context, 'Notificação ocultada');
+                        showInfoSnackBar(context, t(context).notificationsHiddenSnack);
                       },
                     );
                     return;
                   }
                   repo.hideNotification(n.id, viewerId: viewerId);
-                  showInfoSnackBar(context, 'Notificação ocultada');
+                  showInfoSnackBar(context, t(context).notificationsHiddenSnack);
                 },
               ),
             ),
@@ -36012,13 +40495,18 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   }
 }
 
-String _notificationCategoryLabel(NotificationModel n) {
-  if (n.entityType == 'community_prayer_run') return 'Escalas';
+String _notificationCategoryLabel(AppLocalizations l10n, NotificationModel n) {
+  if (n.entityType == 'community_prayer_run') return l10n.notificationsFilterScales;
   return switch (n.type) {
-    NotificationType.follow || NotificationType.reaction || NotificationType.comment || NotificationType.postNew || NotificationType.storyNew => 'Social',
-    NotificationType.prayed || NotificationType.prayerRequest => 'Oração',
-    NotificationType.alertNew => 'Alertas',
-    NotificationType.scaleReminder24h || NotificationType.scaleReminder1h => 'Escalas',
+    NotificationType.follow ||
+    NotificationType.reaction ||
+    NotificationType.comment ||
+    NotificationType.postNew ||
+    NotificationType.storyNew =>
+      l10n.notificationsFilterSocial,
+    NotificationType.prayed || NotificationType.prayerRequest => l10n.notificationsFilterPrayer,
+    NotificationType.alertNew => l10n.notificationsFilterAlerts,
+    NotificationType.scaleReminder24h || NotificationType.scaleReminder1h => l10n.notificationsFilterScales,
   };
 }
 
@@ -36036,12 +40524,12 @@ String _notificationGroupKey(NotificationModel n) {
   return '${n.type.name}:${n.actorId ?? ''}:$entity';
 }
 
-String _notificationBucketLabel(DateTime dt) {
+String _notificationBucketLabel(AppLocalizations l10n, DateTime dt) {
   final diff = DateTime.now().difference(dt);
-  if (diff.inDays < 1) return 'Hoje';
-  if (diff.inDays < 7) return 'Esta semana';
-  if (diff.inDays < 31) return 'Este mês';
-  return 'Anteriores';
+  if (diff.inDays < 1) return l10n.notificationsBucketToday;
+  if (diff.inDays < 7) return l10n.notificationsBucketThisWeek;
+  if (diff.inDays < 31) return l10n.notificationsBucketThisMonth;
+  return l10n.notificationsBucketEarlier;
 }
 
 class NotificationRow extends StatelessWidget {
@@ -36050,6 +40538,7 @@ class NotificationRow extends StatelessWidget {
     required this.actor,
     required this.post,
     required this.isFollowingActor,
+    this.followBackLoading = false,
     required this.onTap,
     required this.onFollowBack,
     required this.onHide,
@@ -36061,6 +40550,7 @@ class NotificationRow extends StatelessWidget {
   final ProfileModel? actor;
   final PostModel? post;
   final bool isFollowingActor;
+  final bool followBackLoading;
   final VoidCallback onTap;
   final VoidCallback onFollowBack;
   final VoidCallback onHide;
@@ -36071,23 +40561,25 @@ class NotificationRow extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final actorId = notification.actorId ?? 'user';
     final actorUsername = _normalizeDisplayUsername(actor?.username ?? actorId, fallback: actorId);
-    final actorName = groupCount <= 1 ? '@$actorUsername' : '@$actorUsername e mais ${groupCount - 1}';
-    final text = _notificationText(notification, post, groupCount: groupCount);
-    final time = _relativeTime(notification.createdAt);
+    final l10n = t(context);
+    final actorName = groupCount <= 1 ? '@$actorUsername' : l10n.notificationActorAndMore(actorUsername, groupCount - 1);
+    final text = _notificationText(context, notification, post, groupCount: groupCount);
+    final time = _relativeTime(context, notification.createdAt);
     final isUnread = !notification.isRead;
 
     final trailing = switch (notification.type) {
       NotificationType.follow => SizedBox(
           height: 34,
           child: SecondaryButton(
-            label: isFollowingActor ? 'Seguindo' : 'Seguir de volta',
-            onPressed: isFollowingActor ? null : onFollowBack,
+            label: isFollowingActor ? l10n.profileFollowing : l10n.notificationFollowBack,
+            loading: followBackLoading,
+            onPressed: (followBackLoading || isFollowingActor) ? null : onFollowBack,
           ),
         ),
       _ => SizedBox(
           height: 34,
           child: SecondaryButton(
-            label: _notificationCtaLabel(notification),
+            label: _notificationCtaLabel(context, notification),
             onPressed: _notificationCanOpen(notification, post) ? onTap : null,
           ),
         ),
@@ -36146,32 +40638,43 @@ bool _notificationCanOpen(NotificationModel n, PostModel? post) {
   return false;
 }
 
-String _notificationCtaLabel(NotificationModel n) {
-  if (n.type == NotificationType.comment) return 'Responder';
-  if (n.type == NotificationType.follow) return 'Ver';
+String _notificationCtaLabel(BuildContext context, NotificationModel n) {
+  final l10n = t(context);
+  if (n.type == NotificationType.comment) return l10n.notificationCtaReply;
+  if (n.type == NotificationType.follow) return l10n.notificationCtaView;
   if (n.type == NotificationType.scaleReminder24h || n.type == NotificationType.scaleReminder1h || n.entityType == 'community_prayer_run') {
-    return 'Abrir';
+    return l10n.notificationCtaOpen;
   }
-  return 'Ver';
+  return l10n.notificationCtaView;
 }
 
-String _notificationText(NotificationModel n, PostModel? post, {int groupCount = 1}) {
+String _notificationText(BuildContext context, NotificationModel n, PostModel? post, {int groupCount = 1}) {
+  final l10n = t(context);
   final body = (n.body ?? '').trim();
   final isMany = groupCount > 1;
   return switch (n.type) {
-    NotificationType.follow => isMany ? 'começaram a seguir você' : 'começou a seguir você',
-    NotificationType.reaction => isMany ? 'reagiram ao seu post' : 'reagiu ao seu post',
-    NotificationType.comment => isMany ? 'comentaram no seu post' : (body.isEmpty ? 'comentou no seu post' : 'comentou: “$body”'),
+    NotificationType.follow => isMany ? l10n.notificationFollowMany : l10n.notificationFollowOne,
+    NotificationType.reaction => isMany ? l10n.notificationReactionMany : l10n.notificationReactionOne,
+    NotificationType.comment => isMany
+        ? (body.isEmpty ? l10n.notificationCommentManyNoBody : l10n.notificationCommentManyWithBody(body))
+        : (body.isEmpty ? l10n.notificationCommentOneNoBody : l10n.notificationCommentOneWithBody(body)),
     NotificationType.prayed =>
       (post?.kind == PostKind.request)
-          ? (isMany ? 'oraram pelo seu pedido' : 'orou pelo seu pedido')
-          : (isMany ? 'oraram pelo seu post' : 'orou pelo seu post'),
-    NotificationType.postNew => body.isEmpty ? 'publicou um novo post' : 'publicou um novo post: “$body”',
-    NotificationType.storyNew => 'publicou um novo story',
-    NotificationType.alertNew => body.isEmpty ? 'enviou um alerta' : 'enviou um alerta: “$body”',
-    NotificationType.prayerRequest => body.isEmpty ? 'publicou um pedido de oração' : 'publicou um pedido de oração: “$body”',
-    NotificationType.scaleReminder24h => body.isEmpty ? 'tem uma escala em 24h' : 'lembrete de escala (24h): “$body”',
-    NotificationType.scaleReminder1h => body.isEmpty ? 'tem uma escala em 1h' : 'lembrete de escala (1h): “$body”',
+          ? (isMany ? l10n.notificationPrayedRequestMany : l10n.notificationPrayedRequestOne)
+          : (isMany ? l10n.notificationPrayedPostMany : l10n.notificationPrayedPostOne),
+    NotificationType.postNew => isMany
+        ? (body.isEmpty ? l10n.notificationPostNewManyNoBody : l10n.notificationPostNewManyWithBody(body))
+        : (body.isEmpty ? l10n.notificationPostNewOneNoBody : l10n.notificationPostNewOneWithBody(body)),
+    NotificationType.storyNew => l10n.notificationStoryNew,
+    NotificationType.alertNew => isMany
+        ? (body.isEmpty ? l10n.notificationAlertNewManyNoBody : l10n.notificationAlertNewManyWithBody(body))
+        : (body.isEmpty ? l10n.notificationAlertNewOneNoBody : l10n.notificationAlertNewOneWithBody(body)),
+    NotificationType.prayerRequest => isMany
+        ? (body.isEmpty ? l10n.notificationPrayerRequestManyNoBody : l10n.notificationPrayerRequestManyWithBody(body))
+        : (body.isEmpty ? l10n.notificationPrayerRequestOneNoBody : l10n.notificationPrayerRequestOneWithBody(body)),
+    NotificationType.scaleReminder24h =>
+      body.isEmpty ? l10n.notificationScaleReminder24hNoBody : l10n.notificationScaleReminder24hWithBody(body),
+    NotificationType.scaleReminder1h => body.isEmpty ? l10n.notificationScaleReminder1hNoBody : l10n.notificationScaleReminder1hWithBody(body),
   };
 }
 
@@ -36184,12 +40687,13 @@ class _NotificationRowSkeleton extends StatelessWidget {
   }
 }
 
-String _relativeTime(DateTime dt) {
+String _relativeTime(BuildContext context, DateTime dt) {
+  final l10n = t(context);
   final diff = DateTime.now().difference(dt);
-  if (diff.inMinutes < 1) return 'agora';
-  if (diff.inMinutes < 60) return '${diff.inMinutes} min';
-  if (diff.inHours < 24) return '${diff.inHours} h';
-  return '${diff.inDays} d';
+  if (diff.inMinutes < 1) return l10n.timeNow;
+  if (diff.inMinutes < 60) return l10n.timeAgoMinutes(diff.inMinutes);
+  if (diff.inHours < 24) return l10n.timeAgoHours(diff.inHours);
+  return l10n.timeAgoDays(diff.inDays);
 }
 
 String _formatTimestamp(DateTime dt) {
