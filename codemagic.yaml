@@ -11,10 +11,15 @@ workflows:
         bundle_identifier: br.com.sysrota.atalaia.app
 
     scripts:
-      - name: Ensure iOS platform
+      - name: Ensure iOS platform (FIX)
         script: |
           cd app
-          flutter create --platforms=ios .
+          flutter create --platforms=ios --org br.com.sysrota.atalaia .
+
+      - name: Force Bundle Identifier (GARANTIA)
+        script: |
+          cd app/ios
+          sed -i '' 's/com.example.runner/br.com.sysrota.atalaia.app/g' Runner.xcodeproj/project.pbxproj
 
       - name: Fix iOS deployment target
         script: |
