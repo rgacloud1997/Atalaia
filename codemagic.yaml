@@ -2,9 +2,6 @@ workflows:
   ios-build:
     name: Atalaia IOS
 
-    integrations:
-      app_store_connect: Codemagic
-
     environment:
       flutter: stable
       xcode: latest
@@ -56,18 +53,17 @@ workflows:
         script: |
           xcode-project use-profiles
 
-      - name: Export IPA
+      - name: Export IPA (ESSENCIAL)
         script: |
           cd app/ios
           xcode-project build-ipa \
             --workspace Runner.xcworkspace \
             --scheme Runner
 
-    artifacts:
-      - app/ios/build/ios/ipa/*.ipa
-      - app/ios/build/ios/xcarchive/*.xcarchive
+      - name: List IPA (debug)
+        script: |
+          find app -name "*.ipa"
 
-    publishing:
-      app_store_connect:
-        auth: integration
-        submit_to_testflight: true
+    artifacts:
+    - app/ios/build/ios/ipa/*.ipa
+    - app/ios/build/ios/xcarchive/*.xcarchive
