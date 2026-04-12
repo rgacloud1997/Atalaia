@@ -5,6 +5,8 @@ workflows:
     environment:
       flutter: stable
       xcode: latest
+      groups:
+        - t
 
       ios_signing:
         distribution_type: app_store
@@ -58,7 +60,7 @@ workflows:
           xcrun altool --upload-app \
             -f app/build/ios/ipa/*.ipa \
             -t ios \
-            --apiKey $APP_STORE_CONNECT_API_KEY \
+            --apiKey $APP_STORE_CONNECT_KEY_IDENTIFIER \
             --apiIssuer $APP_STORE_CONNECT_ISSUER_ID
 
     artifacts:
