@@ -6,7 +6,15 @@ workflows:
       flutter: stable
       xcode: latest
 
+    integrations:
+      app_store_connect: Codemagic
+
     scripts:
+      - name: Ensure iOS platform
+        script: |
+          cd app
+          flutter create --platforms=ios .
+
       - name: Install dependencies
         script: |
           cd app
@@ -18,4 +26,4 @@ workflows:
           flutter build ipa --release
 
     artifacts:
-      - app/build/ios/iphoneos/*.app
+      - app/build/ios/ipa/*.ipa
