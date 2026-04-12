@@ -65,5 +65,5 @@ workflows:
           find app -name "*.ipa"
 
     artifacts:
-      - app/build/ios/ipa/*.ipa
-      - app/build/ios/archive/*.xcarchive
+    - app/ios/build/ios/ipa/*.ipa
+    - app/ios/build/ios/xcarchive/*.xcarchive
