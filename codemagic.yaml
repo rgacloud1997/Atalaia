@@ -2,6 +2,9 @@ workflows:
   ios-build:
     name: Atalaia IOS
 
+    integrations:
+      app_store_connect: Codemagic
+
     environment:
       flutter: stable
       xcode: latest
