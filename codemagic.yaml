@@ -8,13 +8,23 @@ workflows:
 
       ios_signing:
         distribution_type: app_store
-        bundle_identifier: com.example.app
+        bundle_identifier: br.com.sysrota.atalaia.app
 
     scripts:
       - name: Ensure iOS platform
         script: |
           cd app
           flutter create --platforms=ios .
+
+      - name: Fix iOS deployment target
+        script: |
+          cd app/ios
+          sed -i '' 's/platform :ios, .*/platform :ios, '\''14.0'\''/' Podfile
+
+      - name: Clean project
+        script: |
+          cd app
+          flutter clean
 
       - name: Install dependencies
         script: |
