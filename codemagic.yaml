@@ -16,22 +16,15 @@ workflows:
           cd app
           flutter create --platforms=ios --org br.com.sysrota.atalaia .
 
-      - name: Fix Bundle Identifier (FORCE ALL)
+      - name: Fix Bundle Identifier
         script: |
           cd app/ios
-
           sed -i '' 's/com.example.app/br.com.sysrota.atalaia.app/g' Runner.xcodeproj/project.pbxproj
           sed -i '' 's/com.example.runner/br.com.sysrota.atalaia.app/g' Runner.xcodeproj/project.pbxproj
-
-      - name: Disable automatic signing (CRÍTICO)
-        script: |
-          cd app/ios
-          sed -i '' 's/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = "";/g' Runner.xcodeproj/project.pbxproj
 
       - name: Fix iOS deployment target
         script: |
           cd app/ios
-
           sed -i '' "s/platform :ios, .*/platform :ios, '14.0'/" Podfile
           sed -i '' "s/IPHONEOS_DEPLOYMENT_TARGET = .*/IPHONEOS_DEPLOYMENT_TARGET = 14.0;/g" Runner.xcodeproj/project.pbxproj
 
@@ -51,10 +44,14 @@ workflows:
           pod deintegrate
           pod install
 
-      - name: Build IPA
+      - name: Build (no codesign)
         script: |
           cd app
           flutter build ipa --release --no-codesign
+
+      - name: Apply Code Signing
+        script: |
+          xcode-project use-profiles
 
     artifacts:
       - app/build/ios/ipa/*.ipa
