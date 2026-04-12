@@ -1,28 +1,36 @@
 workflows:
   flutter-app:
-    name: Atalaia
+    name: Atalaia App
 
     environment:
       flutter: stable
       xcode: latest
 
     scripts:
+      - name: Go to app folder
+        script: |
+          cd app
+
       - name: Install dependencies
         script: |
+          cd app
           flutter pub get
 
       - name: Analyze
         script: |
+          cd app
           flutter analyze
 
       - name: Build APK
         script: |
+          cd app
           flutter build apk --release
 
       - name: Build iOS
         script: |
+          cd app
           flutter build ios --release --no-codesign
 
     artifacts:
-      - build/app/outputs/flutter-apk/*.apk
-      - build/ios/iphoneos/*.app
+      - app/build/app/outputs/flutter-apk/*.apk
+      - app/build/ios/iphoneos/*.app
