@@ -12,10 +12,10 @@ workflows:
           cd app
           flutter pub get
 
-      - name: Build iOS (sem assinatura)
+      - name: Build IPA
         script: |
           cd app
-          flutter build ios --release --no-codesign
+          flutter build ipa --release
 
     artifacts:
       - app/build/ios/iphoneos/*.app
