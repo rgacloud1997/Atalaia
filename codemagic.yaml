@@ -16,19 +16,23 @@ workflows:
           cd app
           flutter create --platforms=ios --org br.com.sysrota.atalaia .
 
-      - name: Fix Bundle Identifier
+      - name: Fix Bundle Identifier (FORCE ALL)
         script: |
           cd app/ios
+
+          sed -i '' 's/com.example.app/br.com.sysrota.atalaia.app/g' Runner.xcodeproj/project.pbxproj
           sed -i '' 's/com.example.runner/br.com.sysrota.atalaia.app/g' Runner.xcodeproj/project.pbxproj
 
-      - name: Fix iOS deployment target (CRÍTICO)
+      - name: Disable automatic signing (CRÍTICO)
+        script: |
+          cd app/ios
+          sed -i '' 's/DEVELOPMENT_TEAM = .*;/DEVELOPMENT_TEAM = "";/g' Runner.xcodeproj/project.pbxproj
+
+      - name: Fix iOS deployment target
         script: |
           cd app/ios
 
-          # força iOS 14 no Podfile
           sed -i '' "s/platform :ios, .*/platform :ios, '14.0'/" Podfile
-
-          # força iOS 14 no projeto
           sed -i '' "s/IPHONEOS_DEPLOYMENT_TARGET = .*/IPHONEOS_DEPLOYMENT_TARGET = 14.0;/g" Runner.xcodeproj/project.pbxproj
 
       - name: Clean project
@@ -41,7 +45,7 @@ workflows:
           cd app
           flutter pub get
 
-      - name: Install Pods (FIX erro atual)
+      - name: Install Pods
         script: |
           cd app/ios
           pod deintegrate
