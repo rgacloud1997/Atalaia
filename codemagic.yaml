@@ -53,17 +53,18 @@ workflows:
         script: |
           xcode-project use-profiles
 
-      - name: Export IPA (ESSENCIAL)
+      - name: Export IPA
         script: |
           cd app/ios
           xcode-project build-ipa \
             --workspace Runner.xcworkspace \
             --scheme Runner
 
-      - name: List IPA (debug)
-        script: |
-          find app -name "*.ipa"
-
     artifacts:
-    - app/ios/build/ios/ipa/*.ipa
-    - app/ios/build/ios/xcarchive/*.xcarchive
+      - app/ios/build/ios/ipa/*.ipa
+      - app/ios/build/ios/xcarchive/*.xcarchive
+
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
