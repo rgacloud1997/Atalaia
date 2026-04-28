@@ -36,20 +36,36 @@ $$;
 do $$
 begin
   if to_regclass('public.spatial_ref_sys') is not null then
-    alter table public.spatial_ref_sys enable row level security;
+    begin
+      alter table public.spatial_ref_sys enable row level security;
+    exception
+      when insufficient_privilege then
+        raise notice 'WARN: could not enable RLS on public.spatial_ref_sys (not owner).';
+        return;
+    end;
 
     -- Allow everyone to read (this table is standard metadata).
-    drop policy if exists "spatial_ref_sys_select_all" on public.spatial_ref_sys;
-    create policy "spatial_ref_sys_select_all"
-    on public.spatial_ref_sys for select
-    using (true);
+    begin
+      drop policy if exists "spatial_ref_sys_select_all" on public.spatial_ref_sys;
+      create policy "spatial_ref_sys_select_all"
+      on public.spatial_ref_sys for select
+      using (true);
+    exception
+      when insufficient_privilege then
+        raise notice 'WARN: could not create SELECT policy on public.spatial_ref_sys (not owner).';
+    end;
 
     -- Only service_role can write.
-    drop policy if exists "spatial_ref_sys_service_only" on public.spatial_ref_sys;
-    create policy "spatial_ref_sys_service_only"
-    on public.spatial_ref_sys for all
-    using (coalesce(auth.role(), '') = 'service_role')
-    with check (coalesce(auth.role(), '') = 'service_role');
+    begin
+      drop policy if exists "spatial_ref_sys_service_only" on public.spatial_ref_sys;
+      create policy "spatial_ref_sys_service_only"
+      on public.spatial_ref_sys for all
+      using (coalesce(auth.role(), '') = 'service_role')
+      with check (coalesce(auth.role(), '') = 'service_role');
+    exception
+      when insufficient_privilege then
+        raise notice 'WARN: could not create service-only policy on public.spatial_ref_sys (not owner).';
+    end;
   end if;
 end;
 $$;
