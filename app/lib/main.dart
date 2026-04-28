@@ -2313,6 +2313,415 @@ final class _UpcomingAssignedPrayerRun {
   final String? communityName;
 }
 
+final class PrayerScaleSummaryModel {
+  const PrayerScaleSummaryModel({
+    required this.totalScales,
+    required this.totalRuns,
+    required this.totalCompleted,
+    required this.totalMissed,
+    required this.totalCancelled,
+    required this.completionRate,
+    required this.uniqueUsers,
+    required this.totalPrayerTime,
+    required this.avgSessionDurationMinutes,
+  });
+
+  factory PrayerScaleSummaryModel.fromSupabase(Map<String, dynamic> data) {
+    return PrayerScaleSummaryModel(
+      totalScales: (data['total_scales'] as num?)?.toInt() ?? 0,
+      totalRuns: (data['total_runs'] as num?)?.toInt() ?? 0,
+      totalCompleted: (data['total_completed'] as num?)?.toInt() ?? 0,
+      totalMissed: (data['total_missed'] as num?)?.toInt() ?? 0,
+      totalCancelled: (data['total_cancelled'] as num?)?.toInt() ?? 0,
+      completionRate: (data['completion_rate'] as num?)?.toDouble() ?? 0.0,
+      uniqueUsers: (data['unique_users'] as num?)?.toInt() ?? 0,
+      totalPrayerTime: Duration(seconds: (data['total_seconds'] as num?)?.toInt() ?? 0),
+      avgSessionDurationMinutes: (data['avg_session_duration'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  final int totalScales;
+  final int totalRuns;
+  final int totalCompleted;
+  final int totalMissed;
+  final int totalCancelled;
+  final double completionRate;
+  final int uniqueUsers;
+  final Duration totalPrayerTime;
+  final int avgSessionDurationMinutes;
+}
+
+final class UserPrayerStatsModel {
+  const UserPrayerStatsModel({
+    required this.userId,
+    required this.userName,
+    this.userAvatarUrl,
+    required this.turnsAssigned,
+    required this.turnsCompleted,
+    required this.turnsMissed,
+    required this.turnsCancelled,
+    required this.completionPercentage,
+    required this.avgDurationMinutes,
+    this.lastCompletedAt,
+    this.lastAssignedAt,
+    required this.pendingRunsCount,
+    required this.commonHours,
+    required this.streakDays,
+  });
+
+  factory UserPrayerStatsModel.fromSupabase(Map<String, dynamic> data) {
+    return UserPrayerStatsModel(
+      userId: data['user_id']?.toString() ?? '',
+      userName: data['user_name']?.toString() ?? 'Usuário',
+      userAvatarUrl: data['user_avatar_url']?.toString(),
+      turnsAssigned: (data['turns_assigned'] as num?)?.toInt() ?? 0,
+      turnsCompleted: (data['turns_completed'] as num?)?.toInt() ?? 0,
+      turnsMissed: (data['turns_missed'] as num?)?.toInt() ?? 0,
+      turnsCancelled: (data['turns_cancelled'] as num?)?.toInt() ?? 0,
+      completionPercentage: (data['completion_percentage'] as num?)?.toDouble() ?? 0.0,
+      avgDurationMinutes: (data['avg_duration_minutes'] as num?)?.toInt() ?? 0,
+      lastCompletedAt: _parseDateTimeOrNull(data['last_completed_at']),
+      lastAssignedAt: _parseDateTimeOrNull(data['last_assigned_at']),
+      pendingRunsCount: (data['pending_runs_count'] as num?)?.toInt() ?? 0,
+      commonHours: _parseStringArray(data['common_hours']),
+      streakDays: (data['streak_days'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  final String userId;
+  final String userName;
+  final String? userAvatarUrl;
+  final int turnsAssigned;
+  final int turnsCompleted;
+  final int turnsMissed;
+  final int turnsCancelled;
+  final double completionPercentage;
+  final int avgDurationMinutes;
+  final DateTime? lastCompletedAt;
+  final DateTime? lastAssignedAt;
+  final int pendingRunsCount;
+  final List<String> commonHours;
+  final int streakDays;
+
+  bool get isHighPerformer => completionPercentage >= 90;
+  bool get needsAttention => completionPercentage < 50;
+}
+
+final class PrayerByCompletionModel {
+  const PrayerByCompletionModel({
+    required this.completed,
+    required this.missed,
+    required this.cancelled,
+    required this.scheduled,
+  });
+
+  final List<PrayerRunDetailModel> completed;
+  final List<PrayerRunDetailModel> missed;
+  final List<PrayerRunDetailModel> cancelled;
+  final List<PrayerRunDetailModel> scheduled;
+
+  int get totalCompleted => completed.length;
+  int get totalMissed => missed.length;
+  int get totalCount => completed.length + missed.length + cancelled.length + scheduled.length;
+}
+
+final class PrayerRunDetailModel {
+  const PrayerRunDetailModel({
+    required this.runId,
+    required this.status,
+    required this.scheduledAt,
+    this.actualAt,
+    this.targetName,
+    this.communityName,
+    this.responsibleName,
+    required this.plannedDurationMinutes,
+    this.actualDurationMinutes,
+    this.notes,
+  });
+
+  factory PrayerRunDetailModel.fromSupabase(Map<String, dynamic> data) {
+    return PrayerRunDetailModel(
+      runId: data['run_id']?.toString() ?? '',
+      status: data['status']?.toString() ?? 'scheduled',
+      scheduledAt: DateTime.parse(data['scheduled_at']?.toString() ?? DateTime.now().toUtc().toIso8601String()),
+      actualAt: _parseDateTimeOrNull(data['actual_at']),
+      targetName: data['target_name']?.toString(),
+      communityName: data['community_name']?.toString(),
+      responsibleName: data['user_name']?.toString(),
+      plannedDurationMinutes: (data['planned_duration'] as num?)?.toInt() ?? 0,
+      actualDurationMinutes: (data['actual_duration'] as num?)?.toInt(),
+      notes: data['notes']?.toString(),
+    );
+  }
+
+  final String runId;
+  final String status;
+  final DateTime scheduledAt;
+  final DateTime? actualAt;
+  final String? targetName;
+  final String? communityName;
+  final String? responsibleName;
+  final int plannedDurationMinutes;
+  final int? actualDurationMinutes;
+  final String? notes;
+
+  String get displayStatus => const <String, String>{
+        'completed': 'Cumprida',
+        'missed': 'Não cumprida',
+        'scheduled': 'Agendada',
+        'cancelled': 'Cancelada',
+      }[status] ?? status;
+}
+
+final class RegionCoverageModel {
+  const RegionCoverageModel({
+    required this.regionId,
+    required this.regionName,
+    required this.totalTurns,
+    required this.completedTurns,
+    required this.missedTurns,
+    required this.coveragePercentage,
+    required this.uniqueUsers,
+    required this.avgDurationMinutes,
+    required this.rank,
+  });
+
+  factory RegionCoverageModel.fromSupabase(Map<String, dynamic> data) {
+    return RegionCoverageModel(
+      regionId: data['region_id']?.toString() ?? '',
+      regionName: data['region_name']?.toString() ?? 'Desconhecida',
+      totalTurns: (data['total_runs'] as num?)?.toInt() ?? 0,
+      completedTurns: (data['completed_runs'] as num?)?.toInt() ?? 0,
+      missedTurns: (data['missed_runs'] as num?)?.toInt() ?? 0,
+      coveragePercentage: (data['coverage_percentage'] as num?)?.toDouble() ?? 0.0,
+      uniqueUsers: (data['unique_users'] as num?)?.toInt() ?? 0,
+      avgDurationMinutes: (data['avg_duration'] as num?)?.toInt() ?? 0,
+      rank: (data['rank'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  final String regionId;
+  final String regionName;
+  final int totalTurns;
+  final int completedTurns;
+  final int missedTurns;
+  final double coveragePercentage;
+  final int uniqueUsers;
+  final int avgDurationMinutes;
+  final int rank;
+}
+
+final class UserResponsibilityModel {
+  const UserResponsibilityModel({
+    required this.userId,
+    required this.userName,
+    required this.count,
+  });
+
+  factory UserResponsibilityModel.fromMap(Map<String, dynamic> data) {
+    return UserResponsibilityModel(
+      userId: data['id']?.toString() ?? '',
+      userName: data['name']?.toString() ?? 'Usuário',
+      count: (data['count'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  final String userId;
+  final String userName;
+  final int count;
+}
+
+final class TargetCoverageModel {
+  const TargetCoverageModel({
+    required this.targetId,
+    required this.targetName,
+    this.targetEmoji,
+    required this.totalTurns,
+    required this.completedTurns,
+    required this.missedTurns,
+    required this.coveragePercentage,
+    required this.uniqueUsers,
+    required this.rank,
+    required this.responsibleUsers,
+  });
+
+  factory TargetCoverageModel.fromSupabase(Map<String, dynamic> data) {
+    return TargetCoverageModel(
+      targetId: data['target_id']?.toString() ?? '',
+      targetName: data['target_name']?.toString() ?? 'Alvo',
+      targetEmoji: data['target_emoji']?.toString(),
+      totalTurns: (data['total_runs'] as num?)?.toInt() ?? 0,
+      completedTurns: (data['completed_runs'] as num?)?.toInt() ?? 0,
+      missedTurns: (data['missed_runs'] as num?)?.toInt() ?? 0,
+      coveragePercentage: (data['coverage_percentage'] as num?)?.toDouble() ?? 0.0,
+      uniqueUsers: (data['unique_users'] as num?)?.toInt() ?? 0,
+      rank: (data['rank'] as num?)?.toInt() ?? 0,
+      responsibleUsers: _parseResponsibleUsers(data['responsible_users_json']),
+    );
+  }
+
+  static List<UserResponsibilityModel> _parseResponsibleUsers(dynamic json) {
+    if (json == null) return const [];
+    dynamic decoded = json;
+    if (decoded is String) {
+      try {
+        decoded = jsonDecode(decoded);
+      } catch (_) {
+        return const [];
+      }
+    }
+    if (decoded is! List) return const [];
+    return decoded
+        .whereType<Map>()
+        .map((e) => UserResponsibilityModel.fromMap(e.cast<String, dynamic>()))
+        .toList(growable: false);
+  }
+
+  final String targetId;
+  final String targetName;
+  final String? targetEmoji;
+  final int totalTurns;
+  final int completedTurns;
+  final int missedTurns;
+  final double coveragePercentage;
+  final int uniqueUsers;
+  final int rank;
+  final List<UserResponsibilityModel> responsibleUsers;
+}
+
+final class TimeSlotCoverageModel {
+  const TimeSlotCoverageModel({
+    required this.timeSlot,
+    required this.hourStart,
+    required this.hourEnd,
+    required this.scheduledCount,
+    required this.completedCount,
+    required this.missedCount,
+    required this.emptyCount,
+    required this.fillPercentage,
+    required this.periodName,
+  });
+
+  factory TimeSlotCoverageModel.fromSupabase(Map<String, dynamic> data) {
+    return TimeSlotCoverageModel(
+      timeSlot: data['time_slot']?.toString() ?? '',
+      hourStart: (data['hour_start'] as num?)?.toInt() ?? 0,
+      hourEnd: (data['hour_end'] as num?)?.toInt() ?? 23,
+      scheduledCount: (data['scheduled_count'] as num?)?.toInt() ?? 0,
+      completedCount: (data['completed_count'] as num?)?.toInt() ?? 0,
+      missedCount: (data['missed_count'] as num?)?.toInt() ?? 0,
+      emptyCount: (data['empty_count'] as num?)?.toInt() ?? 0,
+      fillPercentage: (data['fill_percentage'] as num?)?.toDouble() ?? 0.0,
+      periodName: data['period_name']?.toString() ?? 'Geral',
+    );
+  }
+
+  final String timeSlot;
+  final int hourStart;
+  final int hourEnd;
+  final int scheduledCount;
+  final int completedCount;
+  final int missedCount;
+  final int emptyCount;
+  final double fillPercentage;
+  final String periodName;
+}
+
+final class FailureAnalysisModel {
+  const FailureAnalysisModel({
+    required this.userId,
+    required this.userName,
+    required this.failedCount,
+    required this.assignedCount,
+    required this.failureRate,
+    required this.rank,
+    required this.uncoveredTargets,
+    required this.uncoveredRegions,
+    required this.uncoveredTimeSlots,
+    this.lastFailureAt,
+  });
+
+  factory FailureAnalysisModel.fromSupabase(Map<String, dynamic> data) {
+    return FailureAnalysisModel(
+      userId: data['user_id']?.toString() ?? '',
+      userName: data['user_name']?.toString() ?? 'Usuário',
+      failedCount: (data['failed_count'] as num?)?.toInt() ?? 0,
+      assignedCount: (data['assigned_count'] as num?)?.toInt() ?? 0,
+      failureRate: (data['failure_rate'] as num?)?.toDouble() ?? 0.0,
+      rank: (data['rank'] as num?)?.toInt() ?? 0,
+      uncoveredTargets: _parseStringArray(data['uncovered_targets_json']),
+      uncoveredRegions: _parseStringArray(data['uncovered_regions_json']),
+      uncoveredTimeSlots: _parseStringArray(data['uncovered_time_slots_json']),
+      lastFailureAt: _parseDateTimeOrNull(data['last_failure_at']),
+    );
+  }
+
+  final String userId;
+  final String userName;
+  final int failedCount;
+  final int assignedCount;
+  final double failureRate;
+  final int rank;
+  final List<String> uncoveredTargets;
+  final List<String> uncoveredRegions;
+  final List<String> uncoveredTimeSlots;
+  final DateTime? lastFailureAt;
+}
+
+final class PrayerFilterOptions {
+  const PrayerFilterOptions({
+    this.fromDate,
+    this.toDate,
+    this.userIds = const [],
+    this.targetIds = const [],
+    this.regionIds = const [],
+    this.statuses = const [],
+    this.weekdays = const [],
+    this.hourStart,
+    this.hourEnd,
+  });
+
+  final DateTime? fromDate;
+  final DateTime? toDate;
+  final List<String> userIds;
+  final List<String> targetIds;
+  final List<String> regionIds;
+  final List<String> statuses;
+  final List<int> weekdays;
+  final int? hourStart;
+  final int? hourEnd;
+
+  bool hasAnyFilter() =>
+      userIds.isNotEmpty ||
+      targetIds.isNotEmpty ||
+      regionIds.isNotEmpty ||
+      statuses.isNotEmpty ||
+      weekdays.isNotEmpty ||
+      hourStart != null ||
+      hourEnd != null;
+}
+
+DateTime? _parseDateTimeOrNull(dynamic v) {
+  if (v == null) return null;
+  final s = v.toString().trim();
+  if (s.isEmpty) return null;
+  return DateTime.tryParse(s);
+}
+
+List<String> _parseStringArray(dynamic json) {
+  if (json == null) return const [];
+  dynamic decoded = json;
+  if (decoded is String) {
+    try {
+      decoded = jsonDecode(decoded);
+    } catch (_) {
+      return const [];
+    }
+  }
+  if (decoded is! List) return const [];
+  return decoded.map((e) => e.toString()).where((s) => s.trim().isNotEmpty).toList(growable: false);
+}
+
 class DemoRepository extends ChangeNotifier {
   DemoRepository({this.supabase}) {
     if (supabase != null) {
@@ -13147,6 +13556,352 @@ class DemoRepository extends ChangeNotifier {
             communityName: communityName,
           ),
         );
+      }
+      return List.unmodifiable(out);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<PrayerScaleSummaryModel> getPrayerScaleSummary({
+    required String communityId,
+    required DateTime from,
+    required DateTime to,
+  }) async {
+    final sb = supabase;
+    if (sb == null) {
+      return const PrayerScaleSummaryModel(
+        totalScales: 0,
+        totalRuns: 0,
+        totalCompleted: 0,
+        totalMissed: 0,
+        totalCancelled: 0,
+        completionRate: 0.0,
+        uniqueUsers: 0,
+        totalPrayerTime: Duration.zero,
+        avgSessionDurationMinutes: 0,
+      );
+    }
+    if (isOffline) {
+      return const PrayerScaleSummaryModel(
+        totalScales: 0,
+        totalRuns: 0,
+        totalCompleted: 0,
+        totalMissed: 0,
+        totalCancelled: 0,
+        completionRate: 0.0,
+        uniqueUsers: 0,
+        totalPrayerTime: Duration.zero,
+        avgSessionDurationMinutes: 0,
+      );
+    }
+    final cid = communityId.trim();
+    if (cid.isEmpty) {
+      return const PrayerScaleSummaryModel(
+        totalScales: 0,
+        totalRuns: 0,
+        totalCompleted: 0,
+        totalMissed: 0,
+        totalCancelled: 0,
+        completionRate: 0.0,
+        uniqueUsers: 0,
+        totalPrayerTime: Duration.zero,
+        avgSessionDurationMinutes: 0,
+      );
+    }
+
+    try {
+      final rows = await sb.rpc(
+        'get_prayer_scale_summary',
+        params: <String, Object?>{
+          'p_community_id': cid,
+          'p_from': from.toUtc().toIso8601String().split('T').first,
+          'p_to': to.toUtc().toIso8601String().split('T').first,
+        },
+      );
+      if (rows is List && rows.isNotEmpty && rows.first is Map) {
+        return PrayerScaleSummaryModel.fromSupabase((rows.first as Map).cast<String, dynamic>());
+      }
+      return const PrayerScaleSummaryModel(
+        totalScales: 0,
+        totalRuns: 0,
+        totalCompleted: 0,
+        totalMissed: 0,
+        totalCancelled: 0,
+        completionRate: 0.0,
+        uniqueUsers: 0,
+        totalPrayerTime: Duration.zero,
+        avgSessionDurationMinutes: 0,
+      );
+    } catch (_) {
+      return const PrayerScaleSummaryModel(
+        totalScales: 0,
+        totalRuns: 0,
+        totalCompleted: 0,
+        totalMissed: 0,
+        totalCancelled: 0,
+        completionRate: 0.0,
+        uniqueUsers: 0,
+        totalPrayerTime: Duration.zero,
+        avgSessionDurationMinutes: 0,
+      );
+    }
+  }
+
+  Future<List<UserPrayerStatsModel>> getUserPrayerStats({
+    required String communityId,
+    required DateTime from,
+    required DateTime to,
+  }) async {
+    final sb = supabase;
+    if (sb == null) return const [];
+    if (isOffline) return const [];
+    final cid = communityId.trim();
+    if (cid.isEmpty) return const [];
+    try {
+      final rows = await sb.rpc(
+        'get_prayer_by_user_detailed',
+        params: <String, Object?>{
+          'p_community_id': cid,
+          'p_from': from.toUtc().toIso8601String().split('T').first,
+          'p_to': to.toUtc().toIso8601String().split('T').first,
+        },
+      );
+      final list = <UserPrayerStatsModel>[];
+      for (final raw in (rows as List<dynamic>)) {
+        if (raw is! Map) continue;
+        list.add(UserPrayerStatsModel.fromSupabase(raw.cast<String, dynamic>()));
+      }
+      return List.unmodifiable(list);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<PrayerByCompletionModel> getPrayersByCompletionStatus({
+    required String communityId,
+    required DateTime from,
+    required DateTime to,
+    int limit = 200,
+    int offset = 0,
+  }) async {
+    final sb = supabase;
+    if (sb == null) {
+      return const PrayerByCompletionModel(completed: [], missed: [], cancelled: [], scheduled: []);
+    }
+    if (isOffline) {
+      return const PrayerByCompletionModel(completed: [], missed: [], cancelled: [], scheduled: []);
+    }
+    final cid = communityId.trim();
+    if (cid.isEmpty) {
+      return const PrayerByCompletionModel(completed: [], missed: [], cancelled: [], scheduled: []);
+    }
+    try {
+      final rows = await sb.rpc(
+        'get_prayers_by_completion_status',
+        params: <String, Object?>{
+          'p_community_id': cid,
+          'p_from': from.toUtc().toIso8601String(),
+          'p_to': to.toUtc().toIso8601String(),
+          'p_limit': limit,
+          'p_offset': offset,
+        },
+      );
+
+      final completed = <PrayerRunDetailModel>[];
+      final missed = <PrayerRunDetailModel>[];
+      final cancelled = <PrayerRunDetailModel>[];
+      final scheduled = <PrayerRunDetailModel>[];
+
+      for (final raw in (rows as List<dynamic>)) {
+        if (raw is! Map) continue;
+        final model = PrayerRunDetailModel.fromSupabase(raw.cast<String, dynamic>());
+        switch (model.status) {
+          case 'completed':
+            completed.add(model);
+          case 'missed':
+            missed.add(model);
+          case 'cancelled':
+            cancelled.add(model);
+          case 'scheduled':
+            scheduled.add(model);
+          default:
+            scheduled.add(model);
+        }
+      }
+
+      return PrayerByCompletionModel(
+        completed: List.unmodifiable(completed),
+        missed: List.unmodifiable(missed),
+        cancelled: List.unmodifiable(cancelled),
+        scheduled: List.unmodifiable(scheduled),
+      );
+    } catch (_) {
+      return const PrayerByCompletionModel(completed: [], missed: [], cancelled: [], scheduled: []);
+    }
+  }
+
+  Future<List<RegionCoverageModel>> getRegionCoverage({
+    required String communityId,
+    required DateTime from,
+    required DateTime to,
+  }) async {
+    final sb = supabase;
+    if (sb == null) return const [];
+    if (isOffline) return const [];
+    final cid = communityId.trim();
+    if (cid.isEmpty) return const [];
+    try {
+      final rows = await sb.rpc(
+        'get_coverage_by_region',
+        params: <String, Object?>{
+          'p_community_id': cid,
+          'p_from': from.toUtc().toIso8601String().split('T').first,
+          'p_to': to.toUtc().toIso8601String().split('T').first,
+        },
+      );
+      final list = <RegionCoverageModel>[];
+      for (final raw in (rows as List<dynamic>)) {
+        if (raw is! Map) continue;
+        list.add(RegionCoverageModel.fromSupabase(raw.cast<String, dynamic>()));
+      }
+      return List.unmodifiable(list);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<List<TargetCoverageModel>> getTargetCoverage({
+    required String communityId,
+    required DateTime from,
+    required DateTime to,
+  }) async {
+    final sb = supabase;
+    if (sb == null) return const [];
+    if (isOffline) return const [];
+    final cid = communityId.trim();
+    if (cid.isEmpty) return const [];
+    try {
+      final rows = await sb.rpc(
+        'get_coverage_by_target',
+        params: <String, Object?>{
+          'p_community_id': cid,
+          'p_from': from.toUtc().toIso8601String().split('T').first,
+          'p_to': to.toUtc().toIso8601String().split('T').first,
+        },
+      );
+      final list = <TargetCoverageModel>[];
+      for (final raw in (rows as List<dynamic>)) {
+        if (raw is! Map) continue;
+        list.add(TargetCoverageModel.fromSupabase(raw.cast<String, dynamic>()));
+      }
+      return List.unmodifiable(list);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<List<TimeSlotCoverageModel>> getTimeSlotCoverage({
+    required String communityId,
+    required DateTime from,
+    required DateTime to,
+    int slotMinutes = 60,
+  }) async {
+    final sb = supabase;
+    if (sb == null) return const [];
+    if (isOffline) return const [];
+    final cid = communityId.trim();
+    if (cid.isEmpty) return const [];
+    try {
+      final rows = await sb.rpc(
+        'get_time_slot_coverage',
+        params: <String, Object?>{
+          'p_community_id': cid,
+          'p_from': from.toUtc().toIso8601String().split('T').first,
+          'p_to': to.toUtc().toIso8601String().split('T').first,
+          'p_slot_minutes': slotMinutes,
+        },
+      );
+      final list = <TimeSlotCoverageModel>[];
+      for (final raw in (rows as List<dynamic>)) {
+        if (raw is! Map) continue;
+        list.add(TimeSlotCoverageModel.fromSupabase(raw.cast<String, dynamic>()));
+      }
+      return List.unmodifiable(list);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<List<FailureAnalysisModel>> getFailureAnalysis({
+    required String communityId,
+    required DateTime from,
+    required DateTime to,
+  }) async {
+    final sb = supabase;
+    if (sb == null) return const [];
+    if (isOffline) return const [];
+    final cid = communityId.trim();
+    if (cid.isEmpty) return const [];
+    try {
+      final rows = await sb.rpc(
+        'get_failure_analysis',
+        params: <String, Object?>{
+          'p_community_id': cid,
+          'p_from': from.toUtc().toIso8601String().split('T').first,
+          'p_to': to.toUtc().toIso8601String().split('T').first,
+        },
+      );
+      final list = <FailureAnalysisModel>[];
+      for (final raw in (rows as List<dynamic>)) {
+        if (raw is! Map) continue;
+        list.add(FailureAnalysisModel.fromSupabase(raw.cast<String, dynamic>()));
+      }
+      return List.unmodifiable(list);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> getPrayerReportCrossData({
+    required String communityId,
+    required PrayerFilterOptions filters,
+    int limit = 200,
+    int offset = 0,
+  }) async {
+    final sb = supabase;
+    if (sb == null) return const [];
+    if (isOffline) return const [];
+    final cid = communityId.trim();
+    if (cid.isEmpty) return const [];
+    final from = (filters.fromDate ?? DateTime.now().toUtc().subtract(const Duration(days: 29))).toUtc();
+    final to = (filters.toDate ?? DateTime.now().toUtc()).toUtc();
+
+    try {
+      final rows = await sb.rpc(
+        'get_prayer_report_cross_data',
+        params: <String, Object?>{
+          'p_community_id': cid,
+          'p_from': from.toIso8601String(),
+          'p_to': to.toIso8601String(),
+          'p_user_ids': filters.userIds.isEmpty ? null : filters.userIds,
+          'p_target_ids': filters.targetIds.isEmpty ? null : filters.targetIds,
+          'p_region_ids': filters.regionIds.isEmpty ? null : filters.regionIds,
+          'p_statuses': filters.statuses.isEmpty ? null : filters.statuses,
+          'p_weekdays': filters.weekdays.isEmpty ? null : filters.weekdays,
+          'p_hour_start': filters.hourStart,
+          'p_hour_end': filters.hourEnd,
+          'p_limit': limit,
+          'p_offset': offset,
+        },
+      );
+      final out = <Map<String, dynamic>>[];
+      for (final raw in (rows as List<dynamic>)) {
+        if (raw is Map<String, dynamic>) {
+          out.add(raw);
+        } else if (raw is Map) {
+          out.add(raw.cast<String, dynamic>());
+        }
       }
       return List.unmodifiable(out);
     } catch (_) {
@@ -37131,6 +37886,8 @@ class CommunityPrayerScalesScreen extends StatefulWidget {
 class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScreen> {
   var _loadingRuns = true;
   var _loadingReport = false;
+  int _reportLoadToken = 0;
+  Timer? _reportLoadingFailsafe;
   List<_CommunityPrayerRunRow> _runs = const [];
   int _dashTotalDurationSeconds = 0;
   int _dashTotalSessions = 0;
@@ -37329,7 +38086,22 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_loadRuns());
+      final repo = RepoScope.of(context);
+      final session = SessionScope.of(context).value;
+      final c = repo.findCommunity(widget.args.communityId);
+      if (c == null) return;
+      if (session is! AuthSession) return;
+      final canModerate = repo.canModerateCommunity(c.id, session.userId);
+      if (canModerate) {
+        unawaited(_loadReportIfAllowed(repo: repo, canModerate: canModerate));
+      }
     });
+  }
+
+  @override
+  void dispose() {
+    _reportLoadingFailsafe?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadRuns() async {
@@ -37406,6 +38178,19 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
     if (sb == null) return;
     if (repo.isOffline) return;
     if (_loadingReport) return;
+    final token = ++_reportLoadToken;
+    _reportLoadingFailsafe?.cancel();
+    _reportLoadingFailsafe = Timer(const Duration(seconds: 25), () {
+      if (!mounted) return;
+      if (!_loadingReport) return;
+      if (token != _reportLoadToken) return;
+      setState(() => _loadingReport = false);
+      showErrorSnackBar(
+        context,
+        message: 'Relatório demorou para responder. Tente novamente.',
+        onRetry: () => unawaited(_loadReportIfAllowed(repo: repo, canModerate: canModerate)),
+      );
+    });
     setState(() => _loadingReport = true);
     final nowUtc = DateTime.now().toUtc();
     final todayUtc = DateTime.utc(nowUtc.year, nowUtc.month, nowUtc.day);
@@ -37413,11 +38198,12 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
     final occurrencesFrom = nowUtc.subtract(const Duration(days: 30));
     final occurrencesTo = nowUtc.add(const Duration(days: 14));
     try {
+      const rpcTimeout = Duration(seconds: 20);
       final dashRows = await sb.rpc('get_community_prayer_dashboard', params: <String, Object?>{
         'p_community_id': widget.args.communityId,
         'p_from': '${fromAllTime.year}-${fromAllTime.month.toString().padLeft(2, '0')}-${fromAllTime.day.toString().padLeft(2, '0')}',
         'p_to': '${todayUtc.year}-${todayUtc.month.toString().padLeft(2, '0')}-${todayUtc.day.toString().padLeft(2, '0')}',
-      });
+      }).timeout(rpcTimeout);
 
       int totalDurationSeconds = 0;
       int totalSessions = 0;
@@ -37463,7 +38249,7 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
         'p_to': occurrencesTo.toIso8601String(),
         'p_limit': 200,
         'p_offset': 0,
-      });
+      }).timeout(rpcTimeout);
 
       final occurrences = <_CommunityPrayerOccurrenceReportRow>[];
       for (final raw in (occurrenceRows as List<dynamic>)) {
@@ -37492,6 +38278,8 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
       }
 
       if (!mounted) return;
+      if (token != _reportLoadToken) return;
+      _reportLoadingFailsafe?.cancel();
       setState(() {
         _dashTotalDurationSeconds = totalDurationSeconds;
         _dashTotalSessions = totalSessions;
@@ -37503,7 +38291,14 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
       });
     } catch (_) {
       if (!mounted) return;
+      if (token != _reportLoadToken) return;
+      _reportLoadingFailsafe?.cancel();
       setState(() => _loadingReport = false);
+      showErrorSnackBar(
+        context,
+        message: 'Falha ao carregar relatório (pode haver lock/migration aberta no BD).',
+        onRetry: () => unawaited(_loadReportIfAllowed(repo: repo, canModerate: canModerate)),
+      );
     }
   }
 
@@ -37587,7 +38382,6 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
         }
 
         final canModerate = repo.canModerateCommunity(c.id, s.userId);
-        unawaited(_loadReportIfAllowed(repo: repo, canModerate: canModerate));
         final tabs = canModerate ? 3 : 2;
 
         return DefaultTabController(
@@ -39459,11 +40253,6 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
                                 t(context).communityFeedSectionTitle,
                                 style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
                               ),
-                            ),
-                            IconButton(
-                              onPressed: () => Navigator.of(context).maybePop(),
-                              tooltip: t(context).commonBack,
-                              icon: const Icon(Icons.arrow_back),
                             ),
                           ],
                         ),
