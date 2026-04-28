@@ -428,6 +428,7 @@ class AtalaiaTextField extends StatelessWidget {
     this.keyboardType,
     this.minLines,
     this.maxLines = 1,
+    this.maxLength,
     this.autofillHints,
     this.textCapitalization = TextCapitalization.none,
     super.key,
@@ -450,6 +451,7 @@ class AtalaiaTextField extends StatelessWidget {
   final TextInputType? keyboardType;
   final int? minLines;
   final int maxLines;
+  final int? maxLength;
   final Iterable<String>? autofillHints;
   final TextCapitalization textCapitalization;
 
@@ -468,6 +470,7 @@ class AtalaiaTextField extends StatelessWidget {
       keyboardType: keyboardType,
       minLines: minLines,
       maxLines: maxLines,
+      maxLength: maxLength,
       autofillHints: autofillHints,
       textCapitalization: textCapitalization,
       decoration: InputDecoration(

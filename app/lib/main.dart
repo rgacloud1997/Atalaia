@@ -153,6 +153,18 @@ final class _LocalNotifications {
     return allowed;
   }
 
+  NotificationDetails inboxDetails() {
+    const android = AndroidNotificationDetails(
+      'inbox_notifications',
+      'Notificações',
+      channelDescription: 'Notificações do Atalaia Social',
+      importance: Importance.max,
+      priority: Priority.high,
+    );
+    const ios = DarwinNotificationDetails(presentAlert: true, presentSound: true);
+    return const NotificationDetails(android: android, iOS: ios);
+  }
+
   NotificationDetails reminderDetails(AppLocalizations l10n) {
     final android = AndroidNotificationDetails(
       'prayer_run_reminders',
@@ -479,6 +491,22 @@ class SessionScope extends InheritedNotifier<ValueNotifier<SessionState>> {
     final scope = context.dependOnInheritedWidgetOfExactType<SessionScope>();
     if (scope == null) {
       throw StateError('SessionScope not found');
+    }
+    return scope.notifier!;
+  }
+}
+
+class ThemeModeScope extends InheritedNotifier<ValueNotifier<ThemeMode>> {
+  const ThemeModeScope({
+    required ValueNotifier<ThemeMode> notifier,
+    required super.child,
+    super.key,
+  }) : super(notifier: notifier);
+
+  static ValueNotifier<ThemeMode> of(BuildContext context) {
+    final scope = context.dependOnInheritedWidgetOfExactType<ThemeModeScope>();
+    if (scope == null) {
+      throw StateError('ThemeModeScope not found');
     }
     return scope.notifier!;
   }
@@ -2018,6 +2046,8 @@ final class ThreadModel {
     this.communityId,
     this.unreadCount = 0,
     this.isMuted = false,
+    this.themeKey = 'default',
+    this.ephemeralHours = 0,
   });
 
   final String id;
@@ -2031,12 +2061,16 @@ final class ThreadModel {
   final String? communityId;
   final int unreadCount;
   final bool isMuted;
+  final String themeKey;
+  final int ephemeralHours;
 
   ThreadModel copyWith({
     String? lastMessage,
     DateTime? lastAt,
     int? unreadCount,
     bool? isMuted,
+    String? themeKey,
+    int? ephemeralHours,
   }) {
     return ThreadModel(
       id: id,
@@ -2050,6 +2084,8 @@ final class ThreadModel {
       communityId: communityId,
       unreadCount: unreadCount ?? this.unreadCount,
       isMuted: isMuted ?? this.isMuted,
+      themeKey: themeKey ?? this.themeKey,
+      ephemeralHours: ephemeralHours ?? this.ephemeralHours,
     );
   }
 }
@@ -2918,6 +2954,9 @@ class DemoRepository extends ChangeNotifier {
   final Set<String> _prayerUsernamesLoadingFor = <String>{};
   late List<ThreadModel> _threads;
   late Map<String, List<MessageModel>> _messagesByThread;
+  final Set<String> _restrictedDirectUserIds = <String>{};
+  final Set<String> _blockedDirectUserIds = <String>{};
+  final Map<String, String> _directNicknamesByThreadUserKey = <String, String>{};
   late List<CommunityModel> _communities;
   late Map<String, Set<String>> _communityMembersById;
   late Map<String, Set<String>> _communityModeratorsById;
@@ -2978,6 +3017,12 @@ class DemoRepository extends ChangeNotifier {
   String _feedLoadedKey = '';
   DateTime? _feedLoadedAt;
   RealtimeChannel? _alertsRealtimeChannel;
+  RealtimeChannel? _notificationsRealtimeChannel;
+  String _notificationsRealtimeViewerId = '';
+  Timer? _notificationsRefreshDebounce;
+  int _notificationsRefreshVersion = 0;
+  int _notificationsLocalVersion = 0;
+  final Set<String> _notificationsLocallyRemovedIds = <String>{};
   late Map<String, Set<String>> _followersByUserId;
   late Map<String, Set<String>> _followingByUserId;
   final Set<String> _followToggleInFlight = <String>{};
@@ -2991,6 +3036,7 @@ class DemoRepository extends ChangeNotifier {
   var _profileSearchResults = const <ProfileModel>[];
   var _profileSearchQuery = '';
   var _notificationsLoadedForViewerId = '';
+  final Map<String, int> _notificationsUnreadCountByViewerId = <String, int>{};
   var _mediaLibraryLoadedForViewerId = '';
   var _playlistsLoadedForViewerId = '';
   var _viewerUserId = 'u1';
@@ -3025,6 +3071,12 @@ class DemoRepository extends ChangeNotifier {
   bool _directIsLoading = false;
   String? _lastStoryCreateError;
   bool? _storiesHasCommunityIdColumn;
+  bool? _notificationsHasKindColumn;
+  bool? _notificationsHasReadAtColumn;
+  bool? _directThreadsHasThemeKeyColumn;
+  bool? _directThreadsHasEphemeralHoursColumn;
+  bool? _directThreadMembersHasNicknameColumn;
+  bool? _directThreadMemberAliasesAvailable;
   Timer? _directPersistDebounce;
   String _directCacheLoadedForSessionKey = '';
   Timer? _mediaLibraryPersistDebounce;
@@ -3075,6 +3127,9 @@ class DemoRepository extends ChangeNotifier {
     _commentsByPost = <String, List<CommentModel>>{};
     _threads = const <ThreadModel>[];
     _messagesByThread = <String, List<MessageModel>>{};
+    _restrictedDirectUserIds.clear();
+    _blockedDirectUserIds.clear();
+    _directNicknamesByThreadUserKey.clear();
     _communities = const <CommunityModel>[];
     _communityMembersById = <String, Set<String>>{};
     _communityModeratorsById = <String, Set<String>>{};
@@ -3096,7 +3151,15 @@ class DemoRepository extends ChangeNotifier {
     }
     _directChatChannelsByThreadId.clear();
     _lastDirectSendError = null;
+    unawaited(_notificationsRealtimeChannel?.unsubscribe() ?? Future<void>.value());
+    _notificationsRealtimeChannel = null;
+    _notificationsRealtimeViewerId = '';
+    _notificationsRefreshDebounce?.cancel();
+    _notificationsRefreshDebounce = null;
+    _notificationsRefreshVersion = 0;
     _notifications = const <NotificationModel>[];
+    _notificationsLocalVersion = 0;
+    _notificationsLocallyRemovedIds.clear();
     _stories = const <StoryModel>[];
     _alerts = const <AlertModel>[];
     _campaigns = const <CampaignModel>[];
@@ -3933,6 +3996,18 @@ class DemoRepository extends ChangeNotifier {
       _directCacheLoadedForSessionKey = '';
       _mediaLibraryLoadedForViewerId = '';
       _playlistsLoadedForViewerId = '';
+      _notificationsLoadedForViewerId = '';
+      _notifications = const <NotificationModel>[];
+      _notificationsLocalVersion = 0;
+      _notificationsLocallyRemovedIds.clear();
+      _notificationsRefreshDebounce?.cancel();
+      _notificationsRefreshDebounce = null;
+      _notificationsRefreshVersion = 0;
+      if (_notificationsRealtimeChannel != null) {
+        unawaited(_notificationsRealtimeChannel!.unsubscribe());
+        _notificationsRealtimeChannel = null;
+        _notificationsRealtimeViewerId = '';
+      }
       for (final ch in _communityChatChannelsById.values) {
         unawaited(ch.unsubscribe());
       }
@@ -3951,9 +4026,141 @@ class DemoRepository extends ChangeNotifier {
         unawaited(refreshDirectForViewer(session.userId, force: true));
         unawaited(refreshMediaLibraryForViewer(force: true));
         unawaited(refreshPlaylistsForViewer(force: true));
+        unawaited(refreshNotificationsForViewer(session.userId, force: true));
+        unawaited(_ensureNotificationsSubscribed(session.userId));
       }
     }
     if (sessionChanged || viewerChanged) notifyListeners();
+  }
+
+  Future<void> _ensureNotificationsSubscribed(String viewerId) async {
+    final sb = supabase;
+    if (sb == null) return;
+    if (isOffline) return;
+    final v = viewerId.trim();
+    if (!_looksLikeUuid(v)) return;
+    if (_notificationsRealtimeViewerId == v && _notificationsRealtimeChannel != null) return;
+    if (_notificationsRealtimeChannel != null) {
+      unawaited(_notificationsRealtimeChannel!.unsubscribe());
+      _notificationsRealtimeChannel = null;
+    }
+    _notificationsRealtimeViewerId = v;
+    final channel = sb.channel('realtime:notifications:$v');
+    channel.onPostgresChanges(
+      event: PostgresChangeEvent.all,
+      schema: 'public',
+      table: 'notifications',
+      filter: PostgresChangeFilter(
+        type: PostgresChangeFilterType.eq,
+        column: 'user_id',
+        value: v,
+      ),
+      callback: (payload) {
+        if (isOffline) return;
+        if (payload.eventType == PostgresChangeEvent.insert) {
+          final r = payload.newRecord;
+          final userId = r['user_id']?.toString();
+          final id = r['id']?.toString();
+          final model = _notificationFromRawRecord(r);
+          if (model != null && model.userId == v) {
+            _upsertNotificationLocal(model, notify: true);
+          }
+          if (userId == v && id != null && id.trim().isNotEmpty) {
+            unawaited(
+              () async {
+                final allowed = await _LocalNotifications.instance.ensurePermission();
+                if (!allowed) return;
+                final title = (r['title']?.toString() ?? '').trim();
+                final body = (r['body']?.toString() ?? '').trim();
+                await _LocalNotifications.instance.plugin.show(
+                  _fnv1a32('notif:$id'),
+                  title.isEmpty ? 'Nova notificação' : title,
+                  body.isEmpty ? null : body,
+                  _LocalNotifications.instance.inboxDetails(),
+                  payload: 'notification:$id',
+                );
+              }(),
+            );
+          }
+        } else if (payload.eventType == PostgresChangeEvent.update) {
+          final model = _notificationFromRawRecord(payload.newRecord);
+          if (model != null && model.userId == v) {
+            _upsertNotificationLocal(model, notify: true);
+          }
+        } else if (payload.eventType == PostgresChangeEvent.delete) {
+          final id = payload.oldRecord['id']?.toString().trim() ?? '';
+          if (id.isNotEmpty) {
+            _removeNotificationLocal(id, notify: true);
+          }
+        }
+        _scheduleNotificationsRefresh(v);
+      },
+    );
+    channel.subscribe();
+    _notificationsRealtimeChannel = channel;
+  }
+
+  void _scheduleNotificationsRefresh(String viewerId) {
+    final v = viewerId.trim();
+    if (v.isEmpty) return;
+    _notificationsRefreshDebounce?.cancel();
+    _notificationsRefreshDebounce = Timer(const Duration(milliseconds: 650), () {
+      unawaited(refreshNotificationsForViewer(v, force: true));
+    });
+  }
+
+  NotificationModel? _notificationFromRawRecord(Map<String, dynamic> r) {
+    final id = r['id']?.toString();
+    final userId = r['user_id']?.toString();
+    if (id == null || id.isEmpty) return null;
+    if (userId == null || userId.isEmpty) return null;
+    final actorId = r['actor_id']?.toString();
+    final typeRaw = r['type']?.toString();
+    final kindRaw = r['kind']?.toString();
+    final type = _parseNotificationType(typeRaw) ?? _parseNotificationType(kindRaw);
+    if (type == null) return null;
+    final createdAt =
+        DateTime.tryParse(r['created_at']?.toString() ?? '')?.toLocal() ?? DateTime.now();
+    return NotificationModel(
+      id: id,
+      type: type,
+      userId: userId,
+      actorId: (actorId == null || actorId.isEmpty) ? null : actorId,
+      title: r['title']?.toString(),
+      body: r['body']?.toString(),
+      entityId: r['entity_id']?.toString(),
+      entityType: r['entity_type']?.toString(),
+      locationId: r['location_id']?.toString(),
+      createdAt: createdAt,
+      isRead: (r['is_read'] == true) || (r['read_at'] != null),
+    );
+  }
+
+  void _upsertNotificationLocal(NotificationModel next, {required bool notify}) {
+    _notificationsLocalVersion++;
+    _notificationsLocallyRemovedIds.remove(next.id);
+    final list = _notifications.toList(growable: true);
+    final i = list.indexWhere((n) => n.id == next.id);
+    if (i >= 0) {
+      list[i] = next;
+    } else {
+      list.add(next);
+    }
+    list.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    _notifications = List.unmodifiable(list);
+    if (notify) notifyListeners();
+  }
+
+  void _removeNotificationLocal(String notificationId, {required bool notify}) {
+    final before = _notifications.length;
+    _notificationsLocalVersion++;
+    _notificationsLocallyRemovedIds.add(notificationId);
+    _notifications = List.unmodifiable(
+      _notifications.where((n) => n.id != notificationId).toList(growable: false),
+    );
+    if (notify && before != _notifications.length) {
+      notifyListeners();
+    }
   }
 
   Future<void> refreshMediaLibraryForViewer({bool force = false}) async {
@@ -4170,6 +4377,9 @@ class DemoRepository extends ChangeNotifier {
 
       final threadsRaw = decoded['threads'];
       final messagesRaw = decoded['messagesByThread'];
+      final restrictedRaw = decoded['restrictedUserIds'];
+      final blockedRaw = decoded['blockedUserIds'];
+      final nicknamesRaw = decoded['directNicknames'];
 
       final nextThreads = <ThreadModel>[];
       if (threadsRaw is List) {
@@ -4207,6 +4417,28 @@ class DemoRepository extends ChangeNotifier {
           _messagesByThread.putIfAbsent(entry.key, () => entry.value);
         }
       }
+      if (restrictedRaw is List) {
+        for (final item in restrictedRaw) {
+          final id = item?.toString().trim() ?? '';
+          if (id.isEmpty) continue;
+          _restrictedDirectUserIds.add(id);
+        }
+      }
+      if (blockedRaw is List) {
+        for (final item in blockedRaw) {
+          final id = item?.toString().trim() ?? '';
+          if (id.isEmpty) continue;
+          _blockedDirectUserIds.add(id);
+        }
+      }
+      if (nicknamesRaw is Map) {
+        for (final entry in nicknamesRaw.entries) {
+          final key = entry.key?.toString().trim() ?? '';
+          final value = entry.value?.toString().trim() ?? '';
+          if (key.isEmpty || value.isEmpty) continue;
+          _directNicknamesByThreadUserKey[key] = value;
+        }
+      }
       notifyListeners();
     } catch (_) {}
   }
@@ -4221,6 +4453,11 @@ class DemoRepository extends ChangeNotifier {
         'messagesByThread': <String, Object?>{
           for (final entry in _messagesByThread.entries)
             entry.key: entry.value.map(_messageToJson).toList(growable: false),
+        },
+        'restrictedUserIds': _restrictedDirectUserIds.toList(growable: false),
+        'blockedUserIds': _blockedDirectUserIds.toList(growable: false),
+        'directNicknames': <String, String>{
+          for (final entry in _directNicknamesByThreadUserKey.entries) entry.key: entry.value,
         },
       };
       await sp.setString('direct_cache_v1:$_viewerSessionKey', jsonEncode(data));
@@ -4347,6 +4584,8 @@ class DemoRepository extends ChangeNotifier {
       'communityId': t.communityId,
       'unreadCount': t.unreadCount,
       'isMuted': t.isMuted,
+      'themeKey': t.themeKey,
+      'ephemeralHours': t.ephemeralHours,
     };
   }
 
@@ -4371,6 +4610,8 @@ class DemoRepository extends ChangeNotifier {
       communityId: raw['communityId']?.toString(),
       unreadCount: int.tryParse(raw['unreadCount']?.toString() ?? '') ?? 0,
       isMuted: raw['isMuted'] == true,
+      themeKey: (raw['themeKey']?.toString().trim().isEmpty ?? true) ? 'default' : raw['themeKey'].toString().trim(),
+      ephemeralHours: (int.tryParse(raw['ephemeralHours']?.toString() ?? '') ?? 0).clamp(0, 24 * 7),
     );
   }
 
@@ -7425,6 +7666,44 @@ class DemoRepository extends ChangeNotifier {
     return url;
   }
 
+  Future<String?> uploadDirectMessageImage({
+    required String userId,
+    required Uint8List bytes,
+    required String contentType,
+    required String fileExtension,
+  }) async {
+    final sb = supabase;
+    if (sb == null) return null;
+    if (isOffline) return null;
+    final viewerId = sb.auth.currentUser?.id;
+    if (viewerId == null || viewerId != userId) return null;
+    final safeExt = fileExtension.trim().toLowerCase();
+    if (safeExt.isEmpty) return null;
+    if (bytes.isEmpty || bytes.lengthInBytes > 5 * 1024 * 1024) return null;
+
+    final path = 'direct/images/$userId/${DateTime.now().millisecondsSinceEpoch}.$safeExt';
+    await sb.storage.from('media').uploadBinary(
+          path,
+          bytes,
+          fileOptions: FileOptions(
+            contentType: contentType.trim().isEmpty ? null : contentType.trim(),
+            upsert: true,
+          ),
+        );
+    final url = sb.storage.from('media').getPublicUrl(path);
+    try {
+      await sb.from('media_files').insert(<String, Object?>{
+        'user_id': userId,
+        'type': 'direct_image',
+        'url': url,
+        'thumbnail': null,
+        'size': bytes.lengthInBytes,
+        'duration': null,
+      });
+    } catch (_) {}
+    return url;
+  }
+
   void _pruneExpiredStories() {
     if (_stories.isEmpty) {
       _rescheduleStoryExpiryTimer();
@@ -8046,8 +8325,11 @@ class DemoRepository extends ChangeNotifier {
   }
 
   List<NotificationModel> notificationsFor(String viewerId) {
+    if (supabase != null &&
+        (_notificationsRealtimeChannel == null || _notificationsRealtimeViewerId != viewerId)) {
+      unawaited(_ensureNotificationsSubscribed(viewerId));
+    }
     if (supabase != null && _notificationsLoadedForViewerId != viewerId) {
-      _notificationsLoadedForViewerId = viewerId;
       unawaited(refreshNotificationsForViewer(viewerId, force: true));
     }
     final list = _notifications
@@ -8058,6 +8340,13 @@ class DemoRepository extends ChangeNotifier {
   }
 
   int unreadNotificationCount(String viewerId) {
+    if (supabase != null &&
+        (_notificationsRealtimeChannel == null || _notificationsRealtimeViewerId != viewerId)) {
+      unawaited(_ensureNotificationsSubscribed(viewerId));
+    }
+    if (supabase != null && _notificationsLoadedForViewerId != viewerId) {
+      unawaited(refreshNotificationsForViewer(viewerId, force: true));
+    }
     var count = 0;
     for (final n in _notifications) {
       if (n.userId != viewerId) continue;
@@ -8071,14 +8360,65 @@ class DemoRepository extends ChangeNotifier {
     final sb = supabase;
     if (sb == null) return;
     if (isOffline) return;
+    final v = viewerId.trim();
+    if (v.isEmpty) return;
+    final localVersionAtStart = _notificationsLocalVersion;
+    final refreshVersion = ++_notificationsRefreshVersion;
     if (!force && _notificationsLoadedForViewerId == viewerId && _notifications.isNotEmpty) return;
     try {
-      final rows = await sb
-          .from('notifications')
-          .select('id,user_id,actor_id,type,kind,title,body,entity_id,entity_type,location_id,is_read,read_at,created_at')
-          .eq('user_id', viewerId)
-          .order('created_at', ascending: false)
-          .limit(60);
+      late final dynamic rows;
+      try {
+        final selectKind = _notificationsHasKindColumn != false;
+        final selectReadAt = _notificationsHasReadAtColumn != false;
+        final cols = [
+          'id',
+          'user_id',
+          'actor_id',
+          'type',
+          if (selectKind) 'kind',
+          'title',
+          'body',
+          'entity_id',
+          'entity_type',
+          'location_id',
+          'is_read',
+          if (selectReadAt) 'read_at',
+          'created_at',
+        ].join(',');
+        rows = await sb
+            .from('notifications')
+            .select(cols)
+            .eq('user_id', v)
+            .order('created_at', ascending: false)
+            .limit(60);
+      } on PostgrestException catch (e) {
+        final msg = '${e.message} ${e.details} ${e.hint}'.toLowerCase();
+        if (msg.contains('kind')) _notificationsHasKindColumn = false;
+        if (msg.contains('read_at')) _notificationsHasReadAtColumn = false;
+        final selectKind = _notificationsHasKindColumn != false;
+        final selectReadAt = _notificationsHasReadAtColumn != false;
+        final cols = [
+          'id',
+          'user_id',
+          'actor_id',
+          'type',
+          if (selectKind) 'kind',
+          'title',
+          'body',
+          'entity_id',
+          'entity_type',
+          'location_id',
+          'is_read',
+          if (selectReadAt) 'read_at',
+          'created_at',
+        ].join(',');
+        rows = await sb
+            .from('notifications')
+            .select(cols)
+            .eq('user_id', v)
+            .order('created_at', ascending: false)
+            .limit(60);
+      }
 
       final rawList = (rows as List<dynamic>).cast<Map<String, dynamic>>();
       final actorIds = rawList.map((r) => r['actor_id']?.toString()).whereType<String>().where((v) => v.isNotEmpty).toSet();
@@ -8086,50 +8426,49 @@ class DemoRepository extends ChangeNotifier {
 
       final list = <NotificationModel>[];
       for (final r in rawList) {
-        final id = r['id']?.toString();
-        final userId = r['user_id']?.toString();
-        if (id == null || id.isEmpty) continue;
-        if (userId == null || userId.isEmpty) continue;
-        final actorId = r['actor_id']?.toString();
-        final typeRaw = r['type']?.toString();
-        final kindRaw = r['kind']?.toString();
-        final type = _parseNotificationType(typeRaw) ?? _parseNotificationType(kindRaw);
-        if (type == null) continue;
-        list.add(
-          NotificationModel(
-            id: id,
-            type: type,
-            userId: userId,
-            actorId: (actorId == null || actorId.isEmpty) ? null : actorId,
-            title: r['title']?.toString(),
-            body: r['body']?.toString(),
-            entityId: r['entity_id']?.toString(),
-            entityType: r['entity_type']?.toString(),
-            locationId: r['location_id']?.toString(),
-            createdAt: DateTime.tryParse(r['created_at']?.toString() ?? '') ?? DateTime.now(),
-            isRead: (r['is_read'] == true) || (r['read_at'] != null),
-          ),
-        );
+        final n = _notificationFromRawRecord(r);
+        if (n == null) continue;
+        list.add(n);
       }
 
-      _notificationsLoadedForViewerId = viewerId;
-      _notifications = List.unmodifiable(list);
+      if (refreshVersion != _notificationsRefreshVersion) return;
+      _notificationsLoadedForViewerId = v;
+      if (localVersionAtStart == _notificationsLocalVersion) {
+        _notifications = List.unmodifiable(list);
+      } else {
+        final localById = <String, NotificationModel>{for (final n in _notifications) n.id: n};
+        final merged = <NotificationModel>[];
+        final seenIds = <String>{};
+        for (final s in list) {
+          if (_notificationsLocallyRemovedIds.contains(s.id)) continue;
+          final local = localById[s.id];
+          final effective = (local != null && local.isRead && !s.isRead) ? s.copyWith(isRead: true) : s;
+          merged.add(effective);
+          seenIds.add(s.id);
+        }
+        for (final e in localById.entries) {
+          if (seenIds.contains(e.key)) continue;
+          if (_notificationsLocallyRemovedIds.contains(e.key)) continue;
+          merged.add(e.value);
+        }
+        merged.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+        _notifications = List.unmodifiable(merged);
+      }
       notifyListeners();
     } catch (_) {}
   }
 
   void markNotificationRead(String notificationId, {required String viewerId}) {
-    var changed = false;
-    for (var i = 0; i < _notifications.length; i++) {
-      final n = _notifications[i];
-      if (n.id != notificationId) continue;
-      if (n.userId != viewerId) return;
-      if (n.isRead) return;
-      _notifications[i] = n.copyWith(isRead: true);
-      changed = true;
-      break;
-    }
-    if (changed) notifyListeners();
+    final i = _notifications.indexWhere((n) => n.id == notificationId);
+    if (i < 0) return;
+    final current = _notifications[i];
+    if (current.userId != viewerId) return;
+    if (current.isRead) return;
+    _notificationsLocalVersion++;
+    final list = _notifications.toList(growable: true);
+    list[i] = current.copyWith(isRead: true);
+    _notifications = List.unmodifiable(list);
+    notifyListeners();
     if (supabase != null) {
       unawaited(_markNotificationReadSupabase(notificationId, viewerId: viewerId));
     }
@@ -8140,27 +8479,43 @@ class DemoRepository extends ChangeNotifier {
     if (sb == null) return;
     if (isOffline) return;
     try {
-      await sb
-          .from('notifications')
-          .update(<String, Object?>{
-            'is_read': true,
-            'read_at': DateTime.now().toIso8601String(),
-          })
-          .eq('id', notificationId)
-          .eq('user_id', viewerId);
+      final payload = <String, Object?>{'is_read': true};
+      if (_notificationsHasReadAtColumn != false) {
+        payload['read_at'] = DateTime.now().toIso8601String();
+      }
+      try {
+        await sb.from('notifications').update(payload).eq('id', notificationId).eq('user_id', viewerId);
+      } on PostgrestException catch (e) {
+        final msg = '${e.message} ${e.details} ${e.hint}'.toLowerCase();
+        if (msg.contains('read_at')) {
+          _notificationsHasReadAtColumn = false;
+          await sb
+              .from('notifications')
+              .update(<String, Object?>{'is_read': true})
+              .eq('id', notificationId)
+              .eq('user_id', viewerId);
+        } else {
+          rethrow;
+        }
+      }
     } catch (_) {}
   }
 
   void markAllNotificationsRead(String viewerId) {
     var changed = false;
-    for (var i = 0; i < _notifications.length; i++) {
-      final n = _notifications[i];
+    final list = _notifications.toList(growable: true);
+    for (var i = 0; i < list.length; i++) {
+      final n = list[i];
       if (n.userId != viewerId) continue;
       if (n.isRead) continue;
-      _notifications[i] = n.copyWith(isRead: true);
+      list[i] = n.copyWith(isRead: true);
       changed = true;
     }
-    if (changed) notifyListeners();
+    if (changed) {
+      _notificationsLocalVersion++;
+      _notifications = List.unmodifiable(list);
+      notifyListeners();
+    }
     if (supabase != null) {
       unawaited(_markAllNotificationsReadSupabase(viewerId));
     }
@@ -8171,11 +8526,21 @@ class DemoRepository extends ChangeNotifier {
     if (sb == null) return;
     if (isOffline) return;
     try {
-      await sb
-          .from('notifications')
-          .update(<String, Object?>{'is_read': true, 'read_at': DateTime.now().toIso8601String()})
-          .eq('user_id', viewerId)
-          .eq('is_read', false);
+      final payload = <String, Object?>{'is_read': true};
+      if (_notificationsHasReadAtColumn != false) {
+        payload['read_at'] = DateTime.now().toIso8601String();
+      }
+      try {
+        await sb.from('notifications').update(payload).eq('user_id', viewerId).eq('is_read', false);
+      } on PostgrestException catch (e) {
+        final msg = '${e.message} ${e.details} ${e.hint}'.toLowerCase();
+        if (msg.contains('read_at')) {
+          _notificationsHasReadAtColumn = false;
+          await sb.from('notifications').update(<String, Object?>{'is_read': true}).eq('user_id', viewerId).eq('is_read', false);
+        } else {
+          rethrow;
+        }
+      }
     } catch (_) {}
     unawaited(refreshNotificationsForViewer(viewerId, force: true));
   }
@@ -11123,10 +11488,16 @@ class DemoRepository extends ChangeNotifier {
   List<MessageModel> messagesFor(String threadId, SessionState session) {
     if (!session.isAuthenticated) return const [];
     final t = _threadById(threadId);
+    List<MessageModel> list;
     if (supabase != null && t?.isGroup == true && t?.communityId != null) {
-      return List.unmodifiable(_communityMessagesById[t!.communityId!] ?? const <MessageModel>[]);
+      list = List.unmodifiable(_communityMessagesById[t!.communityId!] ?? const <MessageModel>[]);
+    } else {
+      list = List.unmodifiable(_messagesByThread[threadId] ?? const <MessageModel>[]);
     }
-    return List.unmodifiable(_messagesByThread[threadId] ?? const <MessageModel>[]);
+    final hours = t?.ephemeralHours ?? 0;
+    if (hours <= 0) return list;
+    final threshold = DateTime.now().subtract(Duration(hours: hours));
+    return List.unmodifiable(list.where((m) => m.sentAt.isAfter(threshold)).toList(growable: false));
   }
 
   ThreadModel? _threadById(String id) {
@@ -11134,6 +11505,36 @@ class DemoRepository extends ChangeNotifier {
       if (t.id == id) return t;
     }
     return null;
+  }
+
+  ThreadModel? threadById(String id) => _threadById(id);
+
+  String _directNicknameKey(String threadId, String userId) => '${threadId.trim()}::${userId.trim()}';
+
+  String nicknameForThreadUser(String threadId, String userId) {
+    final key = _directNicknameKey(threadId, userId);
+    return _directNicknamesByThreadUserKey[key] ?? '';
+  }
+
+  void setNicknameForThreadUser(String threadId, String userId, String nickname) {
+    final tid = threadId.trim();
+    final uid = userId.trim();
+    if (tid.isEmpty || uid.isEmpty) return;
+    final key = _directNicknameKey(tid, uid);
+    final clean = nickname.trim();
+    if (clean.isEmpty) {
+      if (_directNicknamesByThreadUserKey.remove(key) != null) {
+        notifyListeners();
+        _schedulePersistDirect();
+        unawaited(_syncDirectNicknameAliasToRemote(threadId: tid, targetUserId: uid, nickname: null));
+      }
+      return;
+    }
+    if (_directNicknamesByThreadUserKey[key] == clean) return;
+    _directNicknamesByThreadUserKey[key] = clean;
+    notifyListeners();
+    _schedulePersistDirect();
+    unawaited(_syncDirectNicknameAliasToRemote(threadId: tid, targetUserId: uid, nickname: clean));
   }
 
   ProfileModel? findProfile(String userId) {
@@ -11260,6 +11661,212 @@ class DemoRepository extends ChangeNotifier {
     _schedulePersistDirect();
   }
 
+  bool isUserRestrictedInDirect(String userId) => _restrictedDirectUserIds.contains(userId.trim());
+
+  bool isUserBlockedInDirect(String userId) => _blockedDirectUserIds.contains(userId.trim());
+
+  bool toggleRestrictUserInDirect(String userId) {
+    final id = userId.trim();
+    if (id.isEmpty) return false;
+    final enabled = !_restrictedDirectUserIds.contains(id);
+    if (enabled) {
+      _restrictedDirectUserIds.add(id);
+    } else {
+      _restrictedDirectUserIds.remove(id);
+    }
+    notifyListeners();
+    _schedulePersistDirect();
+    return enabled;
+  }
+
+  bool toggleBlockUserInDirect(String userId) {
+    final id = userId.trim();
+    if (id.isEmpty) return false;
+    final enabled = !_blockedDirectUserIds.contains(id);
+    if (enabled) {
+      _blockedDirectUserIds.add(id);
+    } else {
+      _blockedDirectUserIds.remove(id);
+    }
+    notifyListeners();
+    _schedulePersistDirect();
+    return enabled;
+  }
+
+  void setThreadTheme(String threadId, String themeKey) {
+    final i = _threads.indexWhere((t) => t.id == threadId);
+    if (i < 0) return;
+    final key = themeKey.trim().isEmpty ? 'default' : themeKey.trim();
+    final t = _threads[i];
+    if (t.themeKey == key) return;
+    final updated = t.copyWith(themeKey: key);
+    _threads = [
+      ..._threads.take(i),
+      updated,
+      ..._threads.skip(i + 1),
+    ];
+    notifyListeners();
+    _schedulePersistDirect();
+    unawaited(_syncDirectThreadSettingsToRemote(threadId: threadId, themeKey: key));
+  }
+
+  void setThreadEphemeralHours(String threadId, int hours) {
+    final i = _threads.indexWhere((t) => t.id == threadId);
+    if (i < 0) return;
+    final nextHours = hours.clamp(0, 24 * 7);
+    final t = _threads[i];
+    if (t.ephemeralHours == nextHours) return;
+    final updated = t.copyWith(ephemeralHours: nextHours);
+    _threads = [
+      ..._threads.take(i),
+      updated,
+      ..._threads.skip(i + 1),
+    ];
+    notifyListeners();
+    _schedulePersistDirect();
+    unawaited(_syncDirectThreadSettingsToRemote(threadId: threadId, ephemeralHours: nextHours));
+  }
+
+  Future<void> _syncDirectThreadSettingsToRemote({
+    required String threadId,
+    String? themeKey,
+    int? ephemeralHours,
+  }) async {
+    final sb = supabase;
+    if (sb == null || isOffline) return;
+    final tid = threadId.trim();
+    if (!tid.startsWith('dm:')) return;
+    final payload = <String, Object?>{};
+    if (themeKey != null && _directThreadsHasThemeKeyColumn != false) {
+      payload['theme_key'] = themeKey.trim().isEmpty ? 'default' : themeKey.trim();
+    }
+    if (ephemeralHours != null && _directThreadsHasEphemeralHoursColumn != false) {
+      payload['ephemeral_hours'] = ephemeralHours.clamp(0, 24 * 7);
+    }
+    if (payload.isEmpty) return;
+    try {
+      await sb.from('direct_threads').update(payload).eq('id', tid);
+    } catch (e) {
+      if (_isMissingColumnError(e, 'theme_key')) _directThreadsHasThemeKeyColumn = false;
+      if (_isMissingColumnError(e, 'ephemeral_hours')) _directThreadsHasEphemeralHoursColumn = false;
+    }
+  }
+
+  bool _isMissingRelationError(Object error, String relation) {
+    if (error is! PostgrestException) return false;
+    final code = (error.code ?? '').trim().toUpperCase();
+    if (code == '42P01') return true;
+    final msg = '${error.message} ${error.details} ${error.hint}'.toLowerCase();
+    return msg.contains('relation') && msg.contains(relation.toLowerCase());
+  }
+
+  String _directMessagesPreviewLabel(MessageModel m) {
+    switch (m.kind) {
+      case MessageKind.text:
+        return (m.text ?? '').trim();
+      case MessageKind.image:
+        final c = (m.text ?? '').trim();
+        return c.isEmpty ? 'Imagem' : c;
+      case MessageKind.postCard:
+        return 'Post compartilhado';
+    }
+  }
+
+  ({MessageKind kind, String? text, String? imageToken}) _parseDirectMessageBody(String body) {
+    final raw = body.trim();
+    if (raw.startsWith(_directMessageEnvelopePrefix)) {
+      final encoded = raw.substring(_directMessageEnvelopePrefix.length).trim();
+      try {
+        final decoded = jsonDecode(encoded);
+        if (decoded is Map) {
+          final kind = decoded['kind']?.toString().trim().toLowerCase();
+          if (kind == 'image') {
+            final token = decoded['token']?.toString().trim();
+            if (token != null && token.isNotEmpty) {
+              final caption = decoded['caption']?.toString();
+              return (kind: MessageKind.image, text: caption, imageToken: token);
+            }
+          }
+        }
+      } catch (_) {}
+    }
+    return (kind: MessageKind.text, text: body, imageToken: null);
+  }
+
+  String _encodeDirectImageBody({required String imageToken, String? caption}) {
+    final payload = <String, Object?>{
+      'kind': 'image',
+      'token': imageToken.trim(),
+      'caption': (caption ?? '').trim().isEmpty ? null : caption!.trim(),
+    };
+    return '$_directMessageEnvelopePrefix${jsonEncode(payload)}';
+  }
+
+  Future<void> _syncDirectNicknameAliasToRemote({
+    required String threadId,
+    required String targetUserId,
+    required String? nickname,
+  }) async {
+    final sb = supabase;
+    if (sb == null || isOffline) return;
+    // For now we only persist nicknames remotely for direct (dm:...) threads.
+    // Community/group chats (tg_...) keep nicknames local to the device cache.
+    if (!threadId.trim().startsWith('dm:')) return;
+    if (_directThreadMemberAliasesAvailable == false) return;
+    final viewerId = sb.auth.currentUser?.id;
+    if (viewerId == null || viewerId.trim().isEmpty) return;
+    final tid = threadId.trim();
+    final targetId = targetUserId.trim();
+    if (tid.isEmpty || targetId.isEmpty) return;
+    try {
+      final clean = (nickname ?? '').trim();
+      if (clean.isEmpty) {
+        await sb
+            .from('direct_thread_member_aliases')
+            .delete()
+            .match(<String, Object>{'thread_id': tid, 'owner_id': viewerId, 'target_user_id': targetId});
+      } else {
+        await sb.from('direct_thread_member_aliases').upsert(
+              <String, Object?>{
+                'thread_id': tid,
+                'owner_id': viewerId,
+                'target_user_id': targetId,
+                'nickname': clean,
+              },
+              onConflict: 'thread_id,owner_id,target_user_id',
+            );
+      }
+      _directThreadMemberAliasesAvailable = true;
+    } catch (e) {
+      if (_isMissingRelationError(e, 'direct_thread_member_aliases')) {
+        _directThreadMemberAliasesAvailable = false;
+        // Compatibility fallback: for DMs only, store nickname on the viewer membership row when available.
+        if (_directThreadMembersHasNicknameColumn != false && tid.startsWith('dm:')) {
+          try {
+            await sb
+                .from('direct_thread_members')
+                .update(<String, Object?>{'nickname': (nickname ?? '').trim().isEmpty ? null : nickname!.trim()})
+                .eq('thread_id', tid)
+                .eq('user_id', viewerId);
+          } catch (e2) {
+            if (_isMissingColumnError(e2, 'nickname')) _directThreadMembersHasNicknameColumn = false;
+          }
+        }
+      } else if (_isMissingColumnError(e, 'nickname')) {
+        _directThreadMembersHasNicknameColumn = false;
+      }
+    }
+  }
+
+  bool _isMissingColumnError(Object error, String column) {
+    if (error is! PostgrestException) return false;
+    final code = (error.code ?? '').trim().toUpperCase();
+    if (code == '42703') return true;
+    final msg = '${error.message} ${error.details} ${error.hint}'.toLowerCase();
+    if (msg.contains('column') && msg.contains(column.toLowerCase())) return true;
+    return false;
+  }
+
   void deleteThread(String threadId) {
     _threads = _threads.where((t) => t.id != threadId).toList(growable: false);
     _messagesByThread.remove(threadId);
@@ -11269,6 +11876,12 @@ class DemoRepository extends ChangeNotifier {
 
   Future<void> sendTextMessage(String threadId, String senderId, String text) async {
     final t = _threadById(threadId);
+    final peerId = _peerUserIdFromThreadForViewer(threadId, viewerId: senderId);
+    if (peerId != null && isUserBlockedInDirect(peerId)) {
+      _lastDirectSendError = 'Você bloqueou este usuário.';
+      notifyListeners();
+      return;
+    }
     if (supabase != null && t?.isGroup == true && t?.communityId != null) {
       await _sendCommunityTextMessage(t!.communityId!, senderId, text);
       return;
@@ -11304,6 +11917,21 @@ class DemoRepository extends ChangeNotifier {
     return 'dm:$bb:$aa';
   }
 
+  String? _peerUserIdFromThreadForViewer(String threadId, {required String viewerId}) {
+    final t = _threadById(threadId);
+    if (t == null || t.isGroup) return null;
+    var peerId = t.peerUserId.trim();
+    if (peerId.isEmpty) return null;
+    if (peerId != viewerId) return peerId;
+    final messages = _messagesByThread[threadId] ?? const <MessageModel>[];
+    for (final m in messages) {
+      if (m.senderId != viewerId) {
+        return m.senderId;
+      }
+    }
+    return null;
+  }
+
   String? _directPeerIdFromDmThreadId(String threadId, {required String viewerId}) {
     final raw = threadId.trim();
     if (!raw.startsWith('dm:')) return null;
@@ -11333,6 +11961,60 @@ class DemoRepository extends ChangeNotifier {
         threadIds.add(tid);
       }
       if (threadIds.isEmpty) return;
+      final threadIdSet = threadIds.toSet();
+
+      // Prefer per-viewer aliases (owner_id = viewer). This supports per-member nicknames inside group/community chats.
+      _directNicknamesByThreadUserKey.removeWhere((key, _) {
+        final sep = key.indexOf('::');
+        if (sep <= 0) return false;
+        final tid = key.substring(0, sep);
+        return threadIdSet.contains(tid);
+      });
+      if (_directThreadMemberAliasesAvailable != false) {
+        try {
+          final aliasRows = await sb
+              .from('direct_thread_member_aliases')
+              .select('thread_id,target_user_id,nickname')
+              .eq('owner_id', id)
+              .inFilter('thread_id', threadIds);
+          for (final raw in (aliasRows as List<dynamic>)) {
+            final r = raw as Map<String, dynamic>;
+            final tid = r['thread_id']?.toString().trim() ?? '';
+            final uid = r['target_user_id']?.toString().trim() ?? '';
+            if (tid.isEmpty || uid.isEmpty) continue;
+            final nick = r['nickname']?.toString().trim() ?? '';
+            if (nick.isEmpty) continue;
+            _directNicknamesByThreadUserKey[_directNicknameKey(tid, uid)] = nick;
+          }
+          _directThreadMemberAliasesAvailable = true;
+        } catch (e) {
+          if (_isMissingRelationError(e, 'direct_thread_member_aliases')) {
+            _directThreadMemberAliasesAvailable = false;
+          }
+        }
+      }
+      // Compatibility fallback for older DBs: load DM-level nickname from membership row on the viewer record.
+      if (_directThreadMemberAliasesAvailable == false && _directThreadMembersHasNicknameColumn != false) {
+        try {
+          final memberRows = await sb
+              .from('direct_thread_members')
+              .select('thread_id,user_id,nickname')
+              .eq('user_id', id)
+              .inFilter('thread_id', threadIds);
+          for (final raw in (memberRows as List<dynamic>)) {
+            final r = raw as Map<String, dynamic>;
+            final tid = r['thread_id']?.toString().trim() ?? '';
+            if (tid.isEmpty) continue;
+            final nick = r['nickname']?.toString().trim() ?? '';
+            if (nick.isEmpty) continue;
+            final peerId = _directPeerIdFromDmThreadId(tid, viewerId: id);
+            if (peerId == null || peerId.isEmpty) continue;
+            _directNicknamesByThreadUserKey[_directNicknameKey(tid, peerId)] = nick;
+          }
+        } catch (e) {
+          if (_isMissingColumnError(e, 'nickname')) _directThreadMembersHasNicknameColumn = false;
+        }
+      }
 
       final lastRows = await sb
           .from('direct_messages')
@@ -11352,6 +12034,32 @@ class DemoRepository extends ChangeNotifier {
       for (final tid in threadIds) {
         final peerId = _directPeerIdFromDmThreadId(tid, viewerId: id);
         if (peerId != null && _looksLikeUuid(peerId)) peerIds.add(peerId);
+      }
+      final remoteThreadThemes = <String, String>{};
+      final remoteThreadEphemeralHours = <String, int>{};
+      if ((_directThreadsHasThemeKeyColumn != false) || (_directThreadsHasEphemeralHoursColumn != false)) {
+        try {
+          final cols = <String>['id'];
+          if (_directThreadsHasThemeKeyColumn != false) cols.add('theme_key');
+          if (_directThreadsHasEphemeralHoursColumn != false) cols.add('ephemeral_hours');
+          final rows = await sb.from('direct_threads').select(cols.join(',')).inFilter('id', threadIds);
+          for (final raw in (rows as List<dynamic>)) {
+            final r = raw as Map<String, dynamic>;
+            final tid = r['id']?.toString().trim() ?? '';
+            if (tid.isEmpty) continue;
+            if (r.containsKey('theme_key')) {
+              final key = r['theme_key']?.toString().trim() ?? '';
+              if (key.isNotEmpty) remoteThreadThemes[tid] = key;
+            }
+            if (r.containsKey('ephemeral_hours')) {
+              final hours = int.tryParse(r['ephemeral_hours']?.toString() ?? '') ?? 0;
+              remoteThreadEphemeralHours[tid] = hours.clamp(0, 24 * 7);
+            }
+          }
+        } catch (e) {
+          if (_isMissingColumnError(e, 'theme_key')) _directThreadsHasThemeKeyColumn = false;
+          if (_isMissingColumnError(e, 'ephemeral_hours')) _directThreadsHasEphemeralHoursColumn = false;
+        }
       }
       if (peerIds.isNotEmpty) {
         final profilesById = await _fetchProfilesByIds(peerIds);
@@ -11373,14 +12081,19 @@ class DemoRepository extends ChangeNotifier {
         if (last == null) continue;
         final lastAt = DateTime.tryParse(last['created_at']?.toString() ?? '')?.toLocal() ?? DateTime.now();
         final lastBody = last['body']?.toString() ?? '';
+        final parsed = _parseDirectMessageBody(lastBody);
+        final lastPreview =
+            parsed.kind == MessageKind.image ? ((parsed.text ?? '').trim().isEmpty ? 'Imagem' : parsed.text!) : (parsed.text ?? '');
         byId[tid] = ThreadModel(
           id: tid,
           peerUserId: peerId,
           peerName: name,
           peerUsername: username,
           peerIsVerified: p?.isVerified ?? false,
-          lastMessage: lastBody,
+          lastMessage: lastPreview,
           lastAt: lastAt,
+          themeKey: remoteThreadThemes[tid] ?? (byId[tid]?.themeKey ?? 'default'),
+          ephemeralHours: remoteThreadEphemeralHours[tid] ?? (byId[tid]?.ephemeralHours ?? 0),
         );
       }
       final next = byId.values.where((t) => t.isGroup || t.id.startsWith('dm:')).toList(growable: false)
@@ -11422,15 +12135,18 @@ class DemoRepository extends ChangeNotifier {
         final senderId = r['sender_id']?.toString();
         if (id == null || id.isEmpty) continue;
         if (senderId == null || senderId.isEmpty) continue;
+        final body = (r['body'] as String?) ?? '';
+        final parsed = _parseDirectMessageBody(body);
         serverList.add(
           MessageModel(
             id: id,
             threadId: tid,
             senderId: senderId,
-            kind: MessageKind.text,
+            kind: parsed.kind,
             sentAt: DateTime.tryParse(r['created_at']?.toString() ?? '')?.toLocal() ?? DateTime.now(),
             sendStatus: MessageSendStatus.sent,
-            text: (r['body'] as String?) ?? '',
+            text: parsed.text,
+            imageToken: parsed.imageToken,
           ),
         );
       }
@@ -11438,10 +12154,20 @@ class DemoRepository extends ChangeNotifier {
       bool looksSame(MessageModel a, MessageModel b) {
         if (a.senderId != b.senderId) return false;
         if (a.kind != b.kind) return false;
-        final ta = (a.text ?? '').trim();
-        final tb = (b.text ?? '').trim();
-        if (ta.isEmpty || tb.isEmpty) return false;
-        if (ta != tb) return false;
+        if (a.kind == MessageKind.image) {
+          final ka = (a.imageToken ?? '').trim();
+          final kb = (b.imageToken ?? '').trim();
+          if (ka.isEmpty || kb.isEmpty) return false;
+          if (ka != kb) return false;
+          final ca = (a.text ?? '').trim();
+          final cb = (b.text ?? '').trim();
+          if (ca != cb) return false;
+        } else {
+          final ta = (a.text ?? '').trim();
+          final tb = (b.text ?? '').trim();
+          if (ta.isEmpty || tb.isEmpty) return false;
+          if (ta != tb) return false;
+        }
         final dt = a.sentAt.difference(b.sentAt).inSeconds.abs();
         return dt <= 180;
       }
@@ -11466,7 +12192,7 @@ class DemoRepository extends ChangeNotifier {
       _messagesByThread[tid] = List.unmodifiable(merged);
       final last = merged.isEmpty ? null : merged.last;
       if (last != null) {
-        _bumpThread(tid, preview: last.text ?? '', at: last.sentAt);
+        _bumpThread(tid, preview: _directMessagesPreviewLabel(last), at: last.sentAt);
       }
       notifyListeners();
       _schedulePersistDirect();
@@ -11651,11 +12377,93 @@ class DemoRepository extends ChangeNotifier {
     }
   }
 
+  Future<bool> _sendDirectImageMessage({
+    required String threadId,
+    required String senderId,
+    required String imageToken,
+    String? caption,
+  }) async {
+    final sb = supabase;
+    if (sb == null) return false;
+    if (isOffline) return false;
+    final viewerId = sb.auth.currentUser?.id;
+    if (viewerId == null || viewerId != senderId) return false;
+    final tid = threadId.trim();
+    if (!tid.startsWith('dm:')) return false;
+    final token = imageToken.trim();
+    if (token.isEmpty) return false;
+    final peerId = _directPeerIdFromDmThreadId(tid, viewerId: senderId);
+    if (peerId == null) return false;
+
+    _lastDirectSendError = null;
+    final now = DateTime.now();
+    final tempId = 'tmp:${now.microsecondsSinceEpoch}';
+    final next = MessageModel(
+      id: tempId,
+      threadId: tid,
+      senderId: senderId,
+      kind: MessageKind.image,
+      sentAt: now,
+      sendStatus: MessageSendStatus.sending,
+      text: caption,
+      imageToken: token,
+    );
+    final list = (_messagesByThread[tid] ?? const <MessageModel>[]).toList()..add(next);
+    _messagesByThread[tid] = List.unmodifiable(list);
+    _bumpThread(tid, preview: _directMessagesPreviewLabel(next), at: now);
+    notifyListeners();
+    _schedulePersistDirect();
+
+    try {
+      await _ensureDirectDmThread(threadId: tid, viewerId: senderId, peerId: peerId);
+      await _ensureDirectChatSubscribed(tid);
+      await sb.from('direct_messages').insert(<String, Object?>{
+        'thread_id': tid,
+        'sender_id': senderId,
+        'body': _encodeDirectImageBody(imageToken: token, caption: caption),
+      });
+      _lastDirectSendError = null;
+      final cur = (_messagesByThread[tid] ?? const <MessageModel>[]).toList();
+      final i = cur.indexWhere((m) => m.id == tempId);
+      if (i >= 0) {
+        cur[i] = cur[i].copyWith(sendStatus: MessageSendStatus.sent);
+        _messagesByThread[tid] = List.unmodifiable(cur);
+        notifyListeners();
+        _schedulePersistDirect();
+      }
+      _directMessagesLoadedFor.remove(tid);
+      await refreshDirectMessages(tid, force: true);
+      unawaited(refreshDirectForViewer(senderId, force: true));
+      return true;
+    } catch (e) {
+      final msg = _shortSupabaseError(e).trim();
+      _lastDirectSendError = msg.isEmpty ? 'Falha ao enviar imagem.' : msg;
+      final cur = (_messagesByThread[tid] ?? const <MessageModel>[]).toList();
+      final i = cur.indexWhere((m) => m.id == tempId);
+      if (i >= 0) {
+        cur[i] = cur[i].copyWith(sendStatus: MessageSendStatus.failed);
+        _messagesByThread[tid] = List.unmodifiable(cur);
+      }
+      notifyListeners();
+      _schedulePersistDirect();
+      return true;
+    }
+  }
+
   Future<void> sendImageMessage(String threadId, String senderId,
       {String? caption, required String imageToken}) async {
     final t = _threadById(threadId);
     if (supabase != null && t?.isGroup == true && t?.communityId != null) {
       return;
+    }
+    if (supabase != null && !isOffline && (t?.isGroup != true)) {
+      final ok = await _sendDirectImageMessage(
+        threadId: threadId,
+        senderId: senderId,
+        imageToken: imageToken,
+        caption: caption,
+      );
+      if (ok) return;
     }
     final now = DateTime.now();
     final next = MessageModel(
@@ -11671,7 +12479,7 @@ class DemoRepository extends ChangeNotifier {
 
     final list = (_messagesByThread[threadId] ?? []).toList()..add(next);
     _messagesByThread[threadId] = list;
-    _bumpThread(threadId, preview: caption?.trim().isNotEmpty == true ? caption! : 'Imagem', at: now);
+    _bumpThread(threadId, preview: _directMessagesPreviewLabel(next), at: now);
     notifyListeners();
     _schedulePersistDirect();
 
@@ -11715,7 +12523,10 @@ class DemoRepository extends ChangeNotifier {
       final sb = supabase!;
       final viewerId = sb.auth.currentUser?.id;
       if (viewerId != null && viewerId == m.senderId) {
-        final body = (m.text ?? '').trim();
+        final isImage = m.kind == MessageKind.image;
+        final body = isImage
+            ? _encodeDirectImageBody(imageToken: (m.imageToken ?? '').trim(), caption: m.text)
+            : (m.text ?? '').trim();
         if (body.isNotEmpty) {
           list[i] = m.copyWith(sendStatus: MessageSendStatus.sending);
           _messagesByThread[threadId] = list;
@@ -11744,7 +12555,7 @@ class DemoRepository extends ChangeNotifier {
             return;
           } catch (e) {
             final msg = _shortSupabaseError(e).trim();
-            _lastDirectSendError = msg.isEmpty ? 'Falha ao enviar mensagem.' : msg;
+            _lastDirectSendError = msg.isEmpty ? (isImage ? 'Falha ao enviar imagem.' : 'Falha ao enviar mensagem.') : msg;
             final cur = (_messagesByThread[threadId] ?? []).toList();
             final ii = cur.indexWhere((x) => x.id == messageId);
             if (ii >= 0) {
@@ -12685,6 +13496,9 @@ class DemoRepository extends ChangeNotifier {
   }
 }
 
+const _directMessageEnvelopePrefix = '__atalaia_msg__:';
+
+
 class RepoScope extends InheritedNotifier<DemoRepository> {
   const RepoScope({required DemoRepository repo, required super.child, super.key})
       : super(notifier: repo);
@@ -12719,6 +13533,7 @@ class _AtalaiaAppState extends State<AtalaiaApp> {
   late final ValueNotifier<AuthRedirectModel?> _authRedirect;
   late final ValueNotifier<Locale?> _localeOverride;
   late final ValueNotifier<UserLocalePrefs> _localePrefs;
+  late final ValueNotifier<ThemeMode> _themeMode;
   late DemoRepository _repo;
   StreamSubscription<AuthState>? _authSub;
   String? _loadedLocalePrefsForUserId;
@@ -12789,13 +13604,32 @@ class _AtalaiaAppState extends State<AtalaiaApp> {
     _authRedirect = ValueNotifier<AuthRedirectModel?>(null);
     _localeOverride = ValueNotifier<Locale?>(null);
     _localePrefs = ValueNotifier<UserLocalePrefs>(const UserLocalePrefs(receiveGlobalContent: true));
+    _themeMode = ValueNotifier<ThemeMode>(ThemeMode.light);
     _repo = DemoRepository(supabase: _trySupabaseClient());
     _supabaseConfigVersion.addListener(_handleSupabaseConfigChanged);
     _session.addListener(_handleSessionChanged);
     _localePrefs.addListener(_handleLocalePrefsChanged);
     _repo.setViewer(_session.value);
     unawaited(_loadLocaleOverrideFromPrefs());
+    unawaited(_loadThemeModeFromPrefs());
     _attachSupabaseAuthListener();
+  }
+
+  Future<void> _loadThemeModeFromPrefs() async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      final raw = (sp.getString('theme_mode') ?? '').trim().toLowerCase();
+      if (!mounted) return;
+      _themeMode.value = raw == 'dark' ? ThemeMode.dark : ThemeMode.light;
+    } catch (_) {}
+  }
+
+  Future<void> _setThemeMode(ThemeMode mode) async {
+    _themeMode.value = mode;
+    try {
+      final sp = await SharedPreferences.getInstance();
+      await sp.setString('theme_mode', mode == ThemeMode.dark ? 'dark' : 'light');
+    } catch (_) {}
   }
 
   Future<void> _syncPrayerRunReminders() async {
@@ -12976,6 +13810,47 @@ class _AtalaiaAppState extends State<AtalaiaApp> {
     unawaited(_repo.refreshGlobalExpansionConfig(countryCode: _localePrefs.value.countryCode));
   }
 
+  ThemeData _buildAppTheme(Brightness brightness) {
+    final cs = ColorScheme.fromSeed(seedColor: const Color(0xFF2E7D32), brightness: brightness);
+    final base = ThemeData(colorScheme: cs, useMaterial3: true);
+    final tt = base.textTheme.copyWith(
+      titleLarge: (base.textTheme.titleLarge ?? const TextStyle()).copyWith(
+        fontSize: 24,
+        fontWeight: FontWeight.w600,
+      ),
+      titleMedium: (base.textTheme.titleMedium ?? const TextStyle()).copyWith(
+        fontSize: 20,
+        fontWeight: FontWeight.w600,
+      ),
+      bodyLarge: (base.textTheme.bodyLarge ?? const TextStyle()).copyWith(
+        fontSize: 16,
+        fontWeight: FontWeight.w400,
+      ),
+      bodyMedium: (base.textTheme.bodyMedium ?? const TextStyle()).copyWith(
+        fontSize: 14,
+        fontWeight: FontWeight.w400,
+      ),
+      bodySmall: (base.textTheme.bodySmall ?? const TextStyle()).copyWith(
+        fontSize: 12,
+        fontWeight: FontWeight.w400,
+      ),
+    );
+
+    return base.copyWith(
+      textTheme: tt,
+      extensions: const [AtalaiaBrandColors()],
+      snackBarTheme: SnackBarThemeData(
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AtalaiaRadius.lg)),
+      ),
+      floatingActionButtonTheme: const FloatingActionButtonThemeData(shape: CircleBorder()),
+      inputDecorationTheme: InputDecorationTheme(
+        isDense: true,
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(AtalaiaRadius.md)),
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _supabaseConfigVersion.removeListener(_handleSupabaseConfigChanged);
@@ -12985,6 +13860,7 @@ class _AtalaiaAppState extends State<AtalaiaApp> {
     _authRedirect.dispose();
     _localeOverride.dispose();
     _localePrefs.dispose();
+    _themeMode.dispose();
     _authSub?.cancel();
     _authBootSyncTimer1?.cancel();
     _authBootSyncTimer2?.cancel();
@@ -13003,18 +13879,20 @@ class _AtalaiaAppState extends State<AtalaiaApp> {
           notifier: _localeOverride,
           child: UserLocalePrefsScope(
             notifier: _localePrefs,
-            child: AuthRedirectScope(
-              notifier: _authRedirect,
-              child: AnimatedBuilder(
-                animation: Listenable.merge([_localeOverride, _localePrefs]),
-                builder: (context, _) {
-                  return MaterialApp(
-                    debugShowCheckedModeBanner: false,
-                    scaffoldMessengerKey: atalaiaScaffoldMessengerKey,
-                    onGenerateTitle: (context) => t(context).appTitle,
-                    locale: _localeOverride.value,
-                    supportedLocales: AppLocalizations.supportedLocales,
-                    localizationsDelegates: AppLocalizations.localizationsDelegates,
+            child: ThemeModeScope(
+              notifier: _themeMode,
+              child: AuthRedirectScope(
+                notifier: _authRedirect,
+                child: AnimatedBuilder(
+                  animation: Listenable.merge([_localeOverride, _localePrefs, _themeMode]),
+                  builder: (context, _) {
+                    return MaterialApp(
+                      debugShowCheckedModeBanner: false,
+                      scaffoldMessengerKey: atalaiaScaffoldMessengerKey,
+                      onGenerateTitle: (context) => t(context).appTitle,
+                      locale: _localeOverride.value,
+                      supportedLocales: AppLocalizations.supportedLocales,
+                      localizationsDelegates: AppLocalizations.localizationsDelegates,
                     localeResolutionCallback: (deviceLocale, supportedLocales) {
                       final override = _localeOverride.value;
                       if (override != null) return override;
@@ -13029,48 +13907,9 @@ class _AtalaiaAppState extends State<AtalaiaApp> {
                       }
                       return const Locale('pt', 'BR');
                     },
-                    theme: () {
-              final cs = ColorScheme.fromSeed(seedColor: const Color(0xFF2E7D32));
-              final base = ThemeData(colorScheme: cs, useMaterial3: true);
-              final tt = base.textTheme.copyWith(
-                titleLarge: (base.textTheme.titleLarge ?? const TextStyle()).copyWith(
-                  fontSize: 24,
-                  fontWeight: FontWeight.w600,
-                ),
-                titleMedium: (base.textTheme.titleMedium ?? const TextStyle()).copyWith(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w600,
-                ),
-                bodyLarge: (base.textTheme.bodyLarge ?? const TextStyle()).copyWith(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w400,
-                ),
-                bodyMedium: (base.textTheme.bodyMedium ?? const TextStyle()).copyWith(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w400,
-                ),
-                bodySmall: (base.textTheme.bodySmall ?? const TextStyle()).copyWith(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w400,
-                ),
-              );
-
-              return base.copyWith(
-                textTheme: tt,
-                extensions: const [AtalaiaBrandColors()],
-                snackBarTheme: SnackBarThemeData(
-                  behavior: SnackBarBehavior.floating,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AtalaiaRadius.lg)),
-                ),
-                floatingActionButtonTheme: const FloatingActionButtonThemeData(
-                  shape: CircleBorder(),
-                ),
-                inputDecorationTheme: InputDecorationTheme(
-                  isDense: true,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(AtalaiaRadius.md)),
-                ),
-              );
-                    }(),
+                    theme: _buildAppTheme(Brightness.light),
+                    darkTheme: _buildAppTheme(Brightness.dark),
+                    themeMode: _themeMode.value,
                     onGenerateRoute: (settings) {
               if (settings.name == null) return null;
               final name = settings.name!;
@@ -13161,6 +14000,12 @@ class _AtalaiaAppState extends State<AtalaiaApp> {
                   return MaterialPageRoute(builder: (_) => LegalScreen(args: args));
                 case Routes.settingsLocale:
                   return MaterialPageRoute(builder: (_) => const LocaleSettingsScreen());
+                case Routes.settingsNotifications:
+                  return MaterialPageRoute(builder: (_) => const NotificationSettingsScreen());
+                case Routes.settingsTheme:
+                  return MaterialPageRoute(builder: (_) => const ThemeSettingsScreen());
+                case Routes.settingsHelp:
+                  return MaterialPageRoute(builder: (_) => const HelpCenterScreen());
                 case Routes.verificationPaywall:
                   return MaterialPageRoute(
                     builder: (_) {
@@ -13183,8 +14028,6 @@ class _AtalaiaAppState extends State<AtalaiaApp> {
                   return MaterialPageRoute(builder: (_) => const NotificationsScreen(showBack: true));
                 case Routes.createPost:
                   return MaterialPageRoute(builder: (_) => const CreatePostFlowScreen());
-                case Routes.shofarIconPreview:
-                  return MaterialPageRoute(builder: (_) => const ShofarIconPreviewScreen());
                 case Routes.createCampaign:
                   return MaterialPageRoute(builder: (_) => const CreateCampaignScreen());
                 case Routes.campaignList:
@@ -13272,7 +14115,8 @@ class _AtalaiaAppState extends State<AtalaiaApp> {
           ),
         ),
       ),
-    );
+    ),
+  );
   }
 }
 
@@ -13306,6 +14150,9 @@ abstract final class Routes {
   static const settingsPrivacy = '/settings/privacy';
   static const legal = '/legal';
   static const settingsLocale = '/settings/locale';
+  static const settingsNotifications = '/settings/notifications';
+  static const settingsTheme = '/settings/theme';
+  static const settingsHelp = '/settings/help';
   static const moderation = '/moderation';
   static const adminAds = '/admin/ads';
   static const verificationPaywall = '/verification';
@@ -13339,7 +14186,6 @@ abstract final class Routes {
   static const regionPrayerHistory = '/map/region/prayers';
   static const regionPrayer = '/map/region/pray';
   static const playlistLibrary = '/playlists';
-  static const shofarIconPreview = '/icons/shofar';
 }
 
 final class ChatArgs {
@@ -13360,6 +14206,24 @@ final class ChatArgs {
   final String? communityId;
 
   bool get isGroup => communityId != null;
+}
+
+final class DirectConversationDetailsArgs {
+  const DirectConversationDetailsArgs({
+    required this.threadId,
+    required this.displayName,
+    required this.displayImageUrl,
+    required this.isGroup,
+    this.peerUserId,
+    this.communityId,
+  });
+
+  final String threadId;
+  final String displayName;
+  final String? displayImageUrl;
+  final bool isGroup;
+  final String? peerUserId;
+  final String? communityId;
 }
 
 final class DirectInboxArgs {
@@ -14852,13 +15716,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 leading: const Icon(Icons.volunteer_activism_outlined),
                                 title: Text(l10n.settingsNotifications),
                                 trailing: const Icon(Icons.chevron_right),
-                                onTap: () => showInfoSnackBar(context, l10n.commonPhase2),
+                                onTap: () => Navigator.of(context).pushNamed(Routes.settingsNotifications),
                               ),
                               ListTile(
                                 leading: const Icon(Icons.dark_mode_outlined),
                                 title: Text(l10n.settingsTheme),
                                 trailing: const Icon(Icons.chevron_right),
-                                onTap: () => showInfoSnackBar(context, l10n.commonPhase2),
+                                onTap: () => Navigator.of(context).pushNamed(Routes.settingsTheme),
                               ),
                               ListTile(
                                 leading: const Icon(Icons.library_music_outlined),
@@ -14872,7 +15736,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 leading: const Icon(Icons.help_outline),
                                 title: Text(l10n.settingsHelp),
                                 trailing: const Icon(Icons.chevron_right),
-                                onTap: () => showInfoSnackBar(context, l10n.commonPhase2),
+                                onTap: () => Navigator.of(context).pushNamed(Routes.settingsHelp),
                               ),
                               ListTile(
                                 leading: const Icon(Icons.policy_outlined),
@@ -14880,13 +15744,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                 trailing: const Icon(Icons.chevron_right),
                                 onTap: () => Navigator.of(context).pushNamed(Routes.legal),
                               ),
-                              if (kDebugMode)
-                                ListTile(
-                                  leading: const ShofarIcon(),
-                                  title: const Text('Prévia: ícone Shofar'),
-                                  trailing: const Icon(Icons.chevron_right),
-                                  onTap: () => Navigator.of(context).pushNamed(Routes.shofarIconPreview),
-                                ),
                               const Divider(height: 26),
                               _SettingsSectionTitle(l10n.settingsSectionActions),
                               ListTile(
@@ -14904,6 +15761,934 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         );
       },
+    );
+  }
+}
+
+class NotificationSettingsScreen extends StatefulWidget {
+  const NotificationSettingsScreen({super.key});
+
+  @override
+  State<NotificationSettingsScreen> createState() => _NotificationSettingsScreenState();
+}
+
+class _NotificationSettingsScreenState extends State<NotificationSettingsScreen> {
+  bool _loading = true;
+  String? _error;
+  Map<String, bool> _prefs = <String, bool>{};
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_load());
+    });
+  }
+
+  Future<void> _load() async {
+    final repo = RepoScope.of(context);
+    final session = SessionScope.of(context).value;
+    final sb = repo.supabase;
+    if (sb == null || repo.isOffline || session is! AuthSession) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = 'Conecte sua conta para gerenciar notificações.';
+      });
+      return;
+    }
+
+    try {
+      final uid = session.userId;
+      final row = await sb
+          .from('notification_preferences')
+          .select('world_enabled,country_enabled,state_enabled,city_enabled,community_enabled,alerts_enabled,prayers_enabled,stories_enabled,posts_enabled,push_enabled')
+          .eq('user_id', uid)
+          .maybeSingle();
+      if (row == null) {
+        await sb.from('notification_preferences').upsert(<String, Object?>{'user_id': uid}, onConflict: 'user_id');
+      }
+      final row2 = await sb
+          .from('notification_preferences')
+          .select('world_enabled,country_enabled,state_enabled,city_enabled,community_enabled,alerts_enabled,prayers_enabled,stories_enabled,posts_enabled,push_enabled')
+          .eq('user_id', uid)
+          .maybeSingle();
+      final map = <String, bool>{};
+      if (row2 is Map<String, dynamic>) {
+        for (final key in [
+          'push_enabled',
+          'posts_enabled',
+          'stories_enabled',
+          'prayers_enabled',
+          'alerts_enabled',
+          'community_enabled',
+          'world_enabled',
+          'country_enabled',
+          'state_enabled',
+          'city_enabled',
+        ]) {
+          map[key] = row2[key] == true;
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _prefs = map;
+        _loading = false;
+        _error = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = 'Falha ao carregar preferências.';
+      });
+    }
+  }
+
+  Future<void> _setPref(String key, bool value) async {
+    final repo = RepoScope.of(context);
+    final session = SessionScope.of(context).value;
+    final sb = repo.supabase;
+    if (sb == null || repo.isOffline || session is! AuthSession) return;
+    setState(() {
+      _prefs = {..._prefs, key: value};
+    });
+    try {
+      await sb.from('notification_preferences').update(<String, Object?>{key: value}).eq('user_id', session.userId);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _prefs = {..._prefs, key: !value};
+      });
+      showErrorSnackBar(
+        context,
+        message: 'Não foi possível salvar. Tente novamente.',
+        onRetry: () => unawaited(_setPref(key, value)),
+      );
+    }
+  }
+
+  Widget _tile({
+    required IconData icon,
+    required String title,
+    String? subtitle,
+    required bool enabled,
+    required bool value,
+    required ValueChanged<bool>? onChanged,
+  }) {
+    return SwitchListTile(
+      secondary: Icon(icon),
+      title: Text(title),
+      subtitle: subtitle == null ? null : Text(subtitle),
+      value: value,
+      onChanged: enabled ? onChanged : null,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final repo = RepoScope.of(context);
+    return Scaffold(
+      appBar: AppBar(title: Text(t(context).settingsNotifications)),
+      body: Column(
+        children: [
+          if (repo.isOffline) OfflineBanner(onRetry: () => repo.setOffline(false)),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : (_error != null)
+                    ? Center(child: Padding(padding: const EdgeInsets.all(16), child: Text(_error!)))
+                    : ListView(
+                        children: [
+                          const SizedBox(height: 8),
+                          _SettingsSectionTitle('Gerais'),
+                          _tile(
+                            icon: Icons.notifications_active_outlined,
+                            title: 'Notificações push',
+                            subtitle: 'Ativa/desativa push (quando disponível).',
+                            enabled: true,
+                            value: _prefs['push_enabled'] ?? true,
+                            onChanged: (v) => unawaited(_setPref('push_enabled', v)),
+                          ),
+                          const Divider(height: 26),
+                          _SettingsSectionTitle('Posts, stories e comentários'),
+                          _tile(
+                            icon: Icons.article_outlined,
+                            title: 'Posts',
+                            enabled: true,
+                            value: _prefs['posts_enabled'] ?? true,
+                            onChanged: (v) => unawaited(_setPref('posts_enabled', v)),
+                          ),
+                          _tile(
+                            icon: Icons.auto_stories_outlined,
+                            title: 'Stories',
+                            enabled: true,
+                            value: _prefs['stories_enabled'] ?? true,
+                            onChanged: (v) => unawaited(_setPref('stories_enabled', v)),
+                          ),
+                          ListTile(
+                            leading: const Icon(Icons.mode_comment_outlined),
+                            title: const Text('Comentários'),
+                            subtitle: const Text('Configurações avançadas em breve.'),
+                            onTap: () => showInfoSnackBar(context, t(context).commonPhase2),
+                          ),
+                          _tile(
+                            icon: Icons.volunteer_activism_outlined,
+                            title: 'Orações (Atalaia)',
+                            enabled: true,
+                            value: _prefs['prayers_enabled'] ?? true,
+                            onChanged: (v) => unawaited(_setPref('prayers_enabled', v)),
+                          ),
+                          _tile(
+                            icon: Icons.warning_amber_outlined,
+                            title: 'Alertas (Atalaia)',
+                            enabled: true,
+                            value: _prefs['alerts_enabled'] ?? true,
+                            onChanged: (v) => unawaited(_setPref('alerts_enabled', v)),
+                          ),
+                          const Divider(height: 26),
+                          _SettingsSectionTitle('Seguidores e seguindo'),
+                          ListTile(
+                            leading: const Icon(Icons.people_outline),
+                            title: const Text('Solicitações e atividade'),
+                            subtitle: const Text('Seguir, solicitações e interações.'),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(builder: (_) => const _NotifRequestsActivityScreen()),
+                            ),
+                          ),
+                          const Divider(height: 26),
+                          _SettingsSectionTitle('Mensagens'),
+                          ListTile(
+                            leading: const Icon(Icons.message_outlined),
+                            title: const Text('Mensagens'),
+                            subtitle: const Text('Chats, solicitações e menções.'),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(builder: (_) => const _NotifMessagesScreen()),
+                            ),
+                          ),
+                          const Divider(height: 26),
+                          _SettingsSectionTitle('Campanhas e arrecadações'),
+                          ListTile(
+                            leading: const Icon(Icons.campaign_outlined),
+                            title: const Text('Campanhas e arrecadações'),
+                            subtitle: const Text('Doações, campanhas e atualizações.'),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(builder: (_) => const _NotifCampaignsScreen()),
+                            ),
+                          ),
+                          const Divider(height: 26),
+                          _SettingsSectionTitle('Aniversários'),
+                          ListTile(
+                            leading: const Icon(Icons.cake_outlined),
+                            title: const Text('Aniversários'),
+                            subtitle: const Text('Lembretes e avisos.'),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () => Navigator.of(context).push(
+                              MaterialPageRoute<void>(builder: (_) => const _NotifBirthdaysScreen()),
+                            ),
+                          ),
+                          const Divider(height: 26),
+                          _SettingsSectionTitle('Comunidades e localidade'),
+                          _tile(
+                            icon: Icons.groups_outlined,
+                            title: 'Comunidades',
+                            enabled: true,
+                            value: _prefs['community_enabled'] ?? true,
+                            onChanged: (v) => unawaited(_setPref('community_enabled', v)),
+                          ),
+                          _tile(
+                            icon: Icons.public_outlined,
+                            title: 'Mundo',
+                            enabled: true,
+                            value: _prefs['world_enabled'] ?? true,
+                            onChanged: (v) => unawaited(_setPref('world_enabled', v)),
+                          ),
+                          _tile(
+                            icon: Icons.flag_outlined,
+                            title: 'País',
+                            enabled: true,
+                            value: _prefs['country_enabled'] ?? true,
+                            onChanged: (v) => unawaited(_setPref('country_enabled', v)),
+                          ),
+                          _tile(
+                            icon: Icons.map_outlined,
+                            title: 'Estado',
+                            enabled: true,
+                            value: _prefs['state_enabled'] ?? true,
+                            onChanged: (v) => unawaited(_setPref('state_enabled', v)),
+                          ),
+                          _tile(
+                            icon: Icons.location_city_outlined,
+                            title: 'Cidade',
+                            enabled: true,
+                            value: _prefs['city_enabled'] ?? true,
+                            onChanged: (v) => unawaited(_setPref('city_enabled', v)),
+                          ),
+                          const SizedBox(height: 12),
+                        ],
+                      ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LocalNotificationPrefs {
+  _LocalNotificationPrefs(this.userId);
+
+  final String userId;
+
+  String _key(String k) => 'notif_local:$userId:$k';
+
+  Future<bool> getBool(String k, {required bool defaultValue}) async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      final v = sp.getBool(_key(k));
+      return v ?? defaultValue;
+    } catch (_) {
+      return defaultValue;
+    }
+  }
+
+  Future<void> setBool(String k, bool v) async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      await sp.setBool(_key(k), v);
+    } catch (_) {}
+  }
+}
+
+class _NotifRequestsActivityScreen extends StatefulWidget {
+  const _NotifRequestsActivityScreen();
+
+  @override
+  State<_NotifRequestsActivityScreen> createState() => _NotifRequestsActivityScreenState();
+}
+
+class _NotifRequestsActivityScreenState extends State<_NotifRequestsActivityScreen> {
+  var _loading = true;
+  late _LocalNotificationPrefs _prefs;
+  final Map<String, bool> _values = <String, bool>{};
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_load()));
+  }
+
+  Future<void> _load() async {
+    final session = SessionScope.of(context).value;
+    if (session is! AuthSession) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      return;
+    }
+    _prefs = _LocalNotificationPrefs(session.userId);
+    final next = <String, bool>{
+      'requests.follow_requests': await _prefs.getBool('requests.follow_requests', defaultValue: true),
+      'requests.new_followers': await _prefs.getBool('requests.new_followers', defaultValue: true),
+      'requests.likes': await _prefs.getBool('requests.likes', defaultValue: true),
+      'requests.comments': await _prefs.getBool('requests.comments', defaultValue: true),
+      'requests.mentions': await _prefs.getBool('requests.mentions', defaultValue: true),
+    };
+    if (!mounted) return;
+    setState(() {
+      _values
+        ..clear()
+        ..addAll(next);
+      _loading = false;
+    });
+  }
+
+  Future<void> _set(String key, bool v) async {
+    setState(() => _values[key] = v);
+    await _prefs.setBool(key, v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final session = SessionScope.of(context).value;
+    final enabled = session is AuthSession;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Solicitações e atividade')),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              children: [
+                const SizedBox(height: 8),
+                const _SettingsSectionTitle('Seguir'),
+                SwitchListTile(
+                  secondary: const Icon(Icons.person_add_alt_1_outlined),
+                  title: const Text('Solicitações para seguir'),
+                  value: _values['requests.follow_requests'] ?? true,
+                  onChanged: enabled ? (v) => unawaited(_set('requests.follow_requests', v)) : null,
+                ),
+                SwitchListTile(
+                  secondary: const Icon(Icons.people_outline),
+                  title: const Text('Novos seguidores'),
+                  value: _values['requests.new_followers'] ?? true,
+                  onChanged: enabled ? (v) => unawaited(_set('requests.new_followers', v)) : null,
+                ),
+                const Divider(height: 26),
+                const _SettingsSectionTitle('Interações'),
+                SwitchListTile(
+                  secondary: const Icon(Icons.favorite_border),
+                  title: const Text('Curtidas'),
+                  value: _values['requests.likes'] ?? true,
+                  onChanged: enabled ? (v) => unawaited(_set('requests.likes', v)) : null,
+                ),
+                SwitchListTile(
+                  secondary: const Icon(Icons.mode_comment_outlined),
+                  title: const Text('Comentários'),
+                  value: _values['requests.comments'] ?? true,
+                  onChanged: enabled ? (v) => unawaited(_set('requests.comments', v)) : null,
+                ),
+                SwitchListTile(
+                  secondary: const Icon(Icons.alternate_email),
+                  title: const Text('Menções'),
+                  value: _values['requests.mentions'] ?? true,
+                  onChanged: enabled ? (v) => unawaited(_set('requests.mentions', v)) : null,
+                ),
+                const SizedBox(height: 12),
+              ],
+            ),
+    );
+  }
+}
+
+class _NotifMessagesScreen extends StatefulWidget {
+  const _NotifMessagesScreen();
+
+  @override
+  State<_NotifMessagesScreen> createState() => _NotifMessagesScreenState();
+}
+
+class _NotifMessagesScreenState extends State<_NotifMessagesScreen> {
+  var _loading = true;
+  late _LocalNotificationPrefs _prefs;
+  final Map<String, bool> _values = <String, bool>{};
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_load()));
+  }
+
+  Future<void> _load() async {
+    final session = SessionScope.of(context).value;
+    if (session is! AuthSession) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      return;
+    }
+    _prefs = _LocalNotificationPrefs(session.userId);
+    final next = <String, bool>{
+      'messages.new_messages': await _prefs.getBool('messages.new_messages', defaultValue: true),
+      'messages.message_requests': await _prefs.getBool('messages.message_requests', defaultValue: true),
+      'messages.group_messages': await _prefs.getBool('messages.group_messages', defaultValue: true),
+      'messages.mentions': await _prefs.getBool('messages.mentions', defaultValue: true),
+    };
+    if (!mounted) return;
+    setState(() {
+      _values
+        ..clear()
+        ..addAll(next);
+      _loading = false;
+    });
+  }
+
+  Future<void> _set(String key, bool v) async {
+    setState(() => _values[key] = v);
+    await _prefs.setBool(key, v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final session = SessionScope.of(context).value;
+    final enabled = session is AuthSession;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Mensagens')),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              children: [
+                const SizedBox(height: 8),
+                const _SettingsSectionTitle('Direct'),
+                SwitchListTile(
+                  secondary: const Icon(Icons.message_outlined),
+                  title: const Text('Novas mensagens'),
+                  value: _values['messages.new_messages'] ?? true,
+                  onChanged: enabled ? (v) => unawaited(_set('messages.new_messages', v)) : null,
+                ),
+                SwitchListTile(
+                  secondary: const Icon(Icons.mark_email_unread_outlined),
+                  title: const Text('Solicitações de mensagem'),
+                  value: _values['messages.message_requests'] ?? true,
+                  onChanged: enabled ? (v) => unawaited(_set('messages.message_requests', v)) : null,
+                ),
+                const Divider(height: 26),
+                const _SettingsSectionTitle('Grupos'),
+                SwitchListTile(
+                  secondary: const Icon(Icons.groups_outlined),
+                  title: const Text('Mensagens em grupo'),
+                  value: _values['messages.group_messages'] ?? true,
+                  onChanged: enabled ? (v) => unawaited(_set('messages.group_messages', v)) : null,
+                ),
+                SwitchListTile(
+                  secondary: const Icon(Icons.alternate_email),
+                  title: const Text('Menções em conversas'),
+                  value: _values['messages.mentions'] ?? true,
+                  onChanged: enabled ? (v) => unawaited(_set('messages.mentions', v)) : null,
+                ),
+                const SizedBox(height: 12),
+              ],
+            ),
+    );
+  }
+}
+
+class _NotifCampaignsScreen extends StatefulWidget {
+  const _NotifCampaignsScreen();
+
+  @override
+  State<_NotifCampaignsScreen> createState() => _NotifCampaignsScreenState();
+}
+
+class _NotifCampaignsScreenState extends State<_NotifCampaignsScreen> {
+  var _loading = true;
+  late _LocalNotificationPrefs _prefs;
+  final Map<String, bool> _values = <String, bool>{};
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_load()));
+  }
+
+  Future<void> _load() async {
+    final session = SessionScope.of(context).value;
+    if (session is! AuthSession) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      return;
+    }
+    _prefs = _LocalNotificationPrefs(session.userId);
+    final next = <String, bool>{
+      'campaigns.donations': await _prefs.getBool('campaigns.donations', defaultValue: true),
+      'campaigns.updates': await _prefs.getBool('campaigns.updates', defaultValue: true),
+      'campaigns.goals': await _prefs.getBool('campaigns.goals', defaultValue: true),
+    };
+    if (!mounted) return;
+    setState(() {
+      _values
+        ..clear()
+        ..addAll(next);
+      _loading = false;
+    });
+  }
+
+  Future<void> _set(String key, bool v) async {
+    setState(() => _values[key] = v);
+    await _prefs.setBool(key, v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final session = SessionScope.of(context).value;
+    final enabled = session is AuthSession;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Campanhas e arrecadações')),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              children: [
+                const SizedBox(height: 8),
+                const _SettingsSectionTitle('Campanhas'),
+                SwitchListTile(
+                  secondary: const Icon(Icons.volunteer_activism_outlined),
+                  title: const Text('Doações'),
+                  value: _values['campaigns.donations'] ?? true,
+                  onChanged: enabled ? (v) => unawaited(_set('campaigns.donations', v)) : null,
+                ),
+                SwitchListTile(
+                  secondary: const Icon(Icons.campaign_outlined),
+                  title: const Text('Atualizações da campanha'),
+                  value: _values['campaigns.updates'] ?? true,
+                  onChanged: enabled ? (v) => unawaited(_set('campaigns.updates', v)) : null,
+                ),
+                SwitchListTile(
+                  secondary: const Icon(Icons.emoji_events_outlined),
+                  title: const Text('Metas atingidas'),
+                  value: _values['campaigns.goals'] ?? true,
+                  onChanged: enabled ? (v) => unawaited(_set('campaigns.goals', v)) : null,
+                ),
+                const SizedBox(height: 12),
+              ],
+            ),
+    );
+  }
+}
+
+class _NotifBirthdaysScreen extends StatefulWidget {
+  const _NotifBirthdaysScreen();
+
+  @override
+  State<_NotifBirthdaysScreen> createState() => _NotifBirthdaysScreenState();
+}
+
+class _NotifBirthdaysScreenState extends State<_NotifBirthdaysScreen> {
+  var _loading = true;
+  late _LocalNotificationPrefs _prefs;
+  final Map<String, bool> _values = <String, bool>{};
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_load()));
+  }
+
+  Future<void> _load() async {
+    final session = SessionScope.of(context).value;
+    if (session is! AuthSession) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      return;
+    }
+    _prefs = _LocalNotificationPrefs(session.userId);
+    final next = <String, bool>{
+      'birthdays.reminders': await _prefs.getBool('birthdays.reminders', defaultValue: true),
+      'birthdays.today': await _prefs.getBool('birthdays.today', defaultValue: true),
+    };
+    if (!mounted) return;
+    setState(() {
+      _values
+        ..clear()
+        ..addAll(next);
+      _loading = false;
+    });
+  }
+
+  Future<void> _set(String key, bool v) async {
+    setState(() => _values[key] = v);
+    await _prefs.setBool(key, v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final session = SessionScope.of(context).value;
+    final enabled = session is AuthSession;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Aniversários')),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              children: [
+                const SizedBox(height: 8),
+                const _SettingsSectionTitle('Lembretes'),
+                SwitchListTile(
+                  secondary: const Icon(Icons.notifications_outlined),
+                  title: const Text('Lembretes de aniversários'),
+                  value: _values['birthdays.reminders'] ?? true,
+                  onChanged: enabled ? (v) => unawaited(_set('birthdays.reminders', v)) : null,
+                ),
+                SwitchListTile(
+                  secondary: const Icon(Icons.cake_outlined),
+                  title: const Text('Aviso no dia'),
+                  value: _values['birthdays.today'] ?? true,
+                  onChanged: enabled ? (v) => unawaited(_set('birthdays.today', v)) : null,
+                ),
+                const SizedBox(height: 12),
+              ],
+            ),
+    );
+  }
+}
+
+class ThemeSettingsScreen extends StatelessWidget {
+  const ThemeSettingsScreen({super.key});
+
+  Future<void> _setTheme(BuildContext context, ThemeMode mode) async {
+    ThemeModeScope.of(context).value = mode;
+    try {
+      final sp = await SharedPreferences.getInstance();
+      await sp.setString('theme_mode', mode == ThemeMode.dark ? 'dark' : 'light');
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final notifier = ThemeModeScope.of(context);
+    return AnimatedBuilder(
+      animation: notifier,
+      builder: (context, _) {
+        final mode = notifier.value;
+        return Scaffold(
+          appBar: AppBar(title: Text(t(context).settingsTheme)),
+          body: ListView(
+            children: [
+              RadioListTile<ThemeMode>(
+                value: ThemeMode.light,
+                groupValue: mode,
+                title: const Text('Claro'),
+                onChanged: (v) => v == null ? null : unawaited(_setTheme(context, v)),
+              ),
+              RadioListTile<ThemeMode>(
+                value: ThemeMode.dark,
+                groupValue: mode,
+                title: const Text('Escuro'),
+                onChanged: (v) => v == null ? null : unawaited(_setTheme(context, v)),
+              ),
+              const Padding(
+                padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: Text('Essa opção muda o modo do app inteiro.'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class HelpCenterScreen extends StatelessWidget {
+  const HelpCenterScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Ajuda')),
+      body: ListView(
+        children: [
+          _SettingsSectionTitle('Central de ajuda'),
+          ListTile(
+            leading: const Icon(Icons.report_outlined),
+            title: const Text('Relatar um problema'),
+            subtitle: const Text('Enviar detalhes do que aconteceu.'),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const _ReportProblemScreen()),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.verified_outlined),
+            title: const Text('Verificado'),
+            subtitle: const Text('Como funciona a verificação e o selo.'),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const _HelpArticleScreen(
+                  title: 'Verificado',
+                  body: [
+                    'O selo aparece quando sua assinatura estiver ativa no servidor.',
+                    'Se você já assinou e não apareceu, faça logout/login e tente novamente.',
+                  ],
+                ),
+              ),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.account_circle_outlined),
+            title: const Text('Status da conta'),
+            subtitle: const Text('Entenda restrições e avisos.'),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const _HelpArticleScreen(
+                  title: 'Status da conta',
+                  body: [
+                    'Se sua conta estiver com restrições, algumas ações podem ficar bloqueadas.',
+                    'Em caso de dúvida, use “Relatar um problema”.',
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const Divider(height: 26),
+          _SettingsSectionTitle('Guia rápido'),
+          ListTile(
+            leading: const Icon(Icons.post_add_outlined),
+            title: const Text('Como criar uma publicação'),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const _HelpArticleScreen(
+                  title: 'Como criar uma publicação',
+                  body: [
+                    '1) Toque no botão de criar (+).',
+                    '2) Escolha Post/Story/Vídeo.',
+                    '3) Adicione texto, mídia e publique.',
+                  ],
+                ),
+              ),
+            ),
+          ),
+          ListTile(
+            leading: const Icon(Icons.chat_bubble_outline),
+            title: const Text('Como enviar mensagem'),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const _HelpArticleScreen(
+                  title: 'Como enviar mensagem',
+                  body: [
+                    '1) Abra “Direct”.',
+                    '2) Selecione uma conversa.',
+                    '3) Digite e envie. Você também pode anexar uma imagem.',
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
+      ),
+    );
+  }
+}
+
+class _HelpArticleScreen extends StatelessWidget {
+  const _HelpArticleScreen({required this.title, required this.body});
+
+  final String title;
+  final List<String> body;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(title)),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          for (final line in body) ...[
+            Text(line),
+            const SizedBox(height: 8),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ReportProblemScreen extends StatefulWidget {
+  const _ReportProblemScreen();
+
+  @override
+  State<_ReportProblemScreen> createState() => _ReportProblemScreenState();
+}
+
+class _ReportProblemScreenState extends State<_ReportProblemScreen> {
+  static const _supportEmail = 'suporte@atalaia.social';
+
+  final _subject = TextEditingController(text: 'Relatar um problema no Atalaia');
+  final _details = TextEditingController();
+
+  @override
+  void dispose() {
+    _subject.dispose();
+    _details.dispose();
+    super.dispose();
+  }
+
+  Future<void> _copyEmail() async {
+    await Clipboard.setData(const ClipboardData(text: _supportEmail));
+    if (!mounted) return;
+    showInfoSnackBar(context, 'E-mail copiado.');
+  }
+
+  Future<void> _sendEmail() async {
+    final repo = RepoScope.of(context);
+    final uid = repo.supabase?.auth.currentUser?.id;
+    final now = DateTime.now();
+    final subject = _subject.text.trim().isEmpty ? 'Relatar um problema no Atalaia' : _subject.text.trim();
+    final bodyLines = <String>[
+      _details.text.trim().isEmpty ? 'Descreva o que aconteceu aqui…' : _details.text.trim(),
+      '',
+      '---',
+      'Data: ${now.toIso8601String()}',
+      if (uid != null && uid.trim().isNotEmpty) 'Usuário: $uid',
+      if (kIsWeb) 'Plataforma: web' else 'Plataforma: ${defaultTargetPlatform.name}',
+    ];
+    final uri = Uri(
+      scheme: 'mailto',
+      path: _supportEmail,
+      queryParameters: <String, String>{
+        'subject': subject,
+        'body': bodyLines.join('\n'),
+      },
+    );
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!mounted) return;
+    if (!ok) {
+      showErrorSnackBar(
+        context,
+        message: 'Não foi possível abrir o app de e-mail.',
+        onRetry: () => unawaited(_sendEmail()),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Relatar um problema')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          const Text(
+            'Envie o máximo de detalhes possível para a equipe de Ajuda.',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 12),
+          AtalaiaTextField(
+            controller: _subject,
+            hintText: 'Assunto',
+            maxLength: 80,
+          ),
+          const SizedBox(height: 12),
+          AtalaiaTextField(
+            controller: _details,
+            hintText: 'O que aconteceu? Como reproduzir? (pode colar links e horários)',
+            minLines: 5,
+            maxLines: 10,
+            maxLength: 1200,
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Contato', style: TextStyle(fontWeight: FontWeight.w900)),
+                  const SizedBox(height: 8),
+                  Text(_supportEmail),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: () => unawaited(_copyEmail()),
+                        icon: const Icon(Icons.copy_rounded),
+                        label: const Text('Copiar e-mail'),
+                      ),
+                      FilledButton.icon(
+                        onPressed: () => unawaited(_sendEmail()),
+                        icon: const Icon(Icons.send_rounded),
+                        label: const Text('Enviar e-mail'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Dica: anexe prints e informe o horário aproximado do erro.',
+            style: TextStyle(fontWeight: FontWeight.w600),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -22035,6 +23820,9 @@ class _ChatScreenState extends State<ChatScreen> {
   final _scrollController = ScrollController();
   final _composerFocus = FocusNode();
   String? _attachmentToken;
+  Uint8List? _attachmentBytes;
+  String? _attachmentContentType;
+  String? _attachmentFileExtension;
   bool _userScrolledUp = false;
   String? _notifiedFailedId;
   String? _notifiedDirectError;
@@ -22088,6 +23876,92 @@ class _ChatScreenState extends State<ChatScreen> {
     super.dispose();
   }
 
+  Future<({Uint8List bytes, String contentType, String fileExtension})?> _pickDirectImage() async {
+    final isMobile = !kIsWeb && (defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS);
+    if (isMobile) {
+      try {
+        final x = await ImagePicker().pickImage(source: ImageSource.gallery);
+        if (!mounted || x == null) return null;
+        final bytes = await x.readAsBytes();
+        if (!mounted || bytes.isEmpty) return null;
+        final ext = () {
+          final i = x.path.lastIndexOf('.');
+          if (i < 0 || i == x.path.length - 1) return 'jpg';
+          return x.path.substring(i + 1).trim().toLowerCase();
+        }();
+        final contentType = ext == 'png'
+            ? 'image/png'
+            : (ext == 'webp' ? 'image/webp' : 'image/jpeg');
+        return (bytes: bytes, contentType: contentType, fileExtension: ext.isEmpty ? 'jpg' : ext);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    try {
+      final picked = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowMultiple: false,
+        withData: true,
+        allowedExtensions: const ['jpg', 'jpeg', 'png', 'webp'],
+      );
+      if (!mounted) return null;
+      final file = (picked == null || picked.files.isEmpty) ? null : picked.files.first;
+      if (file == null || file.bytes == null || file.bytes!.isEmpty) return null;
+      final ext = (file.extension ?? '').trim().toLowerCase();
+      final resolvedExt = ext.isEmpty ? 'jpg' : ext;
+      final contentType = resolvedExt == 'png'
+          ? 'image/png'
+          : (resolvedExt == 'webp' ? 'image/webp' : 'image/jpeg');
+      return (bytes: file.bytes!, contentType: contentType, fileExtension: resolvedExt);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _attachPhoto(DemoRepository repo, AuthSession session) async {
+    if (_sendingAttachment) return;
+    if (widget.args.isGroup) {
+      showInfoSnackBar(context, t(context).commonPhase2);
+      return;
+    }
+    final picked = await _pickDirectImage();
+    if (!mounted || picked == null) return;
+    setState(() {
+      _sendingAttachment = true;
+      _attachmentToken = 'uploading';
+      _attachmentBytes = picked.bytes;
+      _attachmentContentType = picked.contentType;
+      _attachmentFileExtension = picked.fileExtension;
+    });
+    final url = await repo.uploadDirectMessageImage(
+      userId: session.userId,
+      bytes: picked.bytes,
+      contentType: picked.contentType,
+      fileExtension: picked.fileExtension,
+    );
+    if (!mounted) return;
+    if (url == null || url.trim().isEmpty) {
+      setState(() {
+        _sendingAttachment = false;
+        _attachmentToken = null;
+        _attachmentBytes = null;
+        _attachmentContentType = null;
+        _attachmentFileExtension = null;
+      });
+      showErrorSnackBar(
+        context,
+        message: 'Falha ao anexar imagem.',
+        onRetry: () => unawaited(_attachPhoto(repo, session)),
+      );
+      return;
+    }
+    setState(() {
+      _sendingAttachment = false;
+      _attachmentToken = url;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final repo = RepoScope.of(context);
@@ -22137,13 +24011,7 @@ class _ChatScreenState extends State<ChatScreen> {
             );
           });
         }
-        ThreadModel? thread;
-        for (final t in repo.threadsFor(s)) {
-          if (t.id == widget.args.threadId) {
-            thread = t;
-            break;
-          }
-        }
+        final thread = repo.threadById(widget.args.threadId);
         final community = widget.args.communityId == null ? null : repo.findCommunity(widget.args.communityId!);
         final isGroup = widget.args.isGroup;
         var resolvedPeerUserId = thread?.peerUserId ?? '';
@@ -22162,9 +24030,15 @@ class _ChatScreenState extends State<ChatScreen> {
             : (resolvedPeerProfile == null
                 ? widget.args.peerName
                 : _displayNameForProfile(resolvedPeerProfile, userFallback: widget.args.peerName));
+        final peerNickname = !isGroup && resolvedPeerUserId.trim().isNotEmpty
+            ? repo.nicknameForThreadUser(widget.args.threadId, resolvedPeerUserId.trim())
+            : '';
+        final resolvedDisplayName = peerNickname.isEmpty ? displayName : peerNickname;
         final displayImageUrl = isGroup ? community?.imageUrl : (resolvedPeerProfile?.avatarUrl ?? widget.args.peerAvatarUrl);
         final verifiedNow =
             isGroup ? false : (resolvedPeerProfile?.isVerified ?? (thread?.peerIsVerified ?? widget.args.peerIsVerified));
+        final threadThemeKey = thread?.themeKey ?? 'default';
+        final mineBubbleColor = _directThemeMineBubbleColor(context, threadThemeKey);
         return Scaffold(
           appBar: AppBar(
             title: isGroup
@@ -22173,7 +24047,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     children: [
                       (displayImageUrl == null || displayImageUrl.trim().isEmpty)
                           ? const IconAvatar(icon: Icons.groups_outlined, size: 32)
-                          : Avatar(name: displayName, imageUrl: displayImageUrl, size: AvatarSize.s32),
+                          : Avatar(name: resolvedDisplayName, imageUrl: displayImageUrl, size: AvatarSize.s32),
                       const SizedBox(width: 10),
                       Flexible(
                         child: Column(
@@ -22181,7 +24055,7 @@ class _ChatScreenState extends State<ChatScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              displayName,
+                              resolvedDisplayName,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(fontWeight: FontWeight.w800),
                             ),
@@ -22214,7 +24088,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Avatar(name: displayName, imageUrl: displayImageUrl, size: AvatarSize.s32),
+                        Avatar(name: resolvedDisplayName, imageUrl: displayImageUrl, size: AvatarSize.s32),
                         const SizedBox(width: 10),
                         Flexible(
                           child: Row(
@@ -22222,7 +24096,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             children: [
                               Flexible(
                                 child: Text(
-                                  displayName,
+                                  resolvedDisplayName,
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(fontWeight: FontWeight.w800),
                                 ),
@@ -22242,13 +24116,21 @@ class _ChatScreenState extends State<ChatScreen> {
                 icon: Icons.info_outline,
                 label: t(context).chatDetailsAction,
                 onPressed: () {
-                  if (widget.args.communityId == null) {
-                    showAtalaiaSnackBar(context, t(context).chatDetailsUiPlaceholder);
-                    return;
-                  }
-                  Navigator.of(context).pushNamed(
-                    Routes.communityMembers,
-                    arguments: CommunityMembersArgs(communityId: widget.args.communityId!),
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) {
+                        return DirectConversationDetailsScreen(
+                          args: DirectConversationDetailsArgs(
+                            threadId: widget.args.threadId,
+                            displayName: displayName,
+                            displayImageUrl: displayImageUrl,
+                            isGroup: isGroup,
+                            peerUserId: isGroup ? null : (resolvedPeerUserId.trim().isEmpty ? null : resolvedPeerUserId.trim()),
+                            communityId: widget.args.communityId,
+                          ),
+                        );
+                      },
+                    ),
                   );
                 },
               ),
@@ -22270,15 +24152,17 @@ class _ChatScreenState extends State<ChatScreen> {
                     controller: _scrollController,
                     padding: const EdgeInsets.all(12),
                     itemCount: messages.length,
-                    itemBuilder: (context, index) {
-                      final m = messages[index];
-                      final isMine = m.senderId == s.userId;
-                      final senderProfile = widget.args.isGroup && !isMine ? repo.profileForUserId(m.senderId) : null;
-                      return Align(
-                        alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 6),
-                          child: Column(
+                      itemBuilder: (context, index) {
+                        final m = messages[index];
+                        final isMine = m.senderId == s.userId;
+                        final senderProfile = widget.args.isGroup && !isMine ? repo.profileForUserId(m.senderId) : null;
+                        final senderNickname = senderProfile == null ? '' : repo.nicknameForThreadUser(widget.args.threadId, senderProfile.userId);
+                        final senderDisplayName = senderProfile == null ? '' : (senderNickname.isEmpty ? senderProfile.name : senderNickname);
+                        return Align(
+                          alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                            child: Column(
                             crossAxisAlignment: isMine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                             children: [
                               if (senderProfile != null) ...[
@@ -22289,7 +24173,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                     children: [
                                       Flexible(
                                         child: Text(
-                                          senderProfile.name,
+                                          senderDisplayName,
                                           style: TextStyle(
                                             fontSize: 12,
                                             color: Theme.of(context).colorScheme.outline,
@@ -22310,6 +24194,7 @@ class _ChatScreenState extends State<ChatScreen> {
                                 message: m,
                                 isMine: isMine,
                                 viewerId: s.userId,
+                                mineBubbleColor: mineBubbleColor,
                                 onOpenPost: (postId) {
                                   Navigator.of(context).pushNamed(
                                     Routes.postDetail,
@@ -22355,7 +24240,15 @@ class _ChatScreenState extends State<ChatScreen> {
                                   color: Theme.of(context).colorScheme.primaryContainer,
                                   borderRadius: BorderRadius.circular(10),
                                 ),
-                                child: const Icon(Icons.image_outlined),
+                                child: _attachmentBytes == null
+                                    ? const Icon(Icons.image_outlined)
+                                    : ClipRRect(
+                                        borderRadius: BorderRadius.circular(10),
+                                        child: Image.memory(
+                                          _attachmentBytes!,
+                                          fit: BoxFit.cover,
+                                        ),
+                                      ),
                               ),
                               const SizedBox(width: 10),
                               Expanded(
@@ -22364,7 +24257,13 @@ class _ChatScreenState extends State<ChatScreen> {
                               AtalaiaIconButton(
                                 icon: Icons.close,
                                 label: t(context).chatAttachmentRemove,
-                                onPressed: () => setState(() => _attachmentToken = null),
+                                onPressed: () => setState(() {
+                                  _attachmentToken = null;
+                                  _attachmentBytes = null;
+                                  _attachmentContentType = null;
+                                  _attachmentFileExtension = null;
+                                  _sendingAttachment = false;
+                                }),
                               ),
                             ],
                           ),
@@ -22385,11 +24284,7 @@ class _ChatScreenState extends State<ChatScreen> {
                               child: AtalaiaIconButton(
                                 icon: Icons.photo_outlined,
                                 label: t(context).chatAttachmentAddPhoto,
-                                onPressed: () {
-                                  setState(
-                                    () => _attachmentToken = 'demo://${DateTime.now().microsecondsSinceEpoch}',
-                                  );
-                                },
+                                onPressed: (s is AuthSession) ? () => unawaited(_attachPhoto(repo, s)) : null,
                               ),
                             ),
                             const SizedBox(width: 8),
@@ -22423,17 +24318,26 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   bool _canSend() {
-    return _controller.text.trim().isNotEmpty || _attachmentToken != null;
+    if (_sendingAttachment) return false;
+    final token = (_attachmentToken ?? '').trim();
+    final hasAttachment = token.isNotEmpty && token != 'uploading';
+    return _controller.text.trim().isNotEmpty || hasAttachment;
   }
 
   void _send(DemoRepository repo, AuthSession session) {
     final text = _controller.text.trim();
     final token = _attachmentToken;
 
-    if (token == null && text.isEmpty) return;
+    if (_sendingAttachment) return;
+    if ((token == null || token.trim().isEmpty || token == 'uploading') && text.isEmpty) return;
 
     _controller.clear();
-    setState(() => _attachmentToken = null);
+    setState(() {
+      _attachmentToken = null;
+      _attachmentBytes = null;
+      _attachmentContentType = null;
+      _attachmentFileExtension = null;
+    });
 
     if (token != null) {
       setState(() => _sendingAttachment = true);
@@ -22466,6 +24370,7 @@ class MessageBubble extends StatelessWidget {
     required this.message,
     required this.isMine,
     required this.viewerId,
+    required this.mineBubbleColor,
     required this.onOpenPost,
     required this.onRetry,
     required this.onDelete,
@@ -22475,6 +24380,7 @@ class MessageBubble extends StatelessWidget {
   final MessageModel message;
   final bool isMine;
   final String viewerId;
+  final Color mineBubbleColor;
   final void Function(String postId) onOpenPost;
   final VoidCallback onRetry;
   final VoidCallback onDelete;
@@ -22482,7 +24388,7 @@ class MessageBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final fg = isMine ? cs.onPrimaryContainer : cs.onSurface;
+    final fg = isMine ? _onColorForBackground(mineBubbleColor) : cs.onSurface;
 
     Widget child;
     switch (message.kind) {
@@ -22497,6 +24403,7 @@ class MessageBubble extends StatelessWidget {
           onRetry: onRetry,
           onTapImage: () {
             final cs = Theme.of(context).colorScheme;
+            final url = (message.imageToken ?? '').trim();
             showDialog<void>(
               context: context,
               builder: (_) {
@@ -22514,7 +24421,17 @@ class MessageBubble extends StatelessWidget {
                                 aspectRatio: 4 / 5,
                                 child: Container(
                                   color: cs.surfaceContainerHighest,
-                                  child: const Center(child: Icon(Icons.image_outlined, size: 96)),
+                                  child: url.isEmpty
+                                      ? const Center(child: Icon(Icons.image_outlined, size: 96))
+                                      : Image.network(
+                                          url,
+                                          fit: BoxFit.contain,
+                                          errorBuilder: (_, __, ___) => const Center(child: Icon(Icons.broken_image_outlined, size: 96)),
+                                          loadingBuilder: (context, child, progress) {
+                                            if (progress == null) return child;
+                                            return const Center(child: CircularProgressIndicator());
+                                          },
+                                        ),
                                 ),
                               ),
                             ),
@@ -22567,6 +24484,7 @@ class MessageBubble extends StatelessWidget {
               isMine: isMine,
               child: child,
               kind: message.kind,
+              mineBubbleColor: mineBubbleColor,
             ),
             if (showSending)
               Padding(
@@ -22646,6 +24564,384 @@ class MessageBubble extends StatelessWidget {
   }
 }
 
+class DirectConversationDetailsScreen extends StatelessWidget {
+  const DirectConversationDetailsScreen({required this.args, super.key});
+
+  final DirectConversationDetailsArgs args;
+
+  @override
+  Widget build(BuildContext context) {
+    final repo = RepoScope.of(context);
+    final session = SessionScope.of(context);
+    return AnimatedBuilder(
+      animation: Listenable.merge([repo, session]),
+      builder: (context, _) {
+        final l10n = t(context);
+        final s = session.value;
+        final thread = s.isAuthenticated ? repo.threadById(args.threadId) : null;
+        final isMuted = thread?.isMuted ?? false;
+        final themeKey = thread?.themeKey ?? 'default';
+        final ephemeralHours = thread?.ephemeralHours ?? 0;
+        final peerUserId = args.peerUserId?.trim();
+        final restricted = peerUserId == null || peerUserId.isEmpty ? false : repo.isUserRestrictedInDirect(peerUserId);
+        final blocked = peerUserId == null || peerUserId.isEmpty ? false : repo.isUserBlockedInDirect(peerUserId);
+        final nickname = (args.isGroup || peerUserId == null || peerUserId.isEmpty) ? '' : repo.nicknameForThreadUser(args.threadId, peerUserId);
+        final detailsDisplayName = nickname.isEmpty ? args.displayName : nickname;
+        final communityId = args.communityId ?? thread?.communityId;
+
+        return Scaffold(
+          appBar: AppBar(
+            title: Text(l10n.chatDetailsAction),
+          ),
+          body: ListView(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                child: Row(
+                  children: [
+                    args.isGroup
+                        ? (args.displayImageUrl == null || args.displayImageUrl!.trim().isEmpty
+                            ? const IconAvatar(icon: Icons.groups_outlined, size: 44)
+                            : Avatar(name: detailsDisplayName, imageUrl: args.displayImageUrl, size: AvatarSize.s44))
+                        : Avatar(name: detailsDisplayName, imageUrl: args.displayImageUrl, size: AvatarSize.s44),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        detailsDisplayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 8),
+              ListTile(
+                leading: const Icon(Icons.person_outline),
+                title: Text(args.isGroup ? 'Comunidade' : 'Perfil'),
+                onTap: () {
+                  if (args.isGroup) {
+                    final cid = (communityId ?? '').trim();
+                    if (cid.isEmpty) {
+                      showAtalaiaSnackBar(context, 'Comunidade indisponível.');
+                      return;
+                    }
+                    Navigator.of(context).pushNamed(
+                      Routes.communityDetail,
+                      arguments: CommunityArgs(communityId: cid),
+                    );
+                    return;
+                  }
+                  final id = peerUserId;
+                  if (id == null || id.isEmpty) {
+                    showAtalaiaSnackBar(context, t(context).profileUnavailable);
+                    return;
+                  }
+                  Navigator.of(context).pushNamed(Routes.userProfile, arguments: UserProfileArgs(userId: id));
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.search),
+                title: const Text('Pesquisar na conversa'),
+                onTap: () {
+                  if (s is! AuthSession) return;
+                  _showConversationSearchSheet(context, repo: repo, session: s, threadId: args.threadId);
+                },
+              ),
+              SwitchListTile(
+                secondary: const Icon(Icons.volume_off_outlined),
+                title: const Text('Silenciar notificações'),
+                value: isMuted,
+                onChanged: (_) => repo.toggleMuteThread(args.threadId),
+              ),
+              if (!args.isGroup) ...[
+                const Divider(height: 1),
+                ListTile(
+                  leading: Icon(restricted ? Icons.remove_moderator : Icons.remove_moderator_outlined),
+                  title: Text(restricted ? 'Remover restrição' : 'Restringir'),
+                  onTap: () {
+                    final id = peerUserId;
+                    if (id == null || id.isEmpty) return;
+                    final active = repo.toggleRestrictUserInDirect(id);
+                    showAtalaiaSnackBar(context, active ? 'Usuário restringido.' : 'Restrição removida.');
+                  },
+                ),
+                ListTile(
+                  leading: Icon(blocked ? Icons.lock_open_outlined : Icons.block_outlined),
+                  title: Text(blocked ? 'Desbloquear' : 'Bloquear'),
+                  onTap: () async {
+                    final id = peerUserId;
+                    if (id == null || id.isEmpty) return;
+                    if (!blocked) {
+                      final ok = await showAtalaiaConfirmDialog(
+                        context,
+                        title: 'Bloquear usuário?',
+                        message: 'Você não receberá novas mensagens desta pessoa.',
+                        confirmLabel: 'Bloquear',
+                        isDestructive: true,
+                      );
+                      if (ok != true || !context.mounted) return;
+                    }
+                    final active = repo.toggleBlockUserInDirect(id);
+                    showAtalaiaSnackBar(context, active ? 'Usuário bloqueado.' : 'Usuário desbloqueado.');
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.flag_outlined),
+                  title: Text(l10n.profileReport),
+                  onTap: () async {
+                    if (s is! AuthSession) {
+                      showAuthGate(context);
+                      return;
+                    }
+                    final id = peerUserId;
+                    if (id == null || id.isEmpty) return;
+                    final selected = await showReportReasonSheet(context);
+                    if (!context.mounted || selected == null) return;
+                    await repo.submitReport(
+                      reporterId: s.userId,
+                      entityType: ReportEntityType.user,
+                      entityId: id,
+                      reason: selected.reason.name,
+                      description: selected.otherText,
+                      reportedUserId: id,
+                    );
+                    if (!context.mounted) return;
+                    showAtalaiaSnackBar(context, l10n.postSnackReportSent, kind: AtalaiaSnackKind.success);
+                  },
+                ),
+              ],
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.palette_outlined),
+                title: const Text('Tema'),
+                subtitle: Text(_directThemeLabel(themeKey)),
+                onTap: () => _showDirectThemeSheet(
+                  context,
+                  repo: repo,
+                  threadId: args.threadId,
+                  currentTheme: themeKey,
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.timer_outlined),
+                title: const Text('Mensagens temporárias'),
+                subtitle: Text(_ephemeralLabel(ephemeralHours)),
+                onTap: () => _showEphemeralSheet(
+                  context,
+                  repo: repo,
+                  threadId: args.threadId,
+                  currentHours: ephemeralHours,
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.privacy_tip_outlined),
+                title: const Text('Privacidade e segurança'),
+                onTap: () => Navigator.of(context).pushNamed(Routes.settingsPrivacy),
+              ),
+              ListTile(
+                leading: const Icon(Icons.badge_outlined),
+                title: const Text('Apelidos'),
+                subtitle: Text(
+                  args.isGroup
+                      ? 'Selecionar membro para definir apelido'
+                      : (nickname.isEmpty ? 'Definir apelido para esta conversa' : nickname),
+                ),
+                onTap: () {
+                  if (args.isGroup) {
+                    final cid = (communityId ?? '').trim();
+                    if (cid.isEmpty) return;
+                    _showGroupNicknameSheet(
+                      context,
+                      repo: repo,
+                      communityId: cid,
+                      threadId: args.threadId,
+                    );
+                    return;
+                  }
+                  final id = peerUserId;
+                  if (id == null || id.isEmpty) return;
+                  _showNicknameDialog(context, repo: repo, threadId: args.threadId, peerUserId: id, currentNickname: nickname);
+                },
+              ),
+              if (!args.isGroup)
+                ListTile(
+                  leading: const Icon(Icons.group_add_outlined),
+                  title: const Text('Criar conversa em grupo'),
+                  onTap: () => Navigator.of(context).pushNamed(Routes.newMessage),
+                ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+Future<void> _showGroupNicknameSheet(
+  BuildContext context, {
+  required DemoRepository repo,
+  required String communityId,
+  required String threadId,
+}) async {
+  if (repo.supabase != null && !repo.isOffline) {
+    unawaited(repo.refreshCommunityMembers(communityId, force: false));
+  }
+  await showAtalaiaBottomSheet<void>(
+    context,
+    builder: (context) {
+      return AnimatedBuilder(
+        animation: repo,
+        builder: (context, _) {
+          final members = repo.membersForCommunity(communityId);
+          return SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 12),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(
+                    children: [
+                      Icon(Icons.badge_outlined),
+                      SizedBox(width: 10),
+                      Expanded(child: Text('Apelidos', style: TextStyle(fontWeight: FontWeight.w900))),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                if (members.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 8, 16, 16),
+                    child: Text('Carregando membros…'),
+                  )
+                else
+                  Flexible(
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: members.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (context, index) {
+                        final p = members[index];
+                        final nick = repo.nicknameForThreadUser(threadId, p.userId);
+                        return ListTile(
+                          leading: Avatar(name: p.name, imageUrl: p.avatarUrl, size: AvatarSize.s32),
+                          title: Text(p.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                          subtitle: Text(nick.isEmpty ? '@${p.username}' : nick, maxLines: 1, overflow: TextOverflow.ellipsis),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: () {
+                            Navigator.of(context).pop();
+                            _showNicknameDialog(
+                              context,
+                              repo: repo,
+                              threadId: threadId,
+                              peerUserId: p.userId,
+                              currentNickname: nick,
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                const SizedBox(height: 12),
+              ],
+            ),
+          );
+        },
+      );
+    },
+  );
+}
+
+Future<void> _showConversationSearchSheet(
+  BuildContext context, {
+  required DemoRepository repo,
+  required AuthSession session,
+  required String threadId,
+}) async {
+  final search = TextEditingController();
+  await showAtalaiaBottomSheet<void>(
+    context,
+    builder: (context) {
+      return StatefulBuilder(
+        builder: (context, setState) {
+          final query = search.text.trim().toLowerCase();
+          final results = repo
+              .messagesFor(threadId, session)
+              .where((m) => (m.text ?? '').trim().isNotEmpty)
+              .where((m) => query.isEmpty ? false : (m.text ?? '').toLowerCase().contains(query))
+              .toList(growable: false)
+            ..sort((a, b) => b.sentAt.compareTo(a.sentAt));
+          final cs = Theme.of(context).colorScheme;
+          return SafeArea(
+            child: Padding(
+              padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 540),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const SizedBox(height: 10),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: SearchField(
+                        controller: search,
+                        hintText: 'Pesquisar palavra',
+                        onChanged: (_) => setState(() {}),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    if (query.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 6, 16, 16),
+                        child: Text(
+                          'Digite uma palavra para buscar nesta conversa.',
+                          style: TextStyle(color: cs.outline, fontWeight: FontWeight.w700),
+                        ),
+                      )
+                    else if (results.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 6, 16, 16),
+                        child: Text(
+                          t(context).directEmptyPeopleSearch,
+                          style: TextStyle(color: cs.outline, fontWeight: FontWeight.w700),
+                        ),
+                      )
+                    else
+                      Flexible(
+                        child: ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: results.length,
+                          separatorBuilder: (_, __) => const Divider(height: 1),
+                          itemBuilder: (_, index) {
+                            final m = results[index];
+                            return ListTile(
+                              title: Text(
+                                m.text ?? '',
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontWeight: FontWeight.w700),
+                              ),
+                              subtitle: Text(_relativeTime(context, m.sentAt)),
+                            );
+                          },
+                        ),
+                      ),
+                    const SizedBox(height: 8),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    },
+  );
+  search.dispose();
+}
+
 class TextMessageBubble extends StatelessWidget {
   const TextMessageBubble({required this.text, required this.color, super.key});
 
@@ -22710,10 +25006,26 @@ class ImageMessageBubble extends StatelessWidget {
                 child: Stack(
                   children: [
                     Positioned.fill(
-                      child: Container(
-                        color: cs.surfaceContainerHighest,
-                        child: const Center(child: Icon(Icons.image_outlined, size: 42)),
-                      ),
+                      child: token.trim().isEmpty
+                          ? Container(
+                              color: cs.surfaceContainerHighest,
+                              child: const Center(child: Icon(Icons.image_outlined, size: 42)),
+                            )
+                          : Image.network(
+                              token.trim(),
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => Container(
+                                color: cs.surfaceContainerHighest,
+                                child: const Center(child: Icon(Icons.broken_image_outlined, size: 42)),
+                              ),
+                              loadingBuilder: (context, child, progress) {
+                                if (progress == null) return child;
+                                return Container(
+                                  color: cs.surfaceContainerHighest,
+                                  child: const Center(child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))),
+                                );
+                              },
+                            ),
                     ),
                     if (status == MessageSendStatus.sending)
                       Positioned.fill(
@@ -22870,11 +25182,17 @@ class PostShareCardMessage extends StatelessWidget {
 }
 
 class _MessageBody extends StatelessWidget {
-  const _MessageBody({required this.isMine, required this.child, required this.kind});
+  const _MessageBody({
+    required this.isMine,
+    required this.child,
+    required this.kind,
+    required this.mineBubbleColor,
+  });
 
   final bool isMine;
   final Widget child;
   final MessageKind kind;
+  final Color mineBubbleColor;
 
   @override
   Widget build(BuildContext context) {
@@ -22884,7 +25202,7 @@ class _MessageBody extends StatelessWidget {
       return child;
     }
 
-    final bg = isMine ? cs.primaryContainer : cs.surfaceContainerHighest;
+    final bg = isMine ? mineBubbleColor : cs.surfaceContainerHighest;
     final radius = BorderRadius.only(
       topLeft: const Radius.circular(18),
       topRight: const Radius.circular(18),
@@ -22898,6 +25216,142 @@ class _MessageBody extends StatelessWidget {
       child: child,
     );
   }
+}
+
+Color _onColorForBackground(Color background) {
+  final luma = background.computeLuminance();
+  return luma > 0.5 ? Colors.black : Colors.white;
+}
+
+Color _directThemeMineBubbleColor(BuildContext context, String themeKey) {
+  final cs = Theme.of(context).colorScheme;
+  return switch (themeKey) {
+    'ocean' => const Color(0xFF0EA5E9),
+    'forest' => const Color(0xFF16A34A),
+    'sunset' => const Color(0xFFF97316),
+    'grape' => const Color(0xFF7C3AED),
+    _ => cs.primaryContainer,
+  };
+}
+
+String _directThemeLabel(String themeKey) {
+  return switch (themeKey) {
+    'ocean' => 'Azul oceano',
+    'forest' => 'Verde floresta',
+    'sunset' => 'Laranja pôr do sol',
+    'grape' => 'Roxo uva',
+    _ => 'Padrão',
+  };
+}
+
+String _ephemeralLabel(int hours) {
+  if (hours <= 0) return 'Desativadas';
+  if (hours == 1) return 'Após 1 hora';
+  if (hours == 24) return 'Após 24 horas';
+  if (hours == 24 * 7) return 'Após 7 dias';
+  return 'Após $hours horas';
+}
+
+Future<void> _showDirectThemeSheet(
+  BuildContext context, {
+  required DemoRepository repo,
+  required String threadId,
+  required String currentTheme,
+}) async {
+  final options = <String>['default', 'ocean', 'forest', 'sunset', 'grape'];
+  final selected = await showAtalaiaBottomSheet<String>(
+    context,
+    builder: (context) {
+      return SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final key in options)
+              RadioListTile<String>(
+                value: key,
+                groupValue: currentTheme,
+                title: Text(_directThemeLabel(key)),
+                onChanged: (v) => Navigator.of(context).pop(v),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      );
+    },
+  );
+  if (selected == null) return;
+  repo.setThreadTheme(threadId, selected);
+}
+
+Future<void> _showEphemeralSheet(
+  BuildContext context, {
+  required DemoRepository repo,
+  required String threadId,
+  required int currentHours,
+}) async {
+  final options = <int>[0, 1, 24, 24 * 7];
+  final selected = await showAtalaiaBottomSheet<int>(
+    context,
+    builder: (context) {
+      return SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final hours in options)
+              RadioListTile<int>(
+                value: hours,
+                groupValue: currentHours,
+                title: Text(_ephemeralLabel(hours)),
+                onChanged: (v) => Navigator.of(context).pop(v),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      );
+    },
+  );
+  if (selected == null) return;
+  repo.setThreadEphemeralHours(threadId, selected);
+}
+
+Future<void> _showNicknameDialog(
+  BuildContext context, {
+  required DemoRepository repo,
+  required String threadId,
+  required String peerUserId,
+  required String currentNickname,
+}) async {
+  final controller = TextEditingController(text: currentNickname);
+  final value = await showDialog<String>(
+    context: context,
+    builder: (context) {
+      return AlertDialog(
+        title: const Text('Apelido'),
+        content: AtalaiaTextField(
+          controller: controller,
+          hintText: 'Ex.: Melhor amigo',
+          maxLength: 28,
+        ),
+        actions: [
+          AtalaiaTextButton(
+            label: t(context).commonCancel,
+            onPressed: () => Navigator.of(context).pop(null),
+          ),
+          AtalaiaTextButton(
+            label: 'Remover',
+            onPressed: () => Navigator.of(context).pop(''),
+          ),
+          PrimaryButton(
+            label: t(context).commonSave,
+            onPressed: () => Navigator.of(context).pop(controller.text.trim()),
+          ),
+        ],
+      );
+    },
+  );
+  controller.dispose();
+  if (value == null) return;
+  repo.setNicknameForThreadUser(threadId, peerUserId, value);
 }
 
 extension on _ChatScreenState {
@@ -24813,6 +27267,7 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
   var _starting = false;
   var _creating = true;
   var _finishing = false;
+  var _loadedLastLibrarySelection = false;
   String? _selectedPlaylistId;
   String? _selectedMediaItemId;
   String? _sessionId;
@@ -24830,6 +27285,16 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_start());
+    });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_loadedLastLibrarySelection) return;
+    _loadedLastLibrarySelection = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_loadLastPrayerLibrarySelection());
     });
   }
 
@@ -24963,6 +27428,57 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
     } finally {
       _starting = false;
     }
+  }
+
+  String _prayerLibrarySelectionKey(String userId) => 'prayer_library_selection_v1:$userId';
+
+  Future<void> _loadLastPrayerLibrarySelection() async {
+    final session = SessionScope.of(context).value;
+    if (session is! AuthSession) return;
+    try {
+      final sp = await SharedPreferences.getInstance();
+      final raw = sp.getString(_prayerLibrarySelectionKey(session.userId));
+      if (raw == null || raw.trim().isEmpty) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return;
+      final playlistId = decoded['playlistId']?.toString().trim();
+      final mediaItemId = decoded['mediaItemId']?.toString().trim();
+      final resolvedPlaylistId = (playlistId == null || playlistId.isEmpty) ? null : playlistId;
+      final resolvedMediaItemId = (mediaItemId == null || mediaItemId.isEmpty) ? null : mediaItemId;
+      if (!mounted) return;
+      if (resolvedPlaylistId == null && resolvedMediaItemId == null) return;
+      setState(() {
+        _selectedPlaylistId = resolvedPlaylistId;
+        _selectedMediaItemId = resolvedMediaItemId;
+      });
+
+      // Prepare a ready-to-play preview without autoplay.
+      final repo = RepoScope.of(context);
+      final playbackItem = _selectedPlaybackItem(repo);
+      if (playbackItem == null) return;
+      if (playbackItem.type == PlaylistItemType.youtube) {
+        final videoId = _extractYoutubeVideoId(playbackItem.mediaUrl);
+        if (!mounted) return;
+        setState(() {
+          _inlineYoutubeVideoId = videoId;
+          _inlineYoutubePlaying = false;
+          _inlinePlayerLoading = false;
+          _inlinePlayerError = null;
+          _inlinePlayerErrorDetails = null;
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveLastPrayerLibrarySelection({required AuthSession session}) async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      final data = <String, Object?>{
+        'playlistId': _selectedPlaylistId,
+        'mediaItemId': _selectedMediaItemId,
+      };
+      await sp.setString(_prayerLibrarySelectionKey(session.userId), jsonEncode(data));
+    } catch (_) {}
   }
 
   Future<_PrayerLibrarySelection?> _selectFromPrayerLibrary({required AuthSession session}) async {
@@ -25358,6 +27874,7 @@ class _PrayerSessionScreenState extends State<PrayerSessionScreen> {
       }
       _inlinePlayerError = null;
     });
+    unawaited(_saveLastPrayerLibrarySelection(session: session));
     final item = _selectedPlaybackItem(repo);
     if (item != null) {
       await _playInline(item);
@@ -40221,8 +42738,6 @@ class NotificationsScreen extends StatefulWidget {
   State<NotificationsScreen> createState() => _NotificationsScreenState();
 }
 
-enum _NotificationsFilter { all, unread, social, prayer, alerts, scales }
-
 final class _NotificationGroup {
   _NotificationGroup(this.latest, this.items);
 
@@ -40232,7 +42747,6 @@ final class _NotificationGroup {
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
   var _loading = true;
-  var _filter = _NotificationsFilter.all;
 
   @override
   void initState() {
@@ -40283,7 +42797,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         final isAuthenticated = viewerId != null;
 
         final notifs = viewerId == null ? const <NotificationModel>[] : repo.notificationsFor(viewerId);
-        final filteredNotifs = _applyNotificationsFilter(notifs, filter: _filter);
         final cs = Theme.of(context).colorScheme;
 
         return Scaffold(
@@ -40331,46 +42844,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           body: Column(
             children: [
               if (repo.isOffline) OfflineBanner(onRetry: () => repo.setOffline(false)),
-              if (isAuthenticated)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-                  child: Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      AtalaiaFilterChip(
-                        selected: _filter == _NotificationsFilter.all,
-                        label: t(context).notificationsFilterAll,
-                        onSelected: (_) => setState(() => _filter = _NotificationsFilter.all),
-                      ),
-                      AtalaiaFilterChip(
-                        selected: _filter == _NotificationsFilter.unread,
-                        label: t(context).notificationsFilterUnread,
-                        onSelected: (_) => setState(() => _filter = _NotificationsFilter.unread),
-                      ),
-                      AtalaiaFilterChip(
-                        selected: _filter == _NotificationsFilter.social,
-                        label: t(context).notificationsFilterSocial,
-                        onSelected: (_) => setState(() => _filter = _NotificationsFilter.social),
-                      ),
-                      AtalaiaFilterChip(
-                        selected: _filter == _NotificationsFilter.prayer,
-                        label: t(context).notificationsFilterPrayer,
-                        onSelected: (_) => setState(() => _filter = _NotificationsFilter.prayer),
-                      ),
-                      AtalaiaFilterChip(
-                        selected: _filter == _NotificationsFilter.alerts,
-                        label: t(context).notificationsFilterAlerts,
-                        onSelected: (_) => setState(() => _filter = _NotificationsFilter.alerts),
-                      ),
-                      AtalaiaFilterChip(
-                        selected: _filter == _NotificationsFilter.scales,
-                        label: t(context).notificationsFilterScales,
-                        onSelected: (_) => setState(() => _filter = _NotificationsFilter.scales),
-                      ),
-                    ],
-                  ),
-                ),
               Expanded(
                 child: !isAuthenticated
                     ? Center(
@@ -40389,18 +42862,14 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                 separatorBuilder: (_, __) => const SizedBox(height: 10),
                                 itemBuilder: (context, index) => const _NotificationRowSkeleton(),
                               )
-                            : filteredNotifs.isEmpty
+                            : notifs.isEmpty
                                 ? ListView(
                                     physics: const AlwaysScrollableScrollPhysics(),
                                     children: [
                                       SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
                                       EmptyState(
                                         icon: Icons.volunteer_activism_outlined,
-                                        title: _filter == _NotificationsFilter.unread
-                                            ? t(context).notificationsEmptyUnread
-                                            : t(context).notificationsEmptyAll,
-                                        ctaLabel: _filter == _NotificationsFilter.all ? null : t(context).notificationsCtaViewAll,
-                                        onCta: _filter == _NotificationsFilter.all ? null : () => setState(() => _filter = _NotificationsFilter.all),
+                                        title: t(context).notificationsEmptyAll,
                                       ),
                                     ],
                                   )
@@ -40411,7 +42880,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                       context,
                                       repo: repo,
                                       viewerId: viewerId,
-                                      notifications: filteredNotifs,
+                                      notifications: notifs,
                                       cs: cs,
                                     ),
                                   ),
@@ -40422,35 +42891,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         );
       },
     );
-  }
-
-  List<NotificationModel> _applyNotificationsFilter(
-    List<NotificationModel> notifications, {
-    required _NotificationsFilter filter,
-  }) {
-    bool matches(NotificationModel n) {
-      if (filter == _NotificationsFilter.unread) return !n.isRead;
-      if (filter == _NotificationsFilter.all) return true;
-      if (filter == _NotificationsFilter.alerts) return n.type == NotificationType.alertNew;
-      if (filter == _NotificationsFilter.scales) {
-        return n.type == NotificationType.scaleReminder24h ||
-            n.type == NotificationType.scaleReminder1h ||
-            (n.entityType == 'community_prayer_run');
-      }
-      if (filter == _NotificationsFilter.prayer) {
-        return n.type == NotificationType.prayed || n.type == NotificationType.prayerRequest;
-      }
-      if (filter == _NotificationsFilter.social) {
-        return n.type == NotificationType.follow ||
-            n.type == NotificationType.reaction ||
-            n.type == NotificationType.comment ||
-            n.type == NotificationType.postNew ||
-            n.type == NotificationType.storyNew;
-      }
-      return true;
-    }
-
-    return notifications.where(matches).toList(growable: false);
   }
 
   List<Widget> _buildNotificationSections(
