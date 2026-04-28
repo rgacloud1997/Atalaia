@@ -61,7 +61,7 @@ begin
   if to_regclass('public.direct_thread_members') is not null
      and to_regclass('public.direct_threads') is not null then
 
-    execute $fn$
+    execute '
       create or replace function public.is_direct_thread_member(p_thread_id text, p_user_id uuid)
       returns boolean
       language sql
@@ -69,33 +69,33 @@ begin
       security definer
       set search_path = public
       set row_security = off
-      as $$
+      as $fnbody$
         select exists (
           select 1
           from public.direct_thread_members m
           where m.thread_id = p_thread_id
             and m.user_id = p_user_id
         );
-      $$;
-    $fn$;
+      $fnbody$;
+    ';
 
     execute 'revoke all on function public.is_direct_thread_member(text, uuid) from public';
     execute 'grant execute on function public.is_direct_thread_member(text, uuid) to authenticated';
     execute 'grant execute on function public.is_direct_thread_member(text, uuid) to service_role';
 
     execute 'drop policy if exists "direct_thread_members_select_member" on public.direct_thread_members';
-    execute $p$
+    execute '
       create policy "direct_thread_members_select_member"
       on public.direct_thread_members for select
       to authenticated, service_role
       using (
         public.is_direct_thread_member(direct_thread_members.thread_id, auth.uid())
-        or coalesce(auth.role(), '') = 'service_role'
+        or coalesce(auth.role(), '''') = ''service_role''
       );
-    $p$;
+    ';
 
     execute 'drop policy if exists "direct_thread_members_update_member_nickname" on public.direct_thread_members';
-    execute $p$
+    execute '
       create policy "direct_thread_members_update_member_nickname"
       on public.direct_thread_members for update
       to authenticated, service_role
@@ -104,31 +104,31 @@ begin
           direct_thread_members.user_id = auth.uid()
           and public.is_direct_thread_member(direct_thread_members.thread_id, auth.uid())
         )
-        or coalesce(auth.role(), '') = 'service_role'
+        or coalesce(auth.role(), '''') = ''service_role''
       )
       with check (
         (
           direct_thread_members.user_id = auth.uid()
           and public.is_direct_thread_member(direct_thread_members.thread_id, auth.uid())
         )
-        or coalesce(auth.role(), '') = 'service_role'
+        or coalesce(auth.role(), '''') = ''service_role''
       );
-    $p$;
+    ';
 
     execute 'drop policy if exists "direct_threads_update_member" on public.direct_threads';
-    execute $p$
+    execute '
       create policy "direct_threads_update_member"
       on public.direct_threads for update
       to authenticated, service_role
       using (
         public.is_direct_thread_member(direct_threads.id, auth.uid())
-        or coalesce(auth.role(), '') = 'service_role'
+        or coalesce(auth.role(), '''') = ''service_role''
       )
       with check (
         public.is_direct_thread_member(direct_threads.id, auth.uid())
-        or coalesce(auth.role(), '') = 'service_role'
+        or coalesce(auth.role(), '''') = ''service_role''
       );
-    $p$;
+    ';
   end if;
 end;
 $$;
