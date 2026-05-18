@@ -9,17 +9,21 @@
 
 ## 📋 SUMÁRIO EXECUTIVO
 
-### Situação Atual ✅
-- **Banco de Dados**: 2 tabelas principais criadas (`community_prayer_schedules`, `community_prayer_schedule_runs`)
-- **Backend RPC**: 2 funções básicas implementadas (`get_community_prayer_dashboard`, `get_community_schedule_report`)
-- **Flutter**: Models mapeados, Repository pronto, localizações em 3 idiomas
-- **Status**: ~30% da infra, 0% da UI
+> ⚠️ **Atualização 18/05/2026**: Fases 2 e 3 foram entregues no commit `9331fc8` (mesmo commit deste roadmap). Os textos originais abaixo descrevem o estado pré-implementação e foram preservados para histórico, mas os marcadores de status nas seções abaixo refletem a realidade atual.
+
+### Situação Atual ✅ (revisada 18/05/2026)
+- **Banco de Dados**: Tabela `prayer_targets` criada + coluna `prayer_target_id` em `community_prayer_schedules` (com índice e RLS)
+- **Backend RPC**: ✅ 8 RPCs especializadas implementadas (todas com `security definer` + `community_is_admin` enforcement)
+- **Flutter Models**: ✅ 8 models + factories `fromSupabase` em `app/lib/main.dart`
+- **Flutter Repository**: ✅ 8 métodos no `DemoRepository` (linhas 13566–13900) com guard offline
+- **Localizações**: PT/EN/ES existentes
+- **Status**: ~70% da infra+camada de dados; 0% da UI
 
 ### O Que Falta ❌
-- **Tabelas**: Sem "Alvos de Oração" (prayer_targets) - precisamos adicionar
-- **RPCs**: Faltam 6 funções especializadas para cada tipo de relatório
-- **Flutter Models**: Nenhum modelo de relatório criado ainda
-- **UI**: Tela de relatório não existe - precisa ser criada do zero
+- **Testes isolados das RPCs** (Fase 2.3) — nenhum arquivo dedicado em `supabase/tests/`
+- **UI**: Tela de relatório (`PrayerReportScreen`) não existe — Fase 4 completa
+- **Helpers de formatação/exportação** (Fase 6)
+- **Decisões pendentes**: timezone, exportação, realtime, escopo de permissões
 
 ### Impacto da Proposta ✨
 - Solução **escalável** para futuros relatórios
@@ -45,9 +49,13 @@
 
 ---
 
-### FASE 2: Schema Database + Backend (⏱️ 4-5 dias)
+### FASE 2: Schema Database + Backend ✅ **CONCLUÍDA** (commit `9331fc8`)
 
-#### 2.1 Adicionar Tabela: Prayer Targets 🎯
+> Entregue em 4 migrations a partir de `20260428110000_…`. Spec original preservado abaixo para referência; pequenas divergências de implementação estão anotadas em **«Notas de implementação»**.
+>
+> **2.3 (Testar RPCs isoladamente) permanece pendente** — não há arquivo dedicado em `supabase/tests/`.
+
+#### 2.1 Adicionar Tabela: Prayer Targets 🎯 ✅ — `supabase/migrations/20260428110000_prayer_targets_table.sql`
 
 ```sql
 -- Criar tabela de alvos de oração
@@ -92,9 +100,9 @@ FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
 ---
 
-#### 2.2 Criar 8 RPC Functions Especializadas 🔧
+#### 2.2 Criar 8 RPC Functions Especializadas 🔧 ✅ — 3 migrations (`20260428111000_*`, `20260428112000_*`, `20260428113000_*`)
 
-##### RPC 1: `get_prayer_scale_summary()`
+##### RPC 1: `get_prayer_scale_summary()` ✅ — `20260428111000_get_prayer_scale_summary_rpc.sql`
 ```sql
 FUNCTION: get_prayer_scale_summary(p_community_id UUID, p_from DATE, p_to DATE)
 RETURNS: 
@@ -115,7 +123,7 @@ RETURNS:
 
 ---
 
-##### RPC 2: `get_prayer_by_user_detailed()`
+##### RPC 2: `get_prayer_by_user_detailed()` ✅ — `20260428112000_reports_rpcs_2_4.sql:3`
 ```sql
 FUNCTION: get_prayer_by_user_detailed(p_community_id UUID, p_from DATE, p_to DATE)
 RETURNS TABLE:
@@ -140,7 +148,9 @@ RETURNS TABLE:
 
 ---
 
-##### RPC 3: `get_prayers_by_completion_status()`
+##### RPC 3: `get_prayers_by_completion_status()` ✅ — `20260428112000_reports_rpcs_2_4.sql:164`
+
+> **Nota de implementação**: a RPC retorna **uma lista flat com `status` por linha**. O agrupamento em `completed/missed/cancelled/scheduled` é feito no client (`DemoRepository.getPrayersByCompletionStatus` em `main.dart:13681`).
 ```sql
 FUNCTION: get_prayers_by_completion_status(
   p_community_id UUID, 
@@ -168,7 +178,9 @@ RETURNS TABLE:
 
 ---
 
-##### RPC 4: `get_coverage_by_region()`
+##### RPC 4: `get_coverage_by_region()` ✅ — `20260428112000_reports_rpcs_2_4.sql:236`
+
+> **Nota de implementação**: como `community_prayer_schedule_runs` não tem `region_id` direto, a região é derivada via `prayer_sessions.location_id` da sessão completada **OU** da região primária do usuário (CTE `user_primary_region`). Runs sem nenhuma região associada são descartados do agregado.
 ```sql
 FUNCTION: get_coverage_by_region(
   p_community_id UUID,
@@ -192,7 +204,7 @@ RETURNS TABLE:
 
 ---
 
-##### RPC 5: `get_coverage_by_target()`
+##### RPC 5: `get_coverage_by_target()` ✅ — `20260428113000_reports_rpcs_5_8.sql:3`
 ```sql
 FUNCTION: get_coverage_by_target(
   p_community_id UUID,
@@ -217,7 +229,9 @@ RETURNS TABLE:
 
 ---
 
-##### RPC 6: `get_time_slot_coverage()`
+##### RPC 6: `get_time_slot_coverage()` ✅ — `20260428113000_reports_rpcs_5_8.sql:116`
+
+> **Nota de implementação**: o slot mínimo é clampeado em 15 min (`v_slot := greatest(coalesce(p_slot_minutes, 60), 15)`). `empty_count` é binário por linha (`1` se aquele slot ficou sem nada agendado, `0` caso contrário) — o total de slots vazios sai somando essa coluna no client.
 ```sql
 FUNCTION: get_time_slot_coverage(
   p_community_id UUID,
@@ -242,7 +256,7 @@ RETURNS TABLE:
 
 ---
 
-##### RPC 7: `get_failure_analysis()`
+##### RPC 7: `get_failure_analysis()` ✅ — `20260428113000_reports_rpcs_5_8.sql:207`
 ```sql
 FUNCTION: get_failure_analysis(
   p_community_id UUID,
@@ -267,7 +281,7 @@ RETURNS TABLE:
 
 ---
 
-##### RPC 8: `get_prayer_report_cross_data()` ⭐ GENÉRICA
+##### RPC 8: `get_prayer_report_cross_data()` ⭐ GENÉRICA ✅ — `20260428113000_reports_rpcs_5_8.sql:369`
 ```sql
 FUNCTION: get_prayer_report_cross_data(
   p_community_id UUID,
@@ -306,11 +320,17 @@ RETURNS TABLE:
 
 ---
 
-**Total Fase 2**: 4-5 dias
+**Total Fase 2**: 4-5 dias  
+**Status real**: ✅ 2.1 + 2.2 entregues em 1 commit. ⏳ 2.3 (testes isolados) pendente.
 
 ---
 
-### FASE 3: Modelos e Repository Flutter (⏱️ 2-3 dias)
+### FASE 3: Modelos e Repository Flutter ✅ **CONCLUÍDA** (commit `9331fc8`)
+
+> Todos os 8 models + 8 métodos de repository entregues em `app/lib/main.dart`. Spec original preservado abaixo. Quaisquer divergências:
+>
+> - `PrayerByCompletionModel` agrega o resultado **no client** (a RPC retorna lista flat — ver nota da RPC 3).
+> - `getPrayerReportCrossData` retorna `List<Map<String, dynamic>>` (uso bruto na UI); sem model dedicado por enquanto.
 
 #### 3.1 Novos Models (adicionar em main.dart)
 
@@ -1208,40 +1228,53 @@ Map<String, List<T>> groupByPeriod<T>(
 
 ---
 
-## 📊 TIMELINE CONSOLIDADA
+## 📊 TIMELINE CONSOLIDADA (atualizada 18/05/2026)
 
-| Fase | Descrição | Duração | Início | Fim |
-|------|-----------|---------|--------|-----|
-| **1** | Diagnóstico | ✅ CONCLUÍDA | - | - |
-| **2** | Backend BD + 8 RPCs | 4-5 dias | **PRÓXIMO** | **+1 semana** |
-| **3** | Models + Repository | 2-3 dias | +3 dias | +1.5 semanas |
-| **4** | UI (4 sprints) | 4 semanas | +5 dias | +6 semanas |
-| **5** | Filtros Cruzados | 2-3 dias | +1 semana (paralelo) | +2 semanas |
-| **6** | Helpers + Reutilização | 1-2 dias | +5 semanas | +5.5 semanas |
-| | **TOTAL ESTIMADO** | **5-6 semanas** | | |
+| Fase | Descrição | Status | Observação |
+|------|-----------|--------|------------|
+| **1** | Diagnóstico | ✅ CONCLUÍDA | — |
+| **2** | Backend BD + 8 RPCs | ✅ CONCLUÍDA (2.1+2.2) / ⏳ 2.3 pendente | Commit `9331fc8` |
+| **3** | Models + Repository | ✅ CONCLUÍDA | Commit `9331fc8` |
+| **4** | UI (4 sprints) | 🔄 **PRÓXIMA** | 4 semanas; bloqueada por decisões pendentes |
+| **5** | Filtros Cruzados | 🟡 Backend pronto / UI pendente | Sai junto da Fase 4 |
+| **6** | Helpers + Reutilização | ⏳ Aguardando | Pós-Fase 4 |
+| | **RESTANTE ESTIMADO** | **~4-5 semanas** | |
 
 ---
 
-## 🎯 PRÓXIMOS PASSOS IMEDIATOS
+## 🎯 PRÓXIMOS PASSOS IMEDIATOS (revisado 18/05/2026)
 
-### **HOJE - Fase 2.1**
-- [ ] Criar migration: `20260428_prayer_targets_table.sql`
-- [ ] Adicionar coluna `prayer_target_id` em `community_prayer_schedules`
-- [ ] Deploy migration ao Supabase
+### ✅ Concluído (commit `9331fc8`)
+- [x] Migration `prayer_targets` + coluna `prayer_target_id` em `community_prayer_schedules`
+- [x] 8 RPCs SQL com `security definer` + `community_is_admin`
+- [x] 8 Models Dart + factories `fromSupabase`
+- [x] 8 métodos no `DemoRepository` com guard offline
 
-### **AMANHÃ - Fase 2.2**
-- [ ] Implementar 8 RPCs SQL (começar com `get_prayer_scale_summary`)
-- [ ] Testar cada RPC individualmente
+### ✅ Decisões de produto fechadas (18/05/2026)
 
-### **ESTA SEMANA - Fase 3**
-- [ ] Criar Models Dart (copiar código acima para main.dart)
-- [ ] Adicionar métodos ao `DemoRepository`
-- [ ] Testar conexão e desserialização JSON
+| Decisão | Resolução | Implicação técnica |
+|---------|-----------|--------------------|
+| **Permissões** | Admin vê tudo + membro vê os próprios dados. Admin pode promover outros membros a admin. | Adicionar variantes/parâmetro "self_only" nas RPCs 1/2/8. UI de gestão de roles aproveita policy existente `community_members_update_by_admin`. |
+| **Timezone** | UI em local time + parâmetro `p_tz` nas RPCs | Migration de refactor das 8 RPCs trocando `'utc'` por `p_tz` (default `'UTC'` para retro-compat) |
+| **Exportação V1** | PDF + CSV | Packages `pdf` + `printing` (PDF) e geração nativa Dart (CSV); `share_plus` para enviar |
+| **Refresh** | Pull-to-refresh + botão | `RefreshIndicator` + `IconButton` no AppBar; sem realtime, sem auto-refresh |
 
-### **PRÓXIMA SEMANA - Fase 4, Sprint 1**
-- [ ] Criar `PrayerReportScreen` vazia
-- [ ] Implementar cards resumidos
-- [ ] Conectar 1ª RPC
+### ⏳ AGORA — Fechar Fase 2 (testes) + preparar Fase 4
+
+1. **2.3 — Testes isolados das RPCs** em `supabase/tests/prayer_reports_rpcs_smoke.sql`
+   - Caminho feliz de cada RPC com seed mínimo
+   - Casos negativos: `auth_required`, `not_allowed`, `community_required`, `invalid_range`, `invalid_hour_range`
+2. **2.4 (novo) — Refactor de timezone**: nova migration substituindo as 8 RPCs com `p_tz text default 'UTC'` e trocando `at time zone 'utc'` por `at time zone p_tz` (~3-4 h)
+3. **2.5 (novo) — Variantes "self" para membros**: adicionar `p_self_only boolean default false` em `get_prayer_scale_summary`, `get_prayer_by_user_detailed` e `get_prayer_report_cross_data`. Quando true, dispensar `community_is_admin` e forçar `assigned_user_id = auth.uid()` (~4-6 h)
+
+### 📅 PRÓXIMA SEMANA — Fase 4, Sprint 1
+- [ ] Criar `PrayerReportScreen` em `app/lib/main.dart` + rota
+- [ ] Section: 7 cards resumidos consumindo `getPrayerScaleSummary` (modo admin OU self)
+- [ ] DateRange picker em local time (default últimos 30 dias)
+- [ ] `RefreshIndicator` + `IconButton` de refresh no AppBar
+- [ ] Loading/empty/error states
+- [ ] Ponto de entrada: painel admin da comunidade (admin mode) + perfil do usuário (self mode)
+- [ ] Auditar/adicionar telas de gestão de role (promover membro a admin) se ainda não existirem
 
 ---
 
@@ -1292,17 +1325,16 @@ App/lib/
 
 ## 📞 PERGUNTAS/DECISÕES NECESSÁRIAS
 
-Antes de iniciar Fase 2, confirme:
-
-1. ✅ **Permissões**: Quem pode ver cada relatório? (admin comunitário? global? membro?)
-2. ✅ **Histórico**: Manter histórico de faltas (audit trail)?
-3. ✅ **Notificações**: Avisar usuários sobre seus próprios relatórios?
-4. ✅ **Exportação**: Qual formato prioritário? (PDF, CSV, ambos?)
-5. ✅ **Timezone**: Como lidar com fusos horários diferentes?
-6. ✅ **Realtime**: Atualizar gráficos em tempo real ou manual?
+### Decisões fechadas em 18/05/2026:
+1. ✅ **Permissões**: Admin vê tudo + membro vê os próprios dados; admin pode promover outros a admin
+2. ⏳ **Histórico (audit trail)**: ainda não decidido — pode entrar como melhoria pós-V1
+3. ⏳ **Notificações sobre relatórios**: ainda não decidido
+4. ✅ **Exportação**: PDF + CSV
+5. ✅ **Timezone**: UI em local time, RPCs aceitam `p_tz`
+6. ✅ **Realtime**: NÃO; pull-to-refresh + botão manual
 
 ---
 
-**Documento atualizado**: 28/04/2026  
-**Roadmap Status**: Pronto para execução  
-**Próximo Check-in**: Após conclusão Fase 2
+**Documento atualizado**: 18/05/2026 (revisão pós-implementação Fases 2 e 3)  
+**Roadmap Status**: Backend + camada de dados Flutter entregues. Próximo: testes isolados das RPCs + decisões + Sprint 1 da UI.  
+**Próximo Check-in**: Após Sprint 1 da Fase 4
