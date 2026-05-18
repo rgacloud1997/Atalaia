@@ -13568,6 +13568,7 @@ class DemoRepository extends ChangeNotifier {
     required DateTime from,
     required DateTime to,
     String tz = 'UTC',
+    bool selfOnly = false,
   }) async {
     final sb = supabase;
     if (sb == null) {
@@ -13619,6 +13620,7 @@ class DemoRepository extends ChangeNotifier {
           'p_from': from.toUtc().toIso8601String().split('T').first,
           'p_to': to.toUtc().toIso8601String().split('T').first,
           'p_tz': tz,
+          'p_self_only': selfOnly,
         },
       );
       if (rows is List && rows.isNotEmpty && rows.first is Map) {
@@ -13655,6 +13657,7 @@ class DemoRepository extends ChangeNotifier {
     required DateTime from,
     required DateTime to,
     String tz = 'UTC',
+    bool selfOnly = false,
   }) async {
     final sb = supabase;
     if (sb == null) return const [];
@@ -13669,6 +13672,7 @@ class DemoRepository extends ChangeNotifier {
           'p_from': from.toUtc().toIso8601String().split('T').first,
           'p_to': to.toUtc().toIso8601String().split('T').first,
           'p_tz': tz,
+          'p_self_only': selfOnly,
         },
       );
       final list = <UserPrayerStatsModel>[];
@@ -13881,6 +13885,7 @@ class DemoRepository extends ChangeNotifier {
     int limit = 200,
     int offset = 0,
     String tz = 'UTC',
+    bool selfOnly = false,
   }) async {
     final sb = supabase;
     if (sb == null) return const [];
@@ -13907,6 +13912,7 @@ class DemoRepository extends ChangeNotifier {
           'p_limit': limit,
           'p_offset': offset,
           'p_tz': tz,
+          'p_self_only': selfOnly,
         },
       );
       final out = <Map<String, dynamic>>[];

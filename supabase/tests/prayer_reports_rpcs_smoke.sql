@@ -975,6 +975,275 @@ begin
 end $$;
 
 -- =====================================================================
+-- TEST 10: p_self_only parameter (migration 20260518120000_reports_rpcs_self_only.sql)
+--
+-- Seed recap:
+--   admin  (aaaaaaa1) — r1 completed, r4 missed,    r6 scheduled  → 3 runs
+--   member (bbbbbbb1) — r2 completed, r3 missed,    r5 cancelled  → 3 runs
+--   outsider (ccccccc1) — not a member of the community.
+-- =====================================================================
+
+-- 10.a RPC 1 — member as self: must succeed (community_can_view) and
+--      return totals for member only (3 runs, 1 completed, 1 missed,
+--      1 cancelled, unique_users=1).
+select set_config('request.jwt.claim.sub', 'bbbbbbb1-bbbb-bbbb-bbbb-bbbbbbbbbbbb', false);
+do $$
+declare rec record;
+begin
+  select * into rec from public.get_prayer_scale_summary(
+    'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    (now() at time zone 'utc')::date - 14,
+    (now() at time zone 'utc')::date,
+    'UTC',
+    true
+  );
+  if rec.total_runs <> 3 then
+    raise exception 'rpc1 self (member): expected total_runs=3, got %', rec.total_runs;
+  end if;
+  if rec.total_completed <> 1 then
+    raise exception 'rpc1 self (member): expected total_completed=1, got %', rec.total_completed;
+  end if;
+  if rec.total_missed <> 1 then
+    raise exception 'rpc1 self (member): expected total_missed=1, got %', rec.total_missed;
+  end if;
+  if rec.total_cancelled <> 1 then
+    raise exception 'rpc1 self (member): expected total_cancelled=1, got %', rec.total_cancelled;
+  end if;
+  if rec.unique_users <> 1 then
+    raise exception 'rpc1 self (member): expected unique_users=1, got %', rec.unique_users;
+  end if;
+end $$;
+
+-- 10.b RPC 1 — admin as self: must succeed and return totals for admin
+--      only. Window is [today-14, today], so r6 (scheduled +1 day) is
+--      out — admin keeps r1 (completed) + r4 (missed) = 2 runs.
+select set_config('request.jwt.claim.sub', 'aaaaaaa1-aaaa-aaaa-aaaa-aaaaaaaaaaaa', false);
+do $$
+declare rec record;
+begin
+  select * into rec from public.get_prayer_scale_summary(
+    'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    (now() at time zone 'utc')::date - 14,
+    (now() at time zone 'utc')::date,
+    'UTC',
+    true
+  );
+  if rec.total_runs <> 2 then
+    raise exception 'rpc1 self (admin): expected total_runs=2, got %', rec.total_runs;
+  end if;
+  if rec.total_completed <> 1 then
+    raise exception 'rpc1 self (admin): expected total_completed=1, got %', rec.total_completed;
+  end if;
+  if rec.total_missed <> 1 then
+    raise exception 'rpc1 self (admin): expected total_missed=1, got %', rec.total_missed;
+  end if;
+  if rec.total_cancelled <> 0 then
+    raise exception 'rpc1 self (admin): expected total_cancelled=0, got %', rec.total_cancelled;
+  end if;
+  if rec.unique_users <> 1 then
+    raise exception 'rpc1 self (admin): expected unique_users=1, got %', rec.unique_users;
+  end if;
+end $$;
+
+-- 10.c RPC 1 — outsider as self: must raise 'not_allowed' (community_can_view false).
+select set_config('request.jwt.claim.sub', 'ccccccc1-cccc-cccc-cccc-cccccccccccc', false);
+do $$
+begin
+  begin
+    perform * from public.get_prayer_scale_summary(
+      'dddddddd-dddd-dddd-dddd-dddddddddddd',
+      '2026-01-01'::date, '2026-12-31'::date,
+      'UTC', true);
+    raise exception 'rpc1 self (outsider): expected exception';
+  exception when others then
+    if sqlerrm <> 'not_allowed' then
+      raise exception 'rpc1 self (outsider): wrong message: %', sqlerrm;
+    end if;
+  end;
+end $$;
+
+-- 10.d RPC 2 — member as self: must succeed and return exactly 1 row.
+select set_config('request.jwt.claim.sub', 'bbbbbbb1-bbbb-bbbb-bbbb-bbbbbbbbbbbb', false);
+do $$
+declare n int; wrong int;
+begin
+  select count(*) into n from public.get_prayer_by_user_detailed(
+    'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    (now() at time zone 'utc')::date - 14,
+    (now() at time zone 'utc')::date,
+    'UTC',
+    true
+  );
+  if n <> 1 then
+    raise exception 'rpc2 self (member): expected exactly 1 user row, got %', n;
+  end if;
+  select count(*) into wrong from public.get_prayer_by_user_detailed(
+    'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    (now() at time zone 'utc')::date - 14,
+    (now() at time zone 'utc')::date,
+    'UTC',
+    true
+  ) t
+  where t.user_id <> 'bbbbbbb1-bbbb-bbbb-bbbb-bbbbbbbbbbbb'::uuid;
+  if wrong <> 0 then
+    raise exception 'rpc2 self (member): expected 0 non-member rows, got %', wrong;
+  end if;
+end $$;
+
+-- 10.e RPC 2 — admin as self: 1 row, just the admin.
+select set_config('request.jwt.claim.sub', 'aaaaaaa1-aaaa-aaaa-aaaa-aaaaaaaaaaaa', false);
+do $$
+declare n int; wrong int;
+begin
+  select count(*) into n from public.get_prayer_by_user_detailed(
+    'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    (now() at time zone 'utc')::date - 14,
+    (now() at time zone 'utc')::date,
+    'UTC',
+    true
+  );
+  if n <> 1 then
+    raise exception 'rpc2 self (admin): expected exactly 1 user row, got %', n;
+  end if;
+  select count(*) into wrong from public.get_prayer_by_user_detailed(
+    'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    (now() at time zone 'utc')::date - 14,
+    (now() at time zone 'utc')::date,
+    'UTC',
+    true
+  ) t
+  where t.user_id <> 'aaaaaaa1-aaaa-aaaa-aaaa-aaaaaaaaaaaa'::uuid;
+  if wrong <> 0 then
+    raise exception 'rpc2 self (admin): expected 0 non-admin rows, got %', wrong;
+  end if;
+end $$;
+
+-- 10.f RPC 2 — outsider as self: must raise 'not_allowed'.
+select set_config('request.jwt.claim.sub', 'ccccccc1-cccc-cccc-cccc-cccccccccccc', false);
+do $$
+begin
+  begin
+    perform * from public.get_prayer_by_user_detailed(
+      'dddddddd-dddd-dddd-dddd-dddddddddddd',
+      '2026-01-01'::date, '2026-12-31'::date,
+      'UTC', true);
+    raise exception 'rpc2 self (outsider): expected exception';
+  exception when others then
+    if sqlerrm <> 'not_allowed' then
+      raise exception 'rpc2 self (outsider): wrong message: %', sqlerrm;
+    end if;
+  end;
+end $$;
+
+-- 10.g RPC 8 — member as self: returns exactly 3 runs, all assigned to member.
+select set_config('request.jwt.claim.sub', 'bbbbbbb1-bbbb-bbbb-bbbb-bbbbbbbbbbbb', false);
+do $$
+declare n int; wrong int;
+begin
+  select count(*) into n from public.get_prayer_report_cross_data(
+    'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    now() - interval '14 days', now() + interval '14 days',
+    null, null, null, null, null,
+    0, 23, 200, 0,
+    'UTC', true
+  );
+  if n <> 3 then
+    raise exception 'rpc8 self (member): expected exactly 3 runs, got %', n;
+  end if;
+  select count(*) into wrong from public.get_prayer_report_cross_data(
+    'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    now() - interval '14 days', now() + interval '14 days',
+    null, null, null, null, null,
+    0, 23, 200, 0,
+    'UTC', true
+  ) t
+  where t.user_id <> 'bbbbbbb1-bbbb-bbbb-bbbb-bbbbbbbbbbbb'::uuid;
+  if wrong <> 0 then
+    raise exception 'rpc8 self (member): expected 0 rows for other users, got %', wrong;
+  end if;
+end $$;
+
+-- 10.h RPC 8 — admin as self: returns exactly 3 runs, all assigned to admin.
+select set_config('request.jwt.claim.sub', 'aaaaaaa1-aaaa-aaaa-aaaa-aaaaaaaaaaaa', false);
+do $$
+declare n int; wrong int;
+begin
+  select count(*) into n from public.get_prayer_report_cross_data(
+    'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    now() - interval '14 days', now() + interval '14 days',
+    null, null, null, null, null,
+    0, 23, 200, 0,
+    'UTC', true
+  );
+  if n <> 3 then
+    raise exception 'rpc8 self (admin): expected exactly 3 runs, got %', n;
+  end if;
+  select count(*) into wrong from public.get_prayer_report_cross_data(
+    'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    now() - interval '14 days', now() + interval '14 days',
+    null, null, null, null, null,
+    0, 23, 200, 0,
+    'UTC', true
+  ) t
+  where t.user_id <> 'aaaaaaa1-aaaa-aaaa-aaaa-aaaaaaaaaaaa'::uuid;
+  if wrong <> 0 then
+    raise exception 'rpc8 self (admin): expected 0 rows for other users, got %', wrong;
+  end if;
+end $$;
+
+-- 10.i RPC 8 — outsider as self: must raise 'not_allowed'.
+select set_config('request.jwt.claim.sub', 'ccccccc1-cccc-cccc-cccc-cccccccccccc', false);
+do $$
+begin
+  begin
+    perform * from public.get_prayer_report_cross_data(
+      'dddddddd-dddd-dddd-dddd-dddddddddddd',
+      now() - interval '14 days', now() + interval '14 days',
+      null, null, null, null, null,
+      0, 23, 200, 0,
+      'UTC', true);
+    raise exception 'rpc8 self (outsider): expected exception';
+  exception when others then
+    if sqlerrm <> 'not_allowed' then
+      raise exception 'rpc8 self (outsider): wrong message: %', sqlerrm;
+    end if;
+  end;
+end $$;
+
+-- 10.j Sanity — admin without p_self_only still works (back-compat).
+select set_config('request.jwt.claim.sub', 'aaaaaaa1-aaaa-aaaa-aaaa-aaaaaaaaaaaa', false);
+do $$
+declare n int;
+begin
+  select count(*) into n from public.get_prayer_by_user_detailed(
+    'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    (now() at time zone 'utc')::date - 14,
+    (now() at time zone 'utc')::date
+  );
+  if n < 2 then
+    raise exception 'rpc2 default: back-compat broken, expected >= 2 user rows, got %', n;
+  end if;
+end $$;
+
+-- 10.k Sanity — member without p_self_only is now blocked as not_allowed
+--      (since p_self_only defaults to false → admin-only branch).
+select set_config('request.jwt.claim.sub', 'bbbbbbb1-bbbb-bbbb-bbbb-bbbbbbbbbbbb', false);
+do $$
+begin
+  begin
+    perform * from public.get_prayer_scale_summary(
+      'dddddddd-dddd-dddd-dddd-dddddddddddd',
+      (now() at time zone 'utc')::date - 14,
+      (now() at time zone 'utc')::date);
+    raise exception 'rpc1 default (member): expected not_allowed exception';
+  exception when others then
+    if sqlerrm <> 'not_allowed' then
+      raise exception 'rpc1 default (member): wrong message: %', sqlerrm;
+    end if;
+  end;
+end $$;
+
+-- =====================================================================
 -- DONE — if we got here without an exception, all assertions passed.
 -- =====================================================================
 
