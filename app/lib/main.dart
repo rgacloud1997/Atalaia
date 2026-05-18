@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as developer;
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -14,6 +15,10 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:image/image.dart' as img;
 import 'package:latlong2/latlong.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
@@ -13871,8 +13876,9 @@ class DemoRepository extends ChangeNotifier {
         list.add(FailureAnalysisModel.fromSupabase(raw.cast<String, dynamic>()));
       }
       return List.unmodifiable(list);
-    } catch (_) {
-      return const [];
+    } catch (e, st) {
+      developer.log('getFailureAnalysis failed', error: e, stackTrace: st, name: 'DemoRepository');
+      rethrow;
     }
   }
 
@@ -39613,6 +39619,13 @@ class _PrayerReportScreenState extends State<PrayerReportScreen> {
   List<TimeSlotCoverageModel> _byTimeSlot = const [];
   Object? _byTimeSlotError;
 
+  List<FailureAnalysisModel> _byFailures = const [];
+  Object? _byFailuresError;
+
+  List<Map<String, dynamic>> _byFilters = const [];
+  Object? _byFiltersError;
+  PrayerFilterOptions _filters = const PrayerFilterOptions();
+
   bool get _isAdminMode => !widget.args.selfMode;
 
   @override
@@ -39645,6 +39658,8 @@ class _PrayerReportScreenState extends State<PrayerReportScreen> {
       _byRegionError = null;
       _byTargetError = null;
       _byTimeSlotError = null;
+      _byFailuresError = null;
+      _byFiltersError = null;
     });
     final repo = RepoScope.of(context);
     final tasks = <Future<void>>[
@@ -39655,6 +39670,8 @@ class _PrayerReportScreenState extends State<PrayerReportScreen> {
         _loadByRegion(repo),
         _loadByTarget(repo),
         _loadByTimeSlot(repo),
+        _loadFailures(repo),
+        _loadFiltered(repo),
       ],
     ];
     await Future.wait(tasks);
@@ -39777,6 +39794,54 @@ class _PrayerReportScreenState extends State<PrayerReportScreen> {
     }
   }
 
+  Future<void> _loadFailures(DemoRepository repo) async {
+    try {
+      final list = await repo.getFailureAnalysis(
+        communityId: widget.args.communityId,
+        from: _range.start,
+        to: _range.end,
+        tz: _tz,
+      );
+      if (!mounted) return;
+      setState(() => _byFailures = list);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _byFailures = const [];
+        _byFailuresError = e;
+      });
+    }
+  }
+
+  Future<void> _loadFiltered(DemoRepository repo) async {
+    try {
+      final effective = PrayerFilterOptions(
+        fromDate: _range.start,
+        toDate: _range.end,
+        userIds: _filters.userIds,
+        targetIds: _filters.targetIds,
+        regionIds: _filters.regionIds,
+        statuses: _filters.statuses,
+        weekdays: _filters.weekdays,
+        hourStart: _filters.hourStart,
+        hourEnd: _filters.hourEnd,
+      );
+      final list = await repo.getPrayerReportCrossData(
+        communityId: widget.args.communityId,
+        filters: effective,
+        tz: _tz,
+      );
+      if (!mounted) return;
+      setState(() => _byFilters = list);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _byFilters = const [];
+        _byFiltersError = e;
+      });
+    }
+  }
+
   Future<void> _pickRange() async {
     final now = DateTime.now();
     final picked = await showDateRangePicker(
@@ -39791,6 +39856,368 @@ class _PrayerReportScreenState extends State<PrayerReportScreen> {
     if (!mounted) return;
     setState(() => _range = picked);
     await _load();
+  }
+
+  Future<void> _openFiltersSheet() async {
+    final updated = await showModalBottomSheet<PrayerFilterOptions>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetCtx) {
+        return _PrayerFiltersSheet(
+          initial: _filters,
+          availableUsers: _byUser
+              .map((u) => (id: u.userId, label: u.userName))
+              .toList(growable: false),
+          availableTargets: _byTarget
+              .map((t) => (id: t.targetId, label: t.targetName))
+              .toList(growable: false),
+          availableRegions: _byRegion
+              .map((r) => (id: r.regionId, label: r.regionName))
+              .toList(growable: false),
+        );
+      },
+    );
+    if (updated == null) return;
+    if (!mounted) return;
+    setState(() => _filters = updated);
+    final repo = RepoScope.of(context);
+    setState(() => _loading = true);
+    await _loadFiltered(repo);
+    if (!mounted) return;
+    setState(() => _loading = false);
+  }
+
+  void _clearFilters() {
+    setState(() => _filters = const PrayerFilterOptions());
+    final repo = RepoScope.of(context);
+    unawaited(_loadFiltered(repo));
+  }
+
+  Future<void> _onExportSelected(String format) async {
+    if (_summary == null) {
+      showInfoSnackBar(context, 'Aguarde o relatório carregar antes de exportar.');
+      return;
+    }
+    try {
+      if (format == 'csv') {
+        await _exportCsv();
+      } else if (format == 'pdf') {
+        await _exportPdf();
+      }
+    } catch (e, st) {
+      developer.log('export failed', error: e, stackTrace: st, name: 'PrayerReportScreen');
+      if (!mounted) return;
+      showAtalaiaSnackBar(
+        context,
+        'Não foi possível exportar: $e',
+        kind: AtalaiaSnackKind.error,
+      );
+    }
+  }
+
+  String _csvEscape(Object? v) {
+    if (v == null) return '';
+    final s = v.toString();
+    final needsQuote = s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r');
+    if (!needsQuote) return s;
+    return '"${s.replaceAll('"', '""')}"';
+  }
+
+  String _csvRow(List<Object?> cells) =>
+      cells.map(_csvEscape).join(',');
+
+  String _buildCsvContent() {
+    final buf = StringBuffer();
+    buf.writeln('# Relatório de Escalas — ${_fmtDate(_range.start)} a ${_fmtDate(_range.end)}');
+    buf.writeln('# Modo: ${widget.args.selfMode ? "Próprio" : "Comunidade"}');
+    buf.writeln('# Fuso: $_tz');
+    buf.writeln();
+
+    final s = _summary;
+    if (s != null) {
+      buf.writeln('## Resumo');
+      buf.writeln(_csvRow(['métrica', 'valor']));
+      buf.writeln(_csvRow(['Escalas', s.totalScales]));
+      buf.writeln(_csvRow(['Turnos no período', s.totalRuns]));
+      buf.writeln(_csvRow(['Concluídos', s.totalCompleted]));
+      buf.writeln(_csvRow(['Faltas', s.totalMissed]));
+      buf.writeln(_csvRow(['Cancelados', s.totalCancelled]));
+      buf.writeln(_csvRow(['Taxa de adesão', '${(s.completionRate * 100).toStringAsFixed(1)}%']));
+      buf.writeln(_csvRow(['Participantes', s.uniqueUsers]));
+      buf.writeln(_csvRow(['Tempo total (s)', s.totalPrayerTime.inSeconds]));
+      buf.writeln(_csvRow(['Duração média (min)', s.avgSessionDurationMinutes]));
+      buf.writeln();
+    }
+
+    if (_byUser.isNotEmpty) {
+      buf.writeln('## Por Usuário');
+      buf.writeln(_csvRow(['usuário', 'atribuídos', 'concluídos', 'faltas', 'cancelados', '% adesão', 'duração média (min)', 'sequência (dias)']));
+      for (final u in _byUser) {
+        buf.writeln(_csvRow([
+          u.userName,
+          u.turnsAssigned,
+          u.turnsCompleted,
+          u.turnsMissed,
+          u.turnsCancelled,
+          u.completionPercentage.toStringAsFixed(1),
+          u.avgDurationMinutes,
+          u.streakDays,
+        ]));
+      }
+      buf.writeln();
+    }
+
+    if (_byRegion.isNotEmpty) {
+      buf.writeln('## Por Região');
+      buf.writeln(_csvRow(['ranking', 'região', 'turnos', 'concluídos', 'faltas', '% cobertura', 'usuários únicos', 'duração média (min)']));
+      for (final r in _byRegion) {
+        buf.writeln(_csvRow([
+          r.rank,
+          r.regionName,
+          r.totalTurns,
+          r.completedTurns,
+          r.missedTurns,
+          r.coveragePercentage.toStringAsFixed(1),
+          r.uniqueUsers,
+          r.avgDurationMinutes,
+        ]));
+      }
+      buf.writeln();
+    }
+
+    if (_byTarget.isNotEmpty) {
+      buf.writeln('## Por Alvo');
+      buf.writeln(_csvRow(['ranking', 'alvo', 'turnos', 'concluídos', 'faltas', '% cobertura', 'usuários únicos']));
+      for (final t in _byTarget) {
+        buf.writeln(_csvRow([
+          t.rank,
+          t.targetName,
+          t.totalTurns,
+          t.completedTurns,
+          t.missedTurns,
+          t.coveragePercentage.toStringAsFixed(1),
+          t.uniqueUsers,
+        ]));
+      }
+      buf.writeln();
+    }
+
+    if (_byTimeSlot.isNotEmpty) {
+      buf.writeln('## Por Horário');
+      buf.writeln(_csvRow(['slot', 'período', 'agendados', 'concluídos', 'faltas', '% adesão']));
+      for (final sl in _byTimeSlot) {
+        if (sl.scheduledCount == 0) continue;
+        buf.writeln(_csvRow([
+          sl.timeSlot,
+          sl.periodName,
+          sl.scheduledCount,
+          sl.completedCount,
+          sl.missedCount,
+          sl.fillPercentage.toStringAsFixed(1),
+        ]));
+      }
+      buf.writeln();
+    }
+
+    if (_byFailures.isNotEmpty) {
+      buf.writeln('## Falhas');
+      buf.writeln(_csvRow(['ranking', 'usuário', 'faltas', 'atribuídos', '% falhas', 'última falha']));
+      for (final f in _byFailures) {
+        buf.writeln(_csvRow([
+          f.rank,
+          f.userName,
+          f.failedCount,
+          f.assignedCount,
+          f.failureRate.toStringAsFixed(1),
+          f.lastFailureAt?.toIso8601String() ?? '',
+        ]));
+      }
+      buf.writeln();
+    }
+
+    return buf.toString();
+  }
+
+  Future<void> _exportCsv() async {
+    final csv = _buildCsvContent();
+    final dir = await getTemporaryDirectory();
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    final file = File('${dir.path}/relatorio_escalas_$ts.csv');
+    await file.writeAsString('﻿$csv'); // BOM para Excel detectar UTF-8
+    if (!mounted) return;
+    await Share.shareXFiles(
+      [XFile(file.path, mimeType: 'text/csv', name: 'relatorio_escalas.csv')],
+      subject: 'Relatório de Escalas',
+    );
+  }
+
+  Future<void> _exportPdf() async {
+    final pdf = pw.Document();
+    final s = _summary;
+
+    pw.Widget sectionHeader(String text) => pw.Padding(
+          padding: const pw.EdgeInsets.only(top: 12, bottom: 4),
+          child: pw.Text(
+            text,
+            style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold),
+          ),
+        );
+
+    pw.Widget table(List<String> headers, List<List<String>> rows) {
+      return pw.TableHelper.fromTextArray(
+        headers: headers,
+        data: rows,
+        headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10),
+        cellStyle: const pw.TextStyle(fontSize: 9),
+        headerDecoration: const pw.BoxDecoration(color: PdfColors.grey200),
+        cellAlignment: pw.Alignment.centerLeft,
+        cellHeight: 16,
+      );
+    }
+
+    pdf.addPage(
+      pw.MultiPage(
+        pageFormat: PdfPageFormat.a4,
+        margin: const pw.EdgeInsets.all(28),
+        build: (ctx) {
+          final widgets = <pw.Widget>[
+            pw.Text(
+              widget.args.selfMode ? 'Minhas Estatísticas de Oração' : 'Relatório de Escalas',
+              style: pw.TextStyle(fontSize: 20, fontWeight: pw.FontWeight.bold),
+            ),
+            pw.SizedBox(height: 4),
+            pw.Text(
+              'Período: ${_fmtDate(_range.start)} a ${_fmtDate(_range.end)}  •  Fuso: $_tz',
+              style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
+            ),
+          ];
+
+          if (s != null) {
+            widgets.add(sectionHeader('Resumo'));
+            widgets.add(table(
+              ['Métrica', 'Valor'],
+              [
+                ['Escalas', '${s.totalScales}'],
+                ['Turnos no período', '${s.totalRuns}'],
+                ['Concluídos', '${s.totalCompleted}'],
+                ['Faltas', '${s.totalMissed}'],
+                ['Cancelados', '${s.totalCancelled}'],
+                ['Taxa de adesão', '${(s.completionRate * 100).toStringAsFixed(1)}%'],
+                ['Participantes', '${s.uniqueUsers}'],
+                ['Tempo total', _fmtDuration(s.totalPrayerTime)],
+                ['Duração média', '${s.avgSessionDurationMinutes} min'],
+              ],
+            ));
+          }
+
+          if (_byUser.isNotEmpty) {
+            widgets.add(sectionHeader('Por Usuário'));
+            widgets.add(table(
+              ['Usuário', 'Atrib.', 'Concl.', 'Faltas', '% adesão', 'Streak'],
+              [
+                for (final u in _byUser)
+                  [
+                    u.userName,
+                    '${u.turnsAssigned}',
+                    '${u.turnsCompleted}',
+                    '${u.turnsMissed}',
+                    '${u.completionPercentage.toStringAsFixed(0)}%',
+                    '${u.streakDays}',
+                  ],
+              ],
+            ));
+          }
+
+          if (_byRegion.isNotEmpty) {
+            widgets.add(sectionHeader('Por Região'));
+            widgets.add(table(
+              ['#', 'Região', 'Turnos', 'Concl.', 'Faltas', '% Cobertura'],
+              [
+                for (final r in _byRegion)
+                  [
+                    '${r.rank}',
+                    r.regionName,
+                    '${r.totalTurns}',
+                    '${r.completedTurns}',
+                    '${r.missedTurns}',
+                    '${r.coveragePercentage.toStringAsFixed(0)}%',
+                  ],
+              ],
+            ));
+          }
+
+          if (_byTarget.isNotEmpty) {
+            widgets.add(sectionHeader('Por Alvo'));
+            widgets.add(table(
+              ['#', 'Alvo', 'Turnos', 'Concl.', 'Faltas', '% Cobertura'],
+              [
+                for (final t in _byTarget)
+                  [
+                    '${t.rank}',
+                    t.targetName,
+                    '${t.totalTurns}',
+                    '${t.completedTurns}',
+                    '${t.missedTurns}',
+                    '${t.coveragePercentage.toStringAsFixed(0)}%',
+                  ],
+              ],
+            ));
+          }
+
+          if (_byTimeSlot.isNotEmpty) {
+            final nonEmpty = _byTimeSlot.where((sl) => sl.scheduledCount > 0).toList(growable: false);
+            if (nonEmpty.isNotEmpty) {
+              widgets.add(sectionHeader('Por Horário'));
+              widgets.add(table(
+                ['Slot', 'Período', 'Agend.', 'Concl.', 'Faltas', '% adesão'],
+                [
+                  for (final sl in nonEmpty)
+                    [
+                      sl.timeSlot,
+                      sl.periodName,
+                      '${sl.scheduledCount}',
+                      '${sl.completedCount}',
+                      '${sl.missedCount}',
+                      '${sl.fillPercentage.toStringAsFixed(0)}%',
+                    ],
+                ],
+              ));
+            }
+          }
+
+          if (_byFailures.isNotEmpty) {
+            widgets.add(sectionHeader('Falhas'));
+            widgets.add(table(
+              ['#', 'Usuário', 'Faltas', 'Atrib.', '% Falhas'],
+              [
+                for (final f in _byFailures)
+                  [
+                    '${f.rank}',
+                    f.userName,
+                    '${f.failedCount}',
+                    '${f.assignedCount}',
+                    '${f.failureRate.toStringAsFixed(0)}%',
+                  ],
+              ],
+            ));
+          }
+
+          return widgets;
+        },
+      ),
+    );
+
+    final bytes = await pdf.save();
+    final dir = await getTemporaryDirectory();
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    final file = File('${dir.path}/relatorio_escalas_$ts.pdf');
+    await file.writeAsBytes(bytes);
+    if (!mounted) return;
+    await Share.shareXFiles(
+      [XFile(file.path, mimeType: 'application/pdf', name: 'relatorio_escalas.pdf')],
+      subject: 'Relatório de Escalas',
+    );
   }
 
   String _fmtDate(DateTime d) {
@@ -39813,13 +40240,23 @@ class _PrayerReportScreenState extends State<PrayerReportScreen> {
     final title = widget.args.selfMode
         ? 'Minhas Estatísticas de Oração'
         : 'Relatório de Escalas';
-    final tabCount = _isAdminMode ? 6 : 2;
+    final tabCount = _isAdminMode ? 8 : 2;
     return DefaultTabController(
       length: tabCount,
       child: Scaffold(
         appBar: AppBar(
           title: Text(title),
           actions: [
+            if (_isAdminMode)
+              PopupMenuButton<String>(
+                tooltip: 'Exportar',
+                icon: const Icon(Icons.ios_share_outlined),
+                onSelected: (v) => _onExportSelected(v),
+                itemBuilder: (_) => const [
+                  PopupMenuItem(value: 'csv', child: ListTile(leading: Icon(Icons.grid_on_outlined), title: Text('Exportar CSV'), dense: true)),
+                  PopupMenuItem(value: 'pdf', child: ListTile(leading: Icon(Icons.picture_as_pdf_outlined), title: Text('Exportar PDF'), dense: true)),
+                ],
+              ),
             IconButton(
               tooltip: 'Atualizar',
               onPressed: _loading ? null : _load,
@@ -39836,6 +40273,8 @@ class _PrayerReportScreenState extends State<PrayerReportScreen> {
                 const Tab(text: 'Por Região'),
                 const Tab(text: 'Por Alvo'),
                 const Tab(text: 'Por Horário'),
+                const Tab(text: 'Falhas'),
+                const Tab(text: 'Filtros'),
               ],
             ],
           ),
@@ -39874,6 +40313,8 @@ class _PrayerReportScreenState extends State<PrayerReportScreen> {
                     _buildByRegionTab(),
                     _buildByTargetTab(),
                     _buildByTimeSlotTab(),
+                    _buildFailuresTab(),
+                    _buildFiltersTab(),
                   ],
                 ],
               ),
@@ -40160,6 +40601,130 @@ class _PrayerReportScreenState extends State<PrayerReportScreen> {
       );
     }
     return RefreshIndicator(onRefresh: _load, child: body);
+  }
+
+  Widget _buildFailuresTab() {
+    Widget body;
+    if (_loading) {
+      body = ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: const [SizedBox(height: 64), Center(child: CircularProgressIndicator())],
+      );
+    } else if (_byFailuresError != null) {
+      body = ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
+          EmptyState(
+            icon: Icons.error_outline,
+            title: 'Não foi possível carregar a análise de falhas',
+            ctaLabel: 'Tentar novamente',
+            onCta: _load,
+          ),
+        ],
+      );
+    } else if (_byFailures.isEmpty) {
+      body = ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
+          const EmptyState(
+            icon: Icons.check_circle_outline,
+            title: 'Sem faltas no período — todos cumpriram!',
+          ),
+        ],
+      );
+    } else {
+      body = ListView.separated(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        itemCount: _byFailures.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 8),
+        itemBuilder: (_, i) => _FailureAnalysisTile(failure: _byFailures[i]),
+      );
+    }
+    return RefreshIndicator(onRefresh: _load, child: body);
+  }
+
+  Widget _buildFiltersTab() {
+    final cs = Theme.of(context).colorScheme;
+    final hasActive = _filters.hasAnyFilter();
+    final header = Container(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: _loading ? null : _openFiltersSheet,
+              icon: Icon(hasActive ? Icons.filter_alt : Icons.filter_alt_outlined),
+              label: Text(hasActive ? 'Filtros aplicados' : 'Abrir filtros'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: hasActive ? cs.primary : null,
+                side: BorderSide(color: hasActive ? cs.primary : cs.outline),
+              ),
+            ),
+          ),
+          if (hasActive) ...[
+            const SizedBox(width: 8),
+            IconButton(
+              tooltip: 'Limpar filtros',
+              onPressed: _loading ? null : _clearFilters,
+              icon: const Icon(Icons.clear),
+            ),
+          ],
+        ],
+      ),
+    );
+
+    Widget body;
+    if (_loading) {
+      body = ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: const [SizedBox(height: 64), Center(child: CircularProgressIndicator())],
+      );
+    } else if (_byFiltersError != null) {
+      body = ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          SizedBox(height: MediaQuery.sizeOf(context).height * 0.16),
+          EmptyState(
+            icon: Icons.error_outline,
+            title: 'Não foi possível aplicar os filtros',
+            ctaLabel: 'Tentar novamente',
+            onCta: _load,
+          ),
+        ],
+      );
+    } else if (_byFilters.isEmpty) {
+      body = ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          SizedBox(height: MediaQuery.sizeOf(context).height * 0.16),
+          EmptyState(
+            icon: Icons.search_off,
+            title: hasActive
+                ? 'Nenhum turno corresponde aos filtros'
+                : 'Aplique filtros para começar',
+          ),
+        ],
+      );
+    } else {
+      body = ListView.separated(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        itemCount: _byFilters.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 4),
+        itemBuilder: (_, i) => _CrossDataRunTile(data: _byFilters[i]),
+      );
+    }
+    return Column(
+      children: [
+        header,
+        Expanded(
+          child: RefreshIndicator(onRefresh: _load, child: body),
+        ),
+      ],
+    );
   }
 
   Widget _buildCardsGrid(PrayerScaleSummaryModel s, ColorScheme cs) {
@@ -41063,6 +41628,536 @@ class _PeriodCoverageRow extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _FailureAnalysisTile extends StatelessWidget {
+  const _FailureAnalysisTile({required this.failure});
+
+  final FailureAnalysisModel failure;
+
+  String _formatLastFailure(DateTime? dt) {
+    if (dt == null) return '—';
+    final local = dt.toLocal();
+    final two = (int v) => v.toString().padLeft(2, '0');
+    return '${two(local.day)}/${two(local.month)}/${local.year}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+    final rate = failure.failureRate.clamp(0, 100).toDouble();
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+        leading: _RankBadge(rank: failure.rank),
+        title: Text(
+          failure.userName,
+          style: const TextStyle(fontWeight: FontWeight.w800),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _CoverageBar(percentage: rate, color: cs.error),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  _StatTag(
+                    icon: Icons.cancel_outlined,
+                    label: '${failure.failedCount} falta(s)',
+                    color: cs.error,
+                  ),
+                  _StatTag(
+                    icon: Icons.assignment_outlined,
+                    label: '${failure.assignedCount} atribuído(s)',
+                    color: cs.outline,
+                  ),
+                  _StatTag(
+                    icon: Icons.percent_outlined,
+                    label: '${rate.toStringAsFixed(0)}% de falhas',
+                    color: cs.error,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        children: [
+          _DetailRow(
+            icon: Icons.history_outlined,
+            label: 'Última falha',
+            value: _formatLastFailure(failure.lastFailureAt),
+          ),
+          if (failure.uncoveredTargets.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              'Alvos descobertos',
+              style: tt.bodySmall?.copyWith(color: cs.outline, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 4),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final t in failure.uncoveredTargets)
+                  Chip(
+                    avatar: const Icon(Icons.flag_outlined, size: 14),
+                    label: Text(t),
+                    visualDensity: VisualDensity.compact,
+                  ),
+              ],
+            ),
+          ],
+          if (failure.uncoveredRegions.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              'Regiões descobertas',
+              style: tt.bodySmall?.copyWith(color: cs.outline, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 4),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final r in failure.uncoveredRegions)
+                  Chip(
+                    avatar: const Icon(Icons.map_outlined, size: 14),
+                    label: Text(r),
+                    visualDensity: VisualDensity.compact,
+                  ),
+              ],
+            ),
+          ],
+          if (failure.uncoveredTimeSlots.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              'Horários descobertos',
+              style: tt.bodySmall?.copyWith(color: cs.outline, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 4),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final h in failure.uncoveredTimeSlots)
+                  Chip(
+                    avatar: const Icon(Icons.access_time, size: 14),
+                    label: Text(h),
+                    visualDensity: VisualDensity.compact,
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _CrossDataRunTile extends StatelessWidget {
+  const _CrossDataRunTile({required this.data});
+
+  final Map<String, dynamic> data;
+
+  String _statusLabel(String s) {
+    return switch (s) {
+      'completed' => 'Concluído',
+      'missed' => 'Falta',
+      'cancelled' => 'Cancelado',
+      'scheduled' => 'Agendado',
+      _ => s,
+    };
+  }
+
+  Color _statusColor(String s, ColorScheme cs) {
+    return switch (s) {
+      'completed' => cs.primary,
+      'missed' => cs.error,
+      'cancelled' => cs.outline,
+      'scheduled' => cs.secondary,
+      _ => cs.outline,
+    };
+  }
+
+  String _fmtWhen(DateTime dt) {
+    final local = dt.toLocal();
+    final two = (int v) => v.toString().padLeft(2, '0');
+    return '${two(local.day)}/${two(local.month)} • ${two(local.hour)}:${two(local.minute)}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+    final status = (data['status'] as String?)?.trim() ?? 'scheduled';
+    final userName = (data['user_name'] as String?)?.trim() ?? 'Usuário';
+    final targetName = (data['target_name'] as String?)?.trim();
+    final regionName = (data['region_name'] as String?)?.trim();
+    final notes = (data['notes'] as String?)?.trim();
+    final duration = (data['duration_seconds'] as num?)?.toInt() ?? 0;
+    final scheduledAt = DateTime.tryParse(data['scheduled_at']?.toString() ?? '');
+    final statusColor = _statusColor(status, cs);
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 2),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: statusColor.withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    _statusLabel(status),
+                    style: TextStyle(color: statusColor, fontWeight: FontWeight.w800, fontSize: 11),
+                  ),
+                ),
+                const Spacer(),
+                if (scheduledAt != null)
+                  Text(
+                    _fmtWhen(scheduledAt),
+                    style: tt.bodySmall?.copyWith(color: cs.outline),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              userName,
+              style: const TextStyle(fontWeight: FontWeight.w800),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 2),
+            Row(
+              children: [
+                if (targetName != null && targetName.isNotEmpty) ...[
+                  Icon(Icons.flag_outlined, size: 14, color: cs.outline),
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: Text(
+                      targetName,
+                      style: TextStyle(color: cs.outline, fontSize: 12),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                ],
+                if (regionName != null && regionName.isNotEmpty) ...[
+                  Icon(Icons.map_outlined, size: 14, color: cs.outline),
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: Text(
+                      regionName,
+                      style: TextStyle(color: cs.outline, fontSize: 12),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                ],
+                if (duration > 0) ...[
+                  Icon(Icons.schedule_outlined, size: 14, color: cs.outline),
+                  const SizedBox(width: 4),
+                  Text(
+                    '${(duration / 60).round()} min',
+                    style: TextStyle(color: cs.outline, fontSize: 12),
+                  ),
+                ],
+              ],
+            ),
+            if (notes != null && notes.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                notes,
+                style: tt.bodySmall,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PrayerFiltersSheet extends StatefulWidget {
+  const _PrayerFiltersSheet({
+    required this.initial,
+    required this.availableUsers,
+    required this.availableTargets,
+    required this.availableRegions,
+  });
+
+  final PrayerFilterOptions initial;
+  final List<({String id, String label})> availableUsers;
+  final List<({String id, String label})> availableTargets;
+  final List<({String id, String label})> availableRegions;
+
+  @override
+  State<_PrayerFiltersSheet> createState() => _PrayerFiltersSheetState();
+}
+
+class _PrayerFiltersSheetState extends State<_PrayerFiltersSheet> {
+  late Set<String> _userIds;
+  late Set<String> _targetIds;
+  late Set<String> _regionIds;
+  late Set<String> _statuses;
+  late Set<int> _weekdays;
+  late RangeValues _hourRange;
+  late bool _hourEnabled;
+
+  static const _statusOptions = <(String value, String label)>[
+    ('completed', 'Concluído'),
+    ('missed', 'Falta'),
+    ('cancelled', 'Cancelado'),
+    ('scheduled', 'Agendado'),
+  ];
+
+  static const _weekdayOptions = <(int value, String label)>[
+    (0, 'Dom'),
+    (1, 'Seg'),
+    (2, 'Ter'),
+    (3, 'Qua'),
+    (4, 'Qui'),
+    (5, 'Sex'),
+    (6, 'Sáb'),
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _userIds = widget.initial.userIds.toSet();
+    _targetIds = widget.initial.targetIds.toSet();
+    _regionIds = widget.initial.regionIds.toSet();
+    _statuses = widget.initial.statuses.toSet();
+    _weekdays = widget.initial.weekdays.toSet();
+    final hs = widget.initial.hourStart;
+    final he = widget.initial.hourEnd;
+    _hourEnabled = hs != null || he != null;
+    _hourRange = RangeValues(
+      (hs ?? 0).toDouble(),
+      (he ?? 23).toDouble(),
+    );
+  }
+
+  void _apply() {
+    Navigator.of(context).pop(
+      PrayerFilterOptions(
+        fromDate: widget.initial.fromDate,
+        toDate: widget.initial.toDate,
+        userIds: _userIds.toList(growable: false),
+        targetIds: _targetIds.toList(growable: false),
+        regionIds: _regionIds.toList(growable: false),
+        statuses: _statuses.toList(growable: false),
+        weekdays: _weekdays.toList(growable: false),
+        hourStart: _hourEnabled ? _hourRange.start.round() : null,
+        hourEnd: _hourEnabled ? _hourRange.end.round() : null,
+      ),
+    );
+  }
+
+  void _reset() {
+    Navigator.of(context).pop(const PrayerFilterOptions());
+  }
+
+  Widget _section(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 16, bottom: 6),
+      child: Text(
+        title,
+        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          16,
+          0,
+          16,
+          MediaQuery.viewInsetsOf(context).bottom + 16,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Filtros',
+                style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18),
+              ),
+              _section('Status'),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final (v, label) in _statusOptions)
+                    FilterChip(
+                      label: Text(label),
+                      selected: _statuses.contains(v),
+                      onSelected: (sel) => setState(() {
+                        if (sel) {
+                          _statuses.add(v);
+                        } else {
+                          _statuses.remove(v);
+                        }
+                      }),
+                    ),
+                ],
+              ),
+              _section('Dias da semana'),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final (v, label) in _weekdayOptions)
+                    FilterChip(
+                      label: Text(label),
+                      selected: _weekdays.contains(v),
+                      onSelected: (sel) => setState(() {
+                        if (sel) {
+                          _weekdays.add(v);
+                        } else {
+                          _weekdays.remove(v);
+                        }
+                      }),
+                    ),
+                ],
+              ),
+              _section('Hora do dia'),
+              Row(
+                children: [
+                  Switch(
+                    value: _hourEnabled,
+                    onChanged: (v) => setState(() => _hourEnabled = v),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      _hourEnabled
+                          ? '${_hourRange.start.round().toString().padLeft(2, '0')}h — ${_hourRange.end.round().toString().padLeft(2, '0')}h'
+                          : 'Qualquer hora',
+                    ),
+                  ),
+                ],
+              ),
+              if (_hourEnabled)
+                RangeSlider(
+                  values: _hourRange,
+                  min: 0,
+                  max: 23,
+                  divisions: 23,
+                  labels: RangeLabels(
+                    '${_hourRange.start.round()}h',
+                    '${_hourRange.end.round()}h',
+                  ),
+                  onChanged: (v) => setState(() => _hourRange = v),
+                ),
+              if (widget.availableUsers.isNotEmpty) ...[
+                _section('Usuários (${_userIds.length} selecionado(s))'),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final u in widget.availableUsers)
+                      FilterChip(
+                        label: Text(u.label),
+                        selected: _userIds.contains(u.id),
+                        onSelected: (sel) => setState(() {
+                          if (sel) {
+                            _userIds.add(u.id);
+                          } else {
+                            _userIds.remove(u.id);
+                          }
+                        }),
+                      ),
+                  ],
+                ),
+              ],
+              if (widget.availableTargets.isNotEmpty) ...[
+                _section('Alvos (${_targetIds.length} selecionado(s))'),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final t in widget.availableTargets)
+                      FilterChip(
+                        label: Text(t.label),
+                        selected: _targetIds.contains(t.id),
+                        onSelected: (sel) => setState(() {
+                          if (sel) {
+                            _targetIds.add(t.id);
+                          } else {
+                            _targetIds.remove(t.id);
+                          }
+                        }),
+                      ),
+                  ],
+                ),
+              ],
+              if (widget.availableRegions.isNotEmpty) ...[
+                _section('Regiões (${_regionIds.length} selecionada(s))'),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final r in widget.availableRegions)
+                      FilterChip(
+                        label: Text(r.label),
+                        selected: _regionIds.contains(r.id),
+                        onSelected: (sel) => setState(() {
+                          if (sel) {
+                            _regionIds.add(r.id);
+                          } else {
+                            _regionIds.remove(r.id);
+                          }
+                        }),
+                      ),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: _reset,
+                      child: const Text('Limpar tudo'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: FilledButton(
+                      onPressed: _apply,
+                      child: const Text('Aplicar filtros'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
