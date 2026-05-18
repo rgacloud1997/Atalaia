@@ -13737,8 +13737,9 @@ class DemoRepository extends ChangeNotifier {
         cancelled: List.unmodifiable(cancelled),
         scheduled: List.unmodifiable(scheduled),
       );
-    } catch (_) {
-      return const PrayerByCompletionModel(completed: [], missed: [], cancelled: [], scheduled: []);
+    } catch (e, st) {
+      developer.log('getPrayersByCompletionStatus failed', error: e, stackTrace: st, name: 'DemoRepository');
+      rethrow;
     }
   }
 
@@ -39590,8 +39591,17 @@ class _PrayerReportScreenState extends State<PrayerReportScreen> {
   late DateTimeRange _range;
   late final String _tz;
   bool _loading = false;
-  Object? _error;
+
   PrayerScaleSummaryModel? _summary;
+  Object? _summaryError;
+
+  List<UserPrayerStatsModel> _byUser = const [];
+  Object? _byUserError;
+
+  PrayerByCompletionModel? _byCompletion;
+  Object? _byCompletionError;
+
+  bool get _hasPrayersTab => !widget.args.selfMode;
 
   @override
   void initState() {
@@ -39617,11 +39627,24 @@ class _PrayerReportScreenState extends State<PrayerReportScreen> {
     if (!mounted) return;
     setState(() {
       _loading = true;
-      _error = null;
+      _summaryError = null;
+      _byUserError = null;
+      _byCompletionError = null;
     });
     final repo = RepoScope.of(context);
+    final tasks = <Future<void>>[
+      _loadSummary(repo),
+      _loadByUser(repo),
+      if (_hasPrayersTab) _loadByCompletion(repo),
+    ];
+    await Future.wait(tasks);
+    if (!mounted) return;
+    setState(() => _loading = false);
+  }
+
+  Future<void> _loadSummary(DemoRepository repo) async {
     try {
-      final summary = await repo.getPrayerScaleSummary(
+      final s = await repo.getPrayerScaleSummary(
         communityId: widget.args.communityId,
         from: _range.start,
         to: _range.end,
@@ -39629,15 +39652,50 @@ class _PrayerReportScreenState extends State<PrayerReportScreen> {
         selfOnly: widget.args.selfMode,
       );
       if (!mounted) return;
-      setState(() {
-        _summary = summary;
-        _loading = false;
-      });
+      setState(() => _summary = s);
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = e;
-        _loading = false;
+        _summary = null;
+        _summaryError = e;
+      });
+    }
+  }
+
+  Future<void> _loadByUser(DemoRepository repo) async {
+    try {
+      final list = await repo.getUserPrayerStats(
+        communityId: widget.args.communityId,
+        from: _range.start,
+        to: _range.end,
+        tz: _tz,
+        selfOnly: widget.args.selfMode,
+      );
+      if (!mounted) return;
+      setState(() => _byUser = list);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _byUser = const [];
+        _byUserError = e;
+      });
+    }
+  }
+
+  Future<void> _loadByCompletion(DemoRepository repo) async {
+    try {
+      final m = await repo.getPrayersByCompletionStatus(
+        communityId: widget.args.communityId,
+        from: _range.start,
+        to: _range.end,
+      );
+      if (!mounted) return;
+      setState(() => _byCompletion = m);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _byCompletion = null;
+        _byCompletionError = e;
       });
     }
   }
@@ -39675,77 +39733,218 @@ class _PrayerReportScreenState extends State<PrayerReportScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     final title = widget.args.selfMode
         ? 'Minhas Estatísticas de Oração'
         : 'Relatório de Escalas';
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(title),
-        actions: [
-          IconButton(
-            tooltip: 'Atualizar',
-            onPressed: _loading ? null : _load,
-            icon: const Icon(Icons.refresh),
-          ),
-        ],
-      ),
-      body: RefreshIndicator(
-        onRefresh: _load,
-        child: ListView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-          children: [
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                ActionChip(
-                  avatar: const Icon(Icons.date_range, size: 18),
-                  label: Text('${_fmtDate(_range.start)} — ${_fmtDate(_range.end)}'),
-                  onPressed: _loading ? null : _pickRange,
-                ),
-                Chip(
-                  avatar: Icon(
-                    widget.args.selfMode ? Icons.person_outline : Icons.groups_outlined,
-                    size: 18,
-                  ),
-                  label: Text(widget.args.selfMode ? 'Modo: Próprio' : 'Modo: Comunidade'),
-                ),
-              ],
+    final tabCount = _hasPrayersTab ? 3 : 2;
+    return DefaultTabController(
+      length: tabCount,
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(title),
+          actions: [
+            IconButton(
+              tooltip: 'Atualizar',
+              onPressed: _loading ? null : _load,
+              icon: const Icon(Icons.refresh),
             ),
-            const SizedBox(height: 16),
-            if (_loading)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 64),
-                child: Center(child: CircularProgressIndicator()),
-              )
-            else if (_error != null)
-              SizedBox(
-                height: MediaQuery.sizeOf(context).height * 0.45,
-                child: EmptyState(
-                  icon: Icons.error_outline,
-                  title: 'Não foi possível carregar o relatório',
-                  ctaLabel: 'Tentar novamente',
-                  onCta: _load,
-                ),
-              )
-            else if (_summary == null || _summary!.totalRuns == 0)
-              SizedBox(
-                height: MediaQuery.sizeOf(context).height * 0.45,
-                child: EmptyState(
-                  icon: Icons.event_busy_outlined,
-                  title: widget.args.selfMode
-                      ? 'Você ainda não tem turnos no período selecionado'
-                      : 'Nenhum turno encontrado no período',
-                ),
-              )
-            else
-              _buildCardsGrid(_summary!, cs),
+          ],
+          bottom: TabBar(
+            isScrollable: tabCount > 2,
+            tabs: [
+              const Tab(text: 'Resumo'),
+              Tab(text: widget.args.selfMode ? 'Detalhado' : 'Por Usuário'),
+              if (_hasPrayersTab) const Tab(text: 'Por Orações'),
+            ],
+          ),
+        ),
+        body: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  ActionChip(
+                    avatar: const Icon(Icons.date_range, size: 18),
+                    label: Text('${_fmtDate(_range.start)} — ${_fmtDate(_range.end)}'),
+                    onPressed: _loading ? null : _pickRange,
+                  ),
+                  Chip(
+                    avatar: Icon(
+                      widget.args.selfMode ? Icons.person_outline : Icons.groups_outlined,
+                      size: 18,
+                    ),
+                    label: Text(widget.args.selfMode ? 'Modo: Próprio' : 'Modo: Comunidade'),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: TabBarView(
+                children: [
+                  _buildResumoTab(),
+                  _buildByUserTab(),
+                  if (_hasPrayersTab) _buildByPrayersTab(),
+                ],
+              ),
+            ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildResumoTab() {
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        children: [
+          if (_loading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 64),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (_summaryError != null)
+            SizedBox(
+              height: MediaQuery.sizeOf(context).height * 0.4,
+              child: EmptyState(
+                icon: Icons.error_outline,
+                title: 'Não foi possível carregar o resumo',
+                ctaLabel: 'Tentar novamente',
+                onCta: _load,
+              ),
+            )
+          else if (_summary == null || _summary!.totalRuns == 0)
+            SizedBox(
+              height: MediaQuery.sizeOf(context).height * 0.4,
+              child: EmptyState(
+                icon: Icons.event_busy_outlined,
+                title: widget.args.selfMode
+                    ? 'Você ainda não tem turnos no período selecionado'
+                    : 'Nenhum turno encontrado no período',
+              ),
+            )
+          else
+            _buildCardsGrid(_summary!, Theme.of(context).colorScheme),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildByUserTab() {
+    Widget body;
+    if (_loading) {
+      body = ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: const [
+          SizedBox(height: 64),
+          Center(child: CircularProgressIndicator()),
+        ],
+      );
+    } else if (_byUserError != null) {
+      body = ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
+          EmptyState(
+            icon: Icons.error_outline,
+            title: 'Não foi possível carregar os dados por usuário',
+            ctaLabel: 'Tentar novamente',
+            onCta: _load,
+          ),
+        ],
+      );
+    } else if (_byUser.isEmpty) {
+      body = ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
+          EmptyState(
+            icon: Icons.people_outline,
+            title: widget.args.selfMode
+                ? 'Você ainda não tem dados no período'
+                : 'Nenhum participante no período',
+          ),
+        ],
+      );
+    } else {
+      body = ListView.separated(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        itemCount: _byUser.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 8),
+        itemBuilder: (_, i) => _UserPrayerStatsTile(stats: _byUser[i]),
+      );
+    }
+    return RefreshIndicator(onRefresh: _load, child: body);
+  }
+
+  Widget _buildByPrayersTab() {
+    Widget body;
+    if (_loading) {
+      body = ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: const [
+          SizedBox(height: 64),
+          Center(child: CircularProgressIndicator()),
+        ],
+      );
+    } else if (_byCompletionError != null) {
+      body = ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
+          EmptyState(
+            icon: Icons.error_outline,
+            title: 'Não foi possível carregar as orações',
+            ctaLabel: 'Tentar novamente',
+            onCta: _load,
+          ),
+        ],
+      );
+    } else if (_byCompletion == null || _byCompletion!.totalCount == 0) {
+      body = ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
+          const EmptyState(
+            icon: Icons.assignment_outlined,
+            title: 'Nenhuma oração no período',
+          ),
+        ],
+      );
+    } else {
+      body = _buildByPrayersList(_byCompletion!);
+    }
+    return RefreshIndicator(onRefresh: _load, child: body);
+  }
+
+  Widget _buildByPrayersList(PrayerByCompletionModel m) {
+    final cs = Theme.of(context).colorScheme;
+    final sections = <({String label, IconData icon, Color color, List<PrayerRunDetailModel> runs})>[
+      (label: 'Concluídos', icon: Icons.check_circle_outline, color: cs.primary, runs: m.completed),
+      (label: 'Faltas', icon: Icons.cancel_outlined, color: cs.error, runs: m.missed),
+      (label: 'Cancelados', icon: Icons.do_not_disturb_alt_outlined, color: cs.outline, runs: m.cancelled),
+      (label: 'Agendados', icon: Icons.schedule_outlined, color: cs.secondary, runs: m.scheduled),
+    ];
+    final children = <Widget>[];
+    for (final s in sections) {
+      if (s.runs.isEmpty) continue;
+      children.add(_PrayerStatusHeader(label: s.label, count: s.runs.length, color: s.color, icon: s.icon));
+      for (final r in s.runs) {
+        children.add(_PrayerRunTile(run: r));
+      }
+      children.add(const SizedBox(height: 12));
+    }
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      children: children,
     );
   }
 
@@ -39868,6 +40067,325 @@ class _PrayerReportCard extends StatelessWidget {
                   ),
               ],
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _UserPrayerStatsTile extends StatelessWidget {
+  const _UserPrayerStatsTile({required this.stats});
+
+  final UserPrayerStatsModel stats;
+
+  String _formatLastCompleted(DateTime? dt) {
+    if (dt == null) return 'Nunca';
+    final two = (int v) => v.toString().padLeft(2, '0');
+    return '${two(dt.day)}/${two(dt.month)}/${dt.year}';
+  }
+
+  Color _chipColorFor(double pct, ColorScheme cs) {
+    if (pct >= 80) return cs.primary;
+    if (pct >= 50) return cs.tertiary;
+    return cs.error;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+    final pct = stats.completionPercentage.clamp(0, 100).toDouble();
+    final chipColor = _chipColorFor(pct, cs);
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+        leading: Avatar(
+          name: stats.userName,
+          imageUrl: stats.userAvatarUrl,
+          size: AvatarSize.s44,
+        ),
+        title: Text(
+          stats.userName,
+          style: const TextStyle(fontWeight: FontWeight.w800),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              _StatTag(
+                icon: Icons.percent_outlined,
+                label: '${pct.toStringAsFixed(0)}% adesão',
+                color: chipColor,
+              ),
+              _StatTag(
+                icon: Icons.check_circle_outline,
+                label: '${stats.turnsCompleted}/${stats.turnsAssigned} turnos',
+                color: cs.outline,
+              ),
+              if (stats.turnsMissed > 0)
+                _StatTag(
+                  icon: Icons.cancel_outlined,
+                  label: '${stats.turnsMissed} falta(s)',
+                  color: cs.error,
+                ),
+            ],
+          ),
+        ),
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _DetailRow(
+                icon: Icons.local_fire_department_outlined,
+                label: 'Sequência',
+                value: stats.streakDays > 0 ? '${stats.streakDays} dia(s)' : '—',
+              ),
+              _DetailRow(
+                icon: Icons.schedule_outlined,
+                label: 'Duração média',
+                value: stats.avgDurationMinutes > 0 ? '${stats.avgDurationMinutes} min' : '—',
+              ),
+              _DetailRow(
+                icon: Icons.history_outlined,
+                label: 'Última conclusão',
+                value: _formatLastCompleted(stats.lastCompletedAt),
+              ),
+              if (stats.pendingRunsCount > 0)
+                _DetailRow(
+                  icon: Icons.hourglass_empty_outlined,
+                  label: 'Turnos pendentes',
+                  value: '${stats.pendingRunsCount}',
+                ),
+              if (stats.commonHours.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  'Horários mais frequentes',
+                  style: tt.bodySmall?.copyWith(
+                    color: cs.outline,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final h in stats.commonHours)
+                      Chip(
+                        avatar: const Icon(Icons.access_time, size: 14),
+                        label: Text(h),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatTag extends StatelessWidget {
+  const _StatTag({required this.icon, required this.label, required this.color});
+
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(color: color, fontWeight: FontWeight.w700, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DetailRow extends StatelessWidget {
+  const _DetailRow({required this.icon, required this.label, required this.value});
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: cs.outline),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(color: cs.outline),
+            ),
+          ),
+          Text(
+            value,
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PrayerStatusHeader extends StatelessWidget {
+  const _PrayerStatusHeader({
+    required this.label,
+    required this.count,
+    required this.color,
+    required this.icon,
+  });
+
+  final String label;
+  final int count;
+  final Color color;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 12, 4, 8),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 18),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+              color: color,
+              fontSize: 14,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              '$count',
+              style: TextStyle(
+                color: color,
+                fontWeight: FontWeight.w800,
+                fontSize: 12,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PrayerRunTile extends StatelessWidget {
+  const _PrayerRunTile({required this.run});
+
+  final PrayerRunDetailModel run;
+
+  String _formatDate(DateTime dt) {
+    final two = (int v) => v.toString().padLeft(2, '0');
+    return '${two(dt.day)}/${two(dt.month)} • ${two(dt.hour)}:${two(dt.minute)}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+    final target = run.targetName?.trim().isNotEmpty == true
+        ? run.targetName!.trim()
+        : 'Sem alvo';
+    final responsible = run.responsibleName?.trim().isNotEmpty == true
+        ? run.responsibleName!.trim()
+        : null;
+    final actualDuration = run.actualDurationMinutes;
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    target,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Text(
+                  _formatDate(run.scheduledAt.toLocal()),
+                  style: tt.bodySmall?.copyWith(color: cs.outline),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                if (responsible != null) ...[
+                  Icon(Icons.person_outline, size: 14, color: cs.outline),
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: Text(
+                      responsible,
+                      style: TextStyle(color: cs.outline, fontSize: 12),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                ],
+                if (actualDuration != null && actualDuration > 0) ...[
+                  Icon(Icons.schedule_outlined, size: 14, color: cs.outline),
+                  const SizedBox(width: 4),
+                  Text(
+                    '${actualDuration} min',
+                    style: TextStyle(color: cs.outline, fontSize: 12),
+                  ),
+                ],
+              ],
+            ),
+            if (run.notes != null && run.notes!.trim().isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                run.notes!.trim(),
+                style: tt.bodySmall,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
           ],
         ),
       ),
