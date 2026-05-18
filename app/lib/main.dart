@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' as developer;
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -13637,18 +13638,9 @@ class DemoRepository extends ChangeNotifier {
         totalPrayerTime: Duration.zero,
         avgSessionDurationMinutes: 0,
       );
-    } catch (_) {
-      return const PrayerScaleSummaryModel(
-        totalScales: 0,
-        totalRuns: 0,
-        totalCompleted: 0,
-        totalMissed: 0,
-        totalCancelled: 0,
-        completionRate: 0.0,
-        uniqueUsers: 0,
-        totalPrayerTime: Duration.zero,
-        avgSessionDurationMinutes: 0,
-      );
+    } catch (e, st) {
+      developer.log('getPrayerScaleSummary failed', error: e, stackTrace: st, name: 'DemoRepository');
+      rethrow;
     }
   }
 
@@ -13681,8 +13673,9 @@ class DemoRepository extends ChangeNotifier {
         list.add(UserPrayerStatsModel.fromSupabase(raw.cast<String, dynamic>()));
       }
       return List.unmodifiable(list);
-    } catch (_) {
-      return const [];
+    } catch (e, st) {
+      developer.log('getUserPrayerStats failed', error: e, stackTrace: st, name: 'DemoRepository');
+      rethrow;
     }
   }
 
@@ -13924,8 +13917,9 @@ class DemoRepository extends ChangeNotifier {
         }
       }
       return List.unmodifiable(out);
-    } catch (_) {
-      return const [];
+    } catch (e, st) {
+      developer.log('getPrayerReportCrossData failed', error: e, stackTrace: st, name: 'DemoRepository');
+      rethrow;
     }
   }
 
@@ -14860,6 +14854,9 @@ class _AtalaiaAppState extends State<AtalaiaApp> {
                 case Routes.communityPrayerScales:
                   final args = settings.arguments as CommunityArgs;
                   return MaterialPageRoute(builder: (_) => CommunityPrayerScalesScreen(args: args));
+                case Routes.prayerReport:
+                  final args = settings.arguments as PrayerReportArgs;
+                  return MaterialPageRoute(builder: (_) => PrayerReportScreen(args: args));
                 case Routes.regionPosts:
                   final args = settings.arguments as RegionPostsArgs;
                   return MaterialPageRoute(builder: (_) => RegionPostsScreen(args: args));
@@ -14954,6 +14951,7 @@ abstract final class Routes {
   static const communityMembers = '/communities/members';
   static const communityEvents = '/communities/events';
   static const communityPrayerScales = '/communities/prayer_scales';
+  static const prayerReport = '/communities/prayer_report';
   static const regionPosts = '/map/region/posts';
   static const regionAlerts = '/map/region/alerts';
   static const regionNews = '/map/region/news';
@@ -15089,6 +15087,16 @@ final class CommunityFeedArgs {
 final class CommunityMembersArgs {
   const CommunityMembersArgs({required this.communityId});
   final String communityId;
+}
+
+final class PrayerReportArgs {
+  const PrayerReportArgs({
+    required this.communityId,
+    this.selfMode = false,
+  });
+
+  final String communityId;
+  final bool selfMode;
 }
 
 final class RegionPostsArgs {
@@ -38511,6 +38519,29 @@ class _CommunityPrayerScalesScreenState extends State<CommunityPrayerScalesScree
                                 padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
                                 children: [
                                   Card(
+                                    child: ListTile(
+                                      leading: const Icon(Icons.insights_outlined),
+                                      title: const Text(
+                                        'Ver Relatório Completo',
+                                        style: TextStyle(fontWeight: FontWeight.w800),
+                                      ),
+                                      subtitle: const Text(
+                                        'Adesão, faltas, tempo total e participantes por período',
+                                      ),
+                                      trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                                      onTap: () {
+                                        Navigator.of(context).pushNamed(
+                                          Routes.prayerReport,
+                                          arguments: PrayerReportArgs(
+                                            communityId: c.id,
+                                            selfMode: false,
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Card(
                                     child: Padding(
                                       padding: const EdgeInsets.all(14),
                                       child: Column(
@@ -39546,6 +39577,304 @@ class _CreateCommunityPrayerRunSheetState extends State<_CreateCommunityPrayerRu
   }
 }
 
+class PrayerReportScreen extends StatefulWidget {
+  const PrayerReportScreen({required this.args, super.key});
+
+  final PrayerReportArgs args;
+
+  @override
+  State<PrayerReportScreen> createState() => _PrayerReportScreenState();
+}
+
+class _PrayerReportScreenState extends State<PrayerReportScreen> {
+  late DateTimeRange _range;
+  late final String _tz;
+  bool _loading = false;
+  Object? _error;
+  PrayerScaleSummaryModel? _summary;
+
+  @override
+  void initState() {
+    super.initState();
+    final now = DateTime.now();
+    _range = DateTimeRange(
+      start: DateTime(now.year, now.month, now.day).subtract(const Duration(days: 29)),
+      end: DateTime(now.year, now.month, now.day),
+    );
+    _tz = _resolveDeviceTimezone();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  static String _resolveDeviceTimezone() {
+    try {
+      final name = tz.local.name;
+      if (name.isNotEmpty && name != 'UTC') return name;
+    } catch (_) {}
+    return 'UTC';
+  }
+
+  Future<void> _load() async {
+    if (!mounted) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    final repo = RepoScope.of(context);
+    try {
+      final summary = await repo.getPrayerScaleSummary(
+        communityId: widget.args.communityId,
+        from: _range.start,
+        to: _range.end,
+        tz: _tz,
+        selfOnly: widget.args.selfMode,
+      );
+      if (!mounted) return;
+      setState(() {
+        _summary = summary;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e;
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _pickRange() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(now.year - 2, 1, 1),
+      lastDate: DateTime(now.year, now.month, now.day),
+      initialDateRange: _range,
+      helpText: 'Selecionar período',
+      saveText: 'Aplicar',
+    );
+    if (picked == null) return;
+    if (!mounted) return;
+    setState(() => _range = picked);
+    await _load();
+  }
+
+  String _fmtDate(DateTime d) {
+    final two = (int v) => v.toString().padLeft(2, '0');
+    return '${two(d.day)}/${two(d.month)}/${d.year}';
+  }
+
+  String _fmtDuration(Duration d) {
+    final totalMinutes = d.inMinutes;
+    if (totalMinutes < 1) return '0 min';
+    final h = totalMinutes ~/ 60;
+    final m = totalMinutes % 60;
+    if (h == 0) return '${m} min';
+    if (m == 0) return '${h}h';
+    return '${h}h ${m}min';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final title = widget.args.selfMode
+        ? 'Minhas Estatísticas de Oração'
+        : 'Relatório de Escalas';
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(title),
+        actions: [
+          IconButton(
+            tooltip: 'Atualizar',
+            onPressed: _loading ? null : _load,
+            icon: const Icon(Icons.refresh),
+          ),
+        ],
+      ),
+      body: RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          children: [
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                ActionChip(
+                  avatar: const Icon(Icons.date_range, size: 18),
+                  label: Text('${_fmtDate(_range.start)} — ${_fmtDate(_range.end)}'),
+                  onPressed: _loading ? null : _pickRange,
+                ),
+                Chip(
+                  avatar: Icon(
+                    widget.args.selfMode ? Icons.person_outline : Icons.groups_outlined,
+                    size: 18,
+                  ),
+                  label: Text(widget.args.selfMode ? 'Modo: Próprio' : 'Modo: Comunidade'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            if (_loading)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 64),
+                child: Center(child: CircularProgressIndicator()),
+              )
+            else if (_error != null)
+              SizedBox(
+                height: MediaQuery.sizeOf(context).height * 0.45,
+                child: EmptyState(
+                  icon: Icons.error_outline,
+                  title: 'Não foi possível carregar o relatório',
+                  ctaLabel: 'Tentar novamente',
+                  onCta: _load,
+                ),
+              )
+            else if (_summary == null || _summary!.totalRuns == 0)
+              SizedBox(
+                height: MediaQuery.sizeOf(context).height * 0.45,
+                child: EmptyState(
+                  icon: Icons.event_busy_outlined,
+                  title: widget.args.selfMode
+                      ? 'Você ainda não tem turnos no período selecionado'
+                      : 'Nenhum turno encontrado no período',
+                ),
+              )
+            else
+              _buildCardsGrid(_summary!, cs),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCardsGrid(PrayerScaleSummaryModel s, ColorScheme cs) {
+    final completionPct = (s.completionRate * 100).clamp(0, 100);
+    final cards = <_PrayerReportCard>[
+      _PrayerReportCard(
+        icon: Icons.event_outlined,
+        label: 'Escalas',
+        value: '${s.totalScales}',
+        hint: 'da comunidade',
+      ),
+      _PrayerReportCard(
+        icon: Icons.assignment_outlined,
+        label: 'Turnos no período',
+        value: '${s.totalRuns}',
+      ),
+      _PrayerReportCard(
+        icon: Icons.check_circle_outline,
+        label: 'Concluídos',
+        value: '${s.totalCompleted}',
+        accentColor: cs.primary,
+      ),
+      _PrayerReportCard(
+        icon: Icons.cancel_outlined,
+        label: 'Faltas',
+        value: '${s.totalMissed}',
+        accentColor: cs.error,
+      ),
+      _PrayerReportCard(
+        icon: Icons.percent_outlined,
+        label: 'Taxa de adesão',
+        value: '${completionPct.toStringAsFixed(0)}%',
+      ),
+      _PrayerReportCard(
+        icon: Icons.people_outline,
+        label: widget.args.selfMode ? 'Você' : 'Participantes',
+        value: '${s.uniqueUsers}',
+      ),
+      _PrayerReportCard(
+        icon: Icons.schedule_outlined,
+        label: 'Tempo de oração',
+        value: _fmtDuration(s.totalPrayerTime),
+        hint: 'média ${s.avgSessionDurationMinutes} min/sessão',
+      ),
+    ];
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final crossAxisCount = constraints.maxWidth > 720
+            ? 4
+            : (constraints.maxWidth > 480 ? 3 : 2);
+        return GridView.count(
+          crossAxisCount: crossAxisCount,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          mainAxisSpacing: 12,
+          crossAxisSpacing: 12,
+          childAspectRatio: 1.05,
+          children: cards,
+        );
+      },
+    );
+  }
+}
+
+class _PrayerReportCard extends StatelessWidget {
+  const _PrayerReportCard({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.hint,
+    this.accentColor,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final String? hint;
+  final Color? accentColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+    final accent = accentColor ?? cs.primary;
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Icon(icon, color: accent),
+            const SizedBox(height: 4),
+            Text(
+              value,
+              style: tt.headlineSmall?.copyWith(
+                fontWeight: FontWeight.w800,
+                color: accent,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: tt.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (hint != null)
+                  Text(
+                    hint!,
+                    style: tt.bodySmall?.copyWith(color: cs.outline),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class CommunityEventsScreen extends StatefulWidget {
   const CommunityEventsScreen({required this.args, super.key});
 
@@ -40092,6 +40421,21 @@ class _CommunityDetailScreenState extends State<CommunityDetailScreen> {
                                         Navigator.of(context).pushNamed(
                                           Routes.editCommunity,
                                           arguments: EditCommunityArgs(communityId: c.id),
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ],
+                                if (c.viewerStatus == CommunityViewerStatus.approved && viewerId != null) ...[
+                                  const SizedBox(height: 12),
+                                  SizedBox(
+                                    width: double.infinity,
+                                    child: SecondaryButton(
+                                      label: 'Ver minhas estatísticas de oração',
+                                      onPressed: () {
+                                        Navigator.of(context).pushNamed(
+                                          Routes.prayerReport,
+                                          arguments: PrayerReportArgs(communityId: c.id, selfMode: true),
                                         );
                                       },
                                     ),
@@ -41205,6 +41549,23 @@ class UserProfileScreen extends StatelessWidget {
                   );
                 },
               ),
+              if (isMe) ...[
+                const SizedBox(height: 12),
+                Card(
+                  child: ListTile(
+                    leading: const Icon(Icons.insights_outlined),
+                    title: const Text(
+                      'Minhas Estatísticas de Oração',
+                      style: TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                    subtitle: const Text(
+                      'Veja sua adesão, faltas e tempo total por comunidade',
+                    ),
+                    trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                    onTap: () => _openPrayerReportCommunityPicker(context, repo, session.value),
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
               Builder(
                 builder: (context) {
@@ -41695,6 +42056,87 @@ class _ProfileMediaGrid extends StatelessWidget {
       },
     );
   }
+}
+
+Future<void> _openPrayerReportCommunityPicker(
+  BuildContext context,
+  DemoRepository repo,
+  SessionState session,
+) async {
+  final cs = Theme.of(context).colorScheme;
+  final joined = repo
+      .communitiesFor(session)
+      .where((c) => c.viewerStatus == CommunityViewerStatus.approved)
+      .toList(growable: false);
+  if (joined.isEmpty) {
+    showInfoSnackBar(
+      context,
+      'Você ainda não participa de nenhuma comunidade com escala de oração.',
+    );
+    return;
+  }
+  if (joined.length == 1) {
+    Navigator.of(context).pushNamed(
+      Routes.prayerReport,
+      arguments: PrayerReportArgs(communityId: joined.first.id, selfMode: true),
+    );
+    return;
+  }
+  await showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    builder: (sheetCtx) {
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Escolha uma comunidade',
+                style: Theme.of(sheetCtx).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Veja suas estatísticas de oração em uma das comunidades em que você participa',
+                style: TextStyle(color: cs.outline),
+              ),
+              const SizedBox(height: 12),
+              Flexible(
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: joined.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  itemBuilder: (_, i) {
+                    final c = joined[i];
+                    return ListTile(
+                      leading: c.imageUrl != null && c.imageUrl!.isNotEmpty
+                          ? Avatar(name: c.name, imageUrl: c.imageUrl, size: AvatarSize.s44)
+                          : CircleAvatar(child: Text(c.name.isEmpty ? '?' : c.name[0])),
+                      title: Text(c.name, style: const TextStyle(fontWeight: FontWeight.w700)),
+                      subtitle: Text('${c.memberCount} membro(s)'),
+                      trailing: const Icon(Icons.arrow_forward_ios, size: 14),
+                      onTap: () {
+                        Navigator.of(sheetCtx).pop();
+                        Navigator.of(context).pushNamed(
+                          Routes.prayerReport,
+                          arguments: PrayerReportArgs(communityId: c.id, selfMode: true),
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+  );
 }
 
 class FollowersFollowingScreen extends StatefulWidget {
