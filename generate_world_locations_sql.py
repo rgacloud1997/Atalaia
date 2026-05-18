@@ -1,0 +1,496 @@
+"""
+Gera migrations SQL com countries + admin1 do mundo (Natural Earth) para popular
+public.locations (level, parent_id, code, name, path, center_lat, center_lng,
+bbox_*, geom).
+
+Padrão de uso:
+  python generate_world_locations_sql.py \
+      --admin0 /tmp/natural_earth/admin0/ne_50m_admin_0_countries.shp \
+      --admin1 /tmp/natural_earth/admin1_10m/ne_10m_admin_1_states_provinces.shp \
+      --out-dir supabase/migrations \
+      --timestamp-prefix 20260518 \
+      --batch-size 80
+
+Output:
+  <out-dir>/20260518140000_world_seed_countries.sql       (1 arquivo, todos países)
+  <out-dir>/20260518150000_world_seed_states_part_001.sql (batches de admin1)
+  <out-dir>/20260518150100_world_seed_states_part_002.sql
+  ...
+
+Cada migration:
+  - Faz upsert idempotente (ON CONFLICT path).
+  - Continente é localizado por code (resolveContinent helper inline).
+  - País é localizado por path (idem).
+  - Geom convertida via ST_GeomFromText('MULTIPOLYGON(...)', 4326).
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import unicodedata
+from pathlib import Path
+
+import geopandas as gpd
+import pandas as pd
+from shapely.geometry import MultiPolygon, Polygon
+from shapely.ops import unary_union
+
+# ---------- Continent mapping (Natural Earth → seed do banco) ----------
+
+CONTINENT_NE_TO_CODE = {
+    "Africa": "af",
+    "Antarctica": "an",
+    "Asia": "as",
+    "Europe": "eu",
+    "North America": "na",
+    "Oceania": "oc",
+    "South America": "sa",
+    # "Seven seas (open ocean)" não tem continente — vamos pular essas linhas.
+}
+
+# Países cujo ISO_A2 vem como "-99" no Natural Earth (disputados / sem reconhecimento).
+# Mapeamos manualmente para um code estável para evitar perder a feature.
+ISO_A2_FALLBACK = {
+    "Kosovo": "xk",          # de facto code
+    "N. Cyprus": "cy-n",
+    "Northern Cyprus": "cy-n",
+    "Somaliland": "so-h",
+    "Western Sahara": "eh",  # alternativo: 'wsa'
+    "Indian Ocean Ter.": "iot",
+    "French Southern and Antarctic Lands": "tf",
+    "Ashmore and Cartier Is.": "au-ash",
+    "Siachen Glacier": "in-sg",
+    "Heard I. and McDonald Is.": "hm",
+    "Coral Sea Is.": "au-csi",
+}
+
+# ---------- Helpers de string / slug ----------
+
+_SLUG_NORMALIZE_RE = re.compile(r"[^a-z0-9]+")
+
+
+def slugify(text: str) -> str:
+    text = unicodedata.normalize("NFKD", text)
+    text = text.encode("ascii", "ignore").decode("ascii")
+    text = text.lower().strip()
+    text = _SLUG_NORMALIZE_RE.sub("-", text)
+    text = text.strip("-")
+    return text or "unknown"
+
+
+def sql_escape(s: str) -> str:
+    return s.replace("'", "''")
+
+
+# ---------- Helpers de geometria ----------
+
+
+def to_multipolygon(geom):
+    """Garante geometry(MultiPolygon, 4326) — coluna do schema exige MultiPolygon."""
+    if geom is None or geom.is_empty:
+        return None
+    if not geom.is_valid:
+        geom = geom.buffer(0)
+        if geom.is_empty:
+            return None
+    if geom.geom_type == "MultiPolygon":
+        return geom
+    if geom.geom_type == "Polygon":
+        return MultiPolygon([geom])
+    if geom.geom_type == "GeometryCollection":
+        polys = [g for g in geom.geoms if g.geom_type in ("Polygon", "MultiPolygon")]
+        if not polys:
+            return None
+        merged = unary_union(polys)
+        if merged.geom_type == "Polygon":
+            return MultiPolygon([merged])
+        if merged.geom_type == "MultiPolygon":
+            return merged
+    return None
+
+
+def safe_representative_point(geom):
+    try:
+        p = geom.representative_point()
+        return float(p.y), float(p.x)
+    except Exception:
+        c = geom.centroid
+        return float(c.y), float(c.x)
+
+
+# ---------- Extração de codes ----------
+
+
+def country_code_from_row(row) -> str | None:
+    """Retorna code lowercase de 2-3 letras (ISO_A2 preferido, fallback ISO_A2_EH, depois manual)."""
+    for col in ("ISO_A2", "ISO_A2_EH"):
+        v = row.get(col)
+        if isinstance(v, str):
+            v = v.strip().upper()
+            if re.match(r"^[A-Z]{2}$", v) and v != "-99":
+                return v.lower()
+
+    name = row.get("NAME") or row.get("ADMIN") or ""
+    name = str(name).strip()
+    if name in ISO_A2_FALLBACK:
+        return ISO_A2_FALLBACK[name]
+
+    # Last resort: slug do nome (ex: 'kosovo')
+    return slugify(name)[:8] or None
+
+
+_STATE_CODE_TAIL_RE = re.compile(r"^([A-Z]{2})-([A-Z0-9~]+)$")
+
+
+def state_code_from_row(row, country_code: str) -> str | None:
+    iso = row.get("iso_3166_2")
+    if isinstance(iso, str):
+        m = _STATE_CODE_TAIL_RE.match(iso.strip().upper())
+        if m:
+            tail = m.group(2).rstrip("~")
+            tail = re.sub(r"[^A-Z0-9]", "", tail)  # remove til, hífens internos
+            if tail:
+                return tail.lower()
+
+    # fallback: slug do nome
+    name = row.get("name") or row.get("name_en") or ""
+    s = slugify(str(name))
+    return s if s else None
+
+
+# ---------- Templates SQL ----------
+
+HEADER = """-- Generated by generate_world_locations_sql.py
+-- DO NOT edit manually — regenerar com o script.
+-- Fonte: Natural Earth (https://www.naturalearthdata.com) — domínio público.
+--
+-- Estratégia: UPSERT idempotente por path. Atualiza linhas existentes (Brasil,
+-- Goiás, São Paulo já presentes no seed inicial 20260311120000) e insere novas
+-- (Israel, EUA, Japão, etc).
+--
+-- Coluna geom é geometry(MultiPolygon, 4326).
+
+begin;
+"""
+
+FOOTER = "\ncommit;\n"
+
+
+def emit_country_block(country: dict) -> str:
+    """Gera um bloco SQL para um país: resolve continent_id por code, depois UPSERT."""
+    cont_code = country["continent_code"]
+    code = country["code"]
+    path = country["path"]
+    name = sql_escape(country["name"])
+    center_lat = country["center_lat"]
+    center_lng = country["center_lng"]
+    bb_min_lat, bb_min_lng, bb_max_lat, bb_max_lng = country["bbox"]
+    wkt = country["geom_wkt"]
+
+    return f"""
+do $$
+declare
+  v_cont uuid;
+begin
+  select id into v_cont
+  from public.locations
+  where level = 'continent' and code = '{cont_code}'
+  limit 1;
+
+  if v_cont is null then
+    raise notice 'continent {cont_code} missing — skipping country {code}';
+    return;
+  end if;
+
+  insert into public.locations (
+    level, parent_id, code, name, path,
+    center_lat, center_lng,
+    bbox_min_lat, bbox_min_lng, bbox_max_lat, bbox_max_lng,
+    geom
+  )
+  values (
+    'country', v_cont, '{code}', '{name}', '{path}',
+    {center_lat:.6f}, {center_lng:.6f},
+    {bb_min_lat:.6f}, {bb_min_lng:.6f}, {bb_max_lat:.6f}, {bb_max_lng:.6f},
+    ST_Multi(ST_GeomFromText('{wkt}', 4326))
+  )
+  on conflict (path) do update set
+    parent_id = excluded.parent_id,
+    code = excluded.code,
+    name = excluded.name,
+    center_lat = excluded.center_lat,
+    center_lng = excluded.center_lng,
+    bbox_min_lat = excluded.bbox_min_lat,
+    bbox_min_lng = excluded.bbox_min_lng,
+    bbox_max_lat = excluded.bbox_max_lat,
+    bbox_max_lng = excluded.bbox_max_lng,
+    geom = excluded.geom;
+end $$;
+"""
+
+
+def emit_state_block(state: dict) -> str:
+    country_path = state["country_path"]
+    code = state["code"]
+    path = state["path"]
+    name = sql_escape(state["name"])
+    center_lat = state["center_lat"]
+    center_lng = state["center_lng"]
+    bb_min_lat, bb_min_lng, bb_max_lat, bb_max_lng = state["bbox"]
+    wkt = state["geom_wkt"]
+
+    return f"""
+do $$
+declare
+  v_country uuid;
+begin
+  select id into v_country
+  from public.locations
+  where level = 'country' and path = '{country_path}'
+  limit 1;
+
+  if v_country is null then
+    raise notice 'country {country_path} missing — skipping state {code}';
+    return;
+  end if;
+
+  insert into public.locations (
+    level, parent_id, code, name, path,
+    center_lat, center_lng,
+    bbox_min_lat, bbox_min_lng, bbox_max_lat, bbox_max_lng,
+    geom
+  )
+  values (
+    'state', v_country, '{code}', '{name}', '{path}',
+    {center_lat:.6f}, {center_lng:.6f},
+    {bb_min_lat:.6f}, {bb_min_lng:.6f}, {bb_max_lat:.6f}, {bb_max_lng:.6f},
+    ST_Multi(ST_GeomFromText('{wkt}', 4326))
+  )
+  on conflict (path) do update set
+    parent_id = excluded.parent_id,
+    code = excluded.code,
+    name = excluded.name,
+    center_lat = excluded.center_lat,
+    center_lng = excluded.center_lng,
+    bbox_min_lat = excluded.bbox_min_lat,
+    bbox_min_lng = excluded.bbox_min_lng,
+    bbox_max_lat = excluded.bbox_max_lat,
+    bbox_max_lng = excluded.bbox_max_lng,
+    geom = excluded.geom;
+end $$;
+"""
+
+
+# ---------- Extração de features ----------
+
+
+def extract_countries(admin0_path: Path) -> tuple[list[dict], dict[str, str]]:
+    """Retorna (lista de country dicts, dict iso_a2 → path para lookup admin1)."""
+    df = gpd.read_file(str(admin0_path))
+    if df.crs is not None and str(df.crs).upper() not in {"EPSG:4326", "WGS84"}:
+        df = df.to_crs(epsg=4326)
+
+    countries: list[dict] = []
+    iso_to_path: dict[str, str] = {}
+
+    for _, row in df.iterrows():
+        cont_ne = str(row.get("CONTINENT") or "").strip()
+        cont_code = CONTINENT_NE_TO_CODE.get(cont_ne)
+        if not cont_code:
+            continue  # pula "Seven seas" e afins
+
+        code = country_code_from_row(row)
+        if not code:
+            continue
+
+        geom = to_multipolygon(row.geometry)
+        if geom is None:
+            continue
+
+        minx, miny, maxx, maxy = geom.bounds
+        c_lat, c_lng = safe_representative_point(geom)
+
+        name = str(row.get("NAME") or row.get("ADMIN") or code).strip()
+        path = f"world/{cont_code}/{code}"
+
+        countries.append(
+            {
+                "continent_code": cont_code,
+                "code": code,
+                "name": name,
+                "path": path,
+                "center_lat": c_lat,
+                "center_lng": c_lng,
+                "bbox": (miny, minx, maxy, maxx),
+                "geom_wkt": geom.wkt,
+            }
+        )
+
+        # iso_a2 NE pode ser '-99', mas o code já resolvido contém o fallback.
+        iso_ne = str(row.get("ISO_A2") or "").strip().upper()
+        if re.match(r"^[A-Z]{2}$", iso_ne) and iso_ne != "-99":
+            iso_to_path[iso_ne] = path
+        # também indexa pelo code que geramos (para mapear via slugified fallback)
+        iso_to_path[code.upper()] = path
+
+    countries.sort(key=lambda c: c["path"])
+    return countries, iso_to_path
+
+
+def extract_states(admin1_path: Path, iso_to_path: dict[str, str]) -> list[dict]:
+    df = gpd.read_file(str(admin1_path))
+    if df.crs is not None and str(df.crs).upper() not in {"EPSG:4326", "WGS84"}:
+        df = df.to_crs(epsg=4326)
+
+    states: list[dict] = []
+    skipped_no_country = 0
+    skipped_invalid_geom = 0
+
+    for _, row in df.iterrows():
+        iso = str(row.get("iso_a2") or "").strip().upper()
+        country_path = iso_to_path.get(iso)
+        if country_path is None:
+            # tentativa: admin → fallback name
+            admin = str(row.get("admin") or "").strip()
+            if admin in ISO_A2_FALLBACK:
+                country_path = iso_to_path.get(ISO_A2_FALLBACK[admin].upper())
+        if country_path is None:
+            skipped_no_country += 1
+            continue
+
+        country_code = country_path.rsplit("/", 1)[-1]
+        state_code = state_code_from_row(row, country_code)
+        if not state_code:
+            continue
+
+        geom = to_multipolygon(row.geometry)
+        if geom is None:
+            skipped_invalid_geom += 1
+            continue
+
+        minx, miny, maxx, maxy = geom.bounds
+        c_lat, c_lng = safe_representative_point(geom)
+
+        name = str(row.get("name") or row.get("name_en") or state_code).strip()
+        path = f"{country_path}/{state_code}"
+
+        states.append(
+            {
+                "country_path": country_path,
+                "code": state_code,
+                "name": name,
+                "path": path,
+                "center_lat": c_lat,
+                "center_lng": c_lng,
+                "bbox": (miny, minx, maxy, maxx),
+                "geom_wkt": geom.wkt,
+            }
+        )
+
+    states.sort(key=lambda s: s["path"])
+    # Dedupe por path (em caso de colisão, mantém o primeiro)
+    seen = set()
+    deduped = []
+    for s in states:
+        if s["path"] in seen:
+            continue
+        seen.add(s["path"])
+        deduped.append(s)
+
+    print(f"  states extracted: {len(deduped)} (skipped no_country={skipped_no_country}, invalid_geom={skipped_invalid_geom})")
+    return deduped
+
+
+# ---------- Writers ----------
+
+
+def write_countries_migration(countries: list[dict], out_path: Path) -> int:
+    body = "".join(emit_country_block(c) for c in countries)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(HEADER + body + FOOTER, encoding="utf-8")
+    return out_path.stat().st_size
+
+
+def write_states_migrations(
+    states: list[dict],
+    out_dir: Path,
+    timestamp_prefix: str,
+    batch_size: int,
+) -> list[tuple[Path, int]]:
+    """
+    Splitta admin1 em batches. Cada batch vira uma migration separada.
+    Nomes: {timestamp_prefix}15{NN}00_world_seed_states_part_{NNN}.sql
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    results: list[tuple[Path, int]] = []
+    total = len(states)
+    n_batches = (total + batch_size - 1) // batch_size
+
+    for i in range(n_batches):
+        chunk = states[i * batch_size : (i + 1) * batch_size]
+        # offset de tempo: 15:00:00 + i minutos (até 59), depois pula pra 16:00 etc.
+        hh = 15 + (i // 60)
+        mm = i % 60
+        ts = f"{timestamp_prefix}{hh:02d}{mm:02d}00"
+        fname = f"{ts}_world_seed_states_part_{i+1:03d}.sql"
+        out_path = out_dir / fname
+
+        body = "".join(emit_state_block(s) for s in chunk)
+        header_note = f"-- Part {i+1}/{n_batches} — {len(chunk)} states\n"
+        out_path.write_text(HEADER + header_note + body + FOOTER, encoding="utf-8")
+        results.append((out_path, out_path.stat().st_size))
+
+    return results
+
+
+# ---------- Main ----------
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--admin0", required=True)
+    ap.add_argument("--admin1", required=True)
+    ap.add_argument("--out-dir", required=True)
+    ap.add_argument("--timestamp-prefix", required=True, help="YYYYMMDD prefix (8 dígitos)")
+    ap.add_argument("--batch-size", type=int, default=80)
+    args = ap.parse_args()
+
+    if len(args.timestamp_prefix) != 8 or not args.timestamp_prefix.isdigit():
+        raise SystemExit("--timestamp-prefix deve ter exatamente 8 dígitos: YYYYMMDD")
+
+    admin0 = Path(args.admin0)
+    admin1 = Path(args.admin1)
+    out_dir = Path(args.out_dir)
+
+    if not admin0.exists():
+        raise SystemExit(f"admin0 não encontrado: {admin0}")
+    if not admin1.exists():
+        raise SystemExit(f"admin1 não encontrado: {admin1}")
+
+    print("Loading admin0...")
+    countries, iso_to_path = extract_countries(admin0)
+    print(f"  countries extracted: {len(countries)}")
+
+    print("Loading admin1...")
+    states = extract_states(admin1, iso_to_path)
+
+    countries_path = out_dir / f"{args.timestamp_prefix}140000_world_seed_countries.sql"
+    print(f"Writing countries migration -> {countries_path}")
+    size = write_countries_migration(countries, countries_path)
+    print(f"  {size:,} bytes")
+
+    print(f"Writing states migrations (batch_size={args.batch_size})...")
+    results = write_states_migrations(states, out_dir, args.timestamp_prefix, args.batch_size)
+    total = sum(s for _, s in results)
+    print(f"  {len(results)} migrations, {total:,} bytes total")
+    for p, sz in results[:3]:
+        print(f"    {p.name}: {sz:,} bytes")
+    if len(results) > 3:
+        print(f"    ... ({len(results) - 3} more)")
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
