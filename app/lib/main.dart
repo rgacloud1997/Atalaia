@@ -13770,8 +13770,9 @@ class DemoRepository extends ChangeNotifier {
         list.add(RegionCoverageModel.fromSupabase(raw.cast<String, dynamic>()));
       }
       return List.unmodifiable(list);
-    } catch (_) {
-      return const [];
+    } catch (e, st) {
+      developer.log('getRegionCoverage failed', error: e, stackTrace: st, name: 'DemoRepository');
+      rethrow;
     }
   }
 
@@ -13802,8 +13803,9 @@ class DemoRepository extends ChangeNotifier {
         list.add(TargetCoverageModel.fromSupabase(raw.cast<String, dynamic>()));
       }
       return List.unmodifiable(list);
-    } catch (_) {
-      return const [];
+    } catch (e, st) {
+      developer.log('getTargetCoverage failed', error: e, stackTrace: st, name: 'DemoRepository');
+      rethrow;
     }
   }
 
@@ -13836,8 +13838,9 @@ class DemoRepository extends ChangeNotifier {
         list.add(TimeSlotCoverageModel.fromSupabase(raw.cast<String, dynamic>()));
       }
       return List.unmodifiable(list);
-    } catch (_) {
-      return const [];
+    } catch (e, st) {
+      developer.log('getTimeSlotCoverage failed', error: e, stackTrace: st, name: 'DemoRepository');
+      rethrow;
     }
   }
 
@@ -39601,7 +39604,16 @@ class _PrayerReportScreenState extends State<PrayerReportScreen> {
   PrayerByCompletionModel? _byCompletion;
   Object? _byCompletionError;
 
-  bool get _hasPrayersTab => !widget.args.selfMode;
+  List<RegionCoverageModel> _byRegion = const [];
+  Object? _byRegionError;
+
+  List<TargetCoverageModel> _byTarget = const [];
+  Object? _byTargetError;
+
+  List<TimeSlotCoverageModel> _byTimeSlot = const [];
+  Object? _byTimeSlotError;
+
+  bool get _isAdminMode => !widget.args.selfMode;
 
   @override
   void initState() {
@@ -39630,12 +39642,20 @@ class _PrayerReportScreenState extends State<PrayerReportScreen> {
       _summaryError = null;
       _byUserError = null;
       _byCompletionError = null;
+      _byRegionError = null;
+      _byTargetError = null;
+      _byTimeSlotError = null;
     });
     final repo = RepoScope.of(context);
     final tasks = <Future<void>>[
       _loadSummary(repo),
       _loadByUser(repo),
-      if (_hasPrayersTab) _loadByCompletion(repo),
+      if (_isAdminMode) ...[
+        _loadByCompletion(repo),
+        _loadByRegion(repo),
+        _loadByTarget(repo),
+        _loadByTimeSlot(repo),
+      ],
     ];
     await Future.wait(tasks);
     if (!mounted) return;
@@ -39700,6 +39720,63 @@ class _PrayerReportScreenState extends State<PrayerReportScreen> {
     }
   }
 
+  Future<void> _loadByRegion(DemoRepository repo) async {
+    try {
+      final list = await repo.getRegionCoverage(
+        communityId: widget.args.communityId,
+        from: _range.start,
+        to: _range.end,
+        tz: _tz,
+      );
+      if (!mounted) return;
+      setState(() => _byRegion = list);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _byRegion = const [];
+        _byRegionError = e;
+      });
+    }
+  }
+
+  Future<void> _loadByTarget(DemoRepository repo) async {
+    try {
+      final list = await repo.getTargetCoverage(
+        communityId: widget.args.communityId,
+        from: _range.start,
+        to: _range.end,
+        tz: _tz,
+      );
+      if (!mounted) return;
+      setState(() => _byTarget = list);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _byTarget = const [];
+        _byTargetError = e;
+      });
+    }
+  }
+
+  Future<void> _loadByTimeSlot(DemoRepository repo) async {
+    try {
+      final list = await repo.getTimeSlotCoverage(
+        communityId: widget.args.communityId,
+        from: _range.start,
+        to: _range.end,
+        tz: _tz,
+      );
+      if (!mounted) return;
+      setState(() => _byTimeSlot = list);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _byTimeSlot = const [];
+        _byTimeSlotError = e;
+      });
+    }
+  }
+
   Future<void> _pickRange() async {
     final now = DateTime.now();
     final picked = await showDateRangePicker(
@@ -39736,7 +39813,7 @@ class _PrayerReportScreenState extends State<PrayerReportScreen> {
     final title = widget.args.selfMode
         ? 'Minhas Estatísticas de Oração'
         : 'Relatório de Escalas';
-    final tabCount = _hasPrayersTab ? 3 : 2;
+    final tabCount = _isAdminMode ? 6 : 2;
     return DefaultTabController(
       length: tabCount,
       child: Scaffold(
@@ -39754,7 +39831,12 @@ class _PrayerReportScreenState extends State<PrayerReportScreen> {
             tabs: [
               const Tab(text: 'Resumo'),
               Tab(text: widget.args.selfMode ? 'Detalhado' : 'Por Usuário'),
-              if (_hasPrayersTab) const Tab(text: 'Por Orações'),
+              if (_isAdminMode) ...[
+                const Tab(text: 'Por Orações'),
+                const Tab(text: 'Por Região'),
+                const Tab(text: 'Por Alvo'),
+                const Tab(text: 'Por Horário'),
+              ],
             ],
           ),
         ),
@@ -39787,7 +39869,12 @@ class _PrayerReportScreenState extends State<PrayerReportScreen> {
                 children: [
                   _buildResumoTab(),
                   _buildByUserTab(),
-                  if (_hasPrayersTab) _buildByPrayersTab(),
+                  if (_isAdminMode) ...[
+                    _buildByPrayersTab(),
+                    _buildByRegionTab(),
+                    _buildByTargetTab(),
+                    _buildByTimeSlotTab(),
+                  ],
                 ],
               ),
             ),
@@ -39946,6 +40033,133 @@ class _PrayerReportScreenState extends State<PrayerReportScreen> {
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: children,
     );
+  }
+
+  Widget _buildByRegionTab() {
+    Widget body;
+    if (_loading) {
+      body = ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: const [SizedBox(height: 64), Center(child: CircularProgressIndicator())],
+      );
+    } else if (_byRegionError != null) {
+      body = ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
+          EmptyState(
+            icon: Icons.error_outline,
+            title: 'Não foi possível carregar as regiões',
+            ctaLabel: 'Tentar novamente',
+            onCta: _load,
+          ),
+        ],
+      );
+    } else if (_byRegion.isEmpty) {
+      body = ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
+          const EmptyState(
+            icon: Icons.map_outlined,
+            title: 'Nenhuma região com dados no período',
+          ),
+        ],
+      );
+    } else {
+      body = ListView.separated(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        itemCount: _byRegion.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 8),
+        itemBuilder: (_, i) => _RegionCoverageTile(region: _byRegion[i]),
+      );
+    }
+    return RefreshIndicator(onRefresh: _load, child: body);
+  }
+
+  Widget _buildByTargetTab() {
+    Widget body;
+    if (_loading) {
+      body = ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: const [SizedBox(height: 64), Center(child: CircularProgressIndicator())],
+      );
+    } else if (_byTargetError != null) {
+      body = ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
+          EmptyState(
+            icon: Icons.error_outline,
+            title: 'Não foi possível carregar os alvos',
+            ctaLabel: 'Tentar novamente',
+            onCta: _load,
+          ),
+        ],
+      );
+    } else if (_byTarget.isEmpty) {
+      body = ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
+          const EmptyState(
+            icon: Icons.flag_outlined,
+            title: 'Nenhum alvo com dados no período',
+          ),
+        ],
+      );
+    } else {
+      body = ListView.separated(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        itemCount: _byTarget.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 8),
+        itemBuilder: (_, i) => _TargetCoverageTile(target: _byTarget[i]),
+      );
+    }
+    return RefreshIndicator(onRefresh: _load, child: body);
+  }
+
+  Widget _buildByTimeSlotTab() {
+    Widget body;
+    if (_loading) {
+      body = ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: const [SizedBox(height: 64), Center(child: CircularProgressIndicator())],
+      );
+    } else if (_byTimeSlotError != null) {
+      body = ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
+          EmptyState(
+            icon: Icons.error_outline,
+            title: 'Não foi possível carregar os horários',
+            ctaLabel: 'Tentar novamente',
+            onCta: _load,
+          ),
+        ],
+      );
+    } else if (_byTimeSlot.isEmpty || _byTimeSlot.every((s) => s.scheduledCount == 0)) {
+      body = ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          SizedBox(height: MediaQuery.sizeOf(context).height * 0.18),
+          const EmptyState(
+            icon: Icons.schedule_outlined,
+            title: 'Nenhum turno em horários no período',
+          ),
+        ],
+      );
+    } else {
+      body = ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        children: [_TimeSlotChart(slots: _byTimeSlot)],
+      );
+    }
+    return RefreshIndicator(onRefresh: _load, child: body);
   }
 
   Widget _buildCardsGrid(PrayerScaleSummaryModel s, ColorScheme cs) {
@@ -40389,6 +40603,466 @@ class _PrayerRunTile extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _CoverageBar extends StatelessWidget {
+  const _CoverageBar({required this.percentage, required this.color});
+
+  final double percentage;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final clamped = percentage.clamp(0, 100).toDouble();
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(6),
+      child: LinearProgressIndicator(
+        value: clamped / 100.0,
+        minHeight: 8,
+        backgroundColor: cs.surfaceContainerHighest,
+        valueColor: AlwaysStoppedAnimation<Color>(color),
+      ),
+    );
+  }
+}
+
+class _RankBadge extends StatelessWidget {
+  const _RankBadge({required this.rank});
+
+  final int rank;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final color = rank == 1
+        ? const Color(0xFFFFC107)
+        : rank == 2
+            ? const Color(0xFF9E9E9E)
+            : rank == 3
+                ? const Color(0xFFCD7F32)
+                : cs.outline;
+    return Container(
+      width: 36,
+      height: 36,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.16),
+        shape: BoxShape.circle,
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        '#$rank',
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.w900,
+          fontSize: 12,
+        ),
+      ),
+    );
+  }
+}
+
+class _RegionCoverageTile extends StatelessWidget {
+  const _RegionCoverageTile({required this.region});
+
+  final RegionCoverageModel region;
+
+  Color _coverageColor(double pct, ColorScheme cs) {
+    if (pct >= 80) return cs.primary;
+    if (pct >= 50) return cs.tertiary;
+    return cs.error;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final pct = region.coveragePercentage.clamp(0, 100).toDouble();
+    final color = _coverageColor(pct, cs);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _RankBadge(rank: region.rank),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    region.regionName,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 8),
+                  _CoverageBar(percentage: pct, color: color),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      _StatTag(
+                        icon: Icons.percent_outlined,
+                        label: '${pct.toStringAsFixed(0)}% cobertura',
+                        color: color,
+                      ),
+                      _StatTag(
+                        icon: Icons.check_circle_outline,
+                        label: '${region.completedTurns}/${region.totalTurns} turnos',
+                        color: cs.outline,
+                      ),
+                      if (region.missedTurns > 0)
+                        _StatTag(
+                          icon: Icons.cancel_outlined,
+                          label: '${region.missedTurns} falta(s)',
+                          color: cs.error,
+                        ),
+                      _StatTag(
+                        icon: Icons.people_outline,
+                        label: '${region.uniqueUsers} usuário(s)',
+                        color: cs.outline,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TargetCoverageTile extends StatelessWidget {
+  const _TargetCoverageTile({required this.target});
+
+  final TargetCoverageModel target;
+
+  Color _coverageColor(double pct, ColorScheme cs) {
+    if (pct >= 80) return cs.primary;
+    if (pct >= 50) return cs.tertiary;
+    return cs.error;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+    final pct = target.coveragePercentage.clamp(0, 100).toDouble();
+    final color = _coverageColor(pct, cs);
+    final emoji = target.targetEmoji?.trim();
+    final topResponsibles = target.responsibleUsers.take(3).toList(growable: false);
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+        leading: _RankBadge(rank: target.rank),
+        title: Row(
+          children: [
+            if (emoji != null && emoji.isNotEmpty) ...[
+              Text(emoji, style: const TextStyle(fontSize: 22)),
+              const SizedBox(width: 8),
+            ],
+            Expanded(
+              child: Text(
+                target.targetName,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _CoverageBar(percentage: pct, color: color),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  _StatTag(
+                    icon: Icons.percent_outlined,
+                    label: '${pct.toStringAsFixed(0)}%',
+                    color: color,
+                  ),
+                  _StatTag(
+                    icon: Icons.check_circle_outline,
+                    label: '${target.completedTurns}/${target.totalTurns}',
+                    color: cs.outline,
+                  ),
+                  if (target.missedTurns > 0)
+                    _StatTag(
+                      icon: Icons.cancel_outlined,
+                      label: '${target.missedTurns} falta(s)',
+                      color: cs.error,
+                    ),
+                  _StatTag(
+                    icon: Icons.people_outline,
+                    label: '${target.uniqueUsers} usuário(s)',
+                    color: cs.outline,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        children: [
+          if (topResponsibles.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Text(
+                'Sem responsáveis registrados no período.',
+                style: tt.bodySmall?.copyWith(color: cs.outline),
+              ),
+            )
+          else ...[
+            Text(
+              'Quem mais orou por este alvo',
+              style: tt.bodySmall?.copyWith(
+                color: cs.outline,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 6),
+            for (final r in topResponsibles)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    Icon(Icons.emoji_events_outlined, size: 16, color: cs.primary),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        r.userName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    Text(
+                      '${r.count} vez(es)',
+                      style: TextStyle(color: cs.outline, fontWeight: FontWeight.w700),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _TimeSlotChart extends StatelessWidget {
+  const _TimeSlotChart({required this.slots});
+
+  final List<TimeSlotCoverageModel> slots;
+
+  Color _periodColor(String period, ColorScheme cs) {
+    return switch (period.toLowerCase()) {
+      'madrugada' => cs.tertiary,
+      'manhã' => cs.primary,
+      'tarde' => cs.secondary,
+      _ => cs.error,
+    };
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+    int maxScheduled = 0;
+    for (final s in slots) {
+      if (s.scheduledCount > maxScheduled) maxScheduled = s.scheduledCount;
+    }
+    if (maxScheduled == 0) maxScheduled = 1;
+
+    final periodTotals = <String, ({int total, int filled})>{};
+    for (final s in slots) {
+      final p = s.periodName.isEmpty ? 'Geral' : s.periodName;
+      final prev = periodTotals[p] ?? (total: 0, filled: 0);
+      periodTotals[p] = (
+        total: prev.total + s.scheduledCount,
+        filled: prev.filled + s.completedCount,
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Distribuição por hora do dia',
+          style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+        ),
+        Text(
+          'Barra alta = mais turnos. Cor = % concluído.',
+          style: tt.bodySmall?.copyWith(color: cs.outline),
+        ),
+        const SizedBox(height: 16),
+        SizedBox(
+          height: 180,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final w = constraints.maxWidth;
+              final barWidth = (w - (slots.length - 1) * 2) / slots.length;
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  for (var i = 0; i < slots.length; i++) ...[
+                    Expanded(
+                      child: _TimeSlotBar(
+                        slot: slots[i],
+                        maxScheduled: maxScheduled,
+                        barWidth: barWidth,
+                      ),
+                    ),
+                    if (i < slots.length - 1) const SizedBox(width: 2),
+                  ],
+                ],
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.only(left: 2),
+                child: Text('00h', style: tt.bodySmall?.copyWith(color: cs.outline)),
+              ),
+            ),
+            Text('12h', style: tt.bodySmall?.copyWith(color: cs.outline)),
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: Padding(
+                  padding: const EdgeInsets.only(right: 2),
+                  child: Text('23h', style: tt.bodySmall?.copyWith(color: cs.outline)),
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
+        Text(
+          'Por período',
+          style: tt.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 8),
+        for (final entry in periodTotals.entries)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: _PeriodCoverageRow(
+              periodName: entry.key,
+              total: entry.value.total,
+              filled: entry.value.filled,
+              color: _periodColor(entry.key, cs),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _TimeSlotBar extends StatelessWidget {
+  const _TimeSlotBar({
+    required this.slot,
+    required this.maxScheduled,
+    required this.barWidth,
+  });
+
+  final TimeSlotCoverageModel slot;
+  final int maxScheduled;
+  final double barWidth;
+
+  Color _fillColor(double pct, ColorScheme cs) {
+    if (slot.scheduledCount == 0) return cs.surfaceContainerHighest;
+    if (pct >= 80) return cs.primary;
+    if (pct >= 50) return cs.tertiary;
+    return cs.error;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final pct = slot.fillPercentage.clamp(0, 100).toDouble();
+    final heightRatio = slot.scheduledCount / maxScheduled;
+    final color = _fillColor(pct, cs);
+    return Tooltip(
+      message: '${slot.timeSlot}\n'
+          '${slot.scheduledCount} turno(s) — ${pct.toStringAsFixed(0)}% concluído',
+      child: FractionallySizedBox(
+        heightFactor: slot.scheduledCount == 0 ? 0.05 : heightRatio.clamp(0.05, 1.0),
+        alignment: Alignment.bottomCenter,
+        child: Container(
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(3)),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PeriodCoverageRow extends StatelessWidget {
+  const _PeriodCoverageRow({
+    required this.periodName,
+    required this.total,
+    required this.filled,
+    required this.color,
+  });
+
+  final String periodName;
+  final int total;
+  final int filled;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final pct = total == 0 ? 0.0 : (filled / total) * 100.0;
+    return Row(
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          flex: 2,
+          child: Text(
+            periodName,
+            style: const TextStyle(fontWeight: FontWeight.w700),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        Expanded(
+          flex: 4,
+          child: _CoverageBar(percentage: pct, color: color),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 70,
+          child: Text(
+            '$filled/$total',
+            textAlign: TextAlign.right,
+            style: TextStyle(color: cs.outline, fontSize: 12),
+          ),
+        ),
+      ],
     );
   }
 }
