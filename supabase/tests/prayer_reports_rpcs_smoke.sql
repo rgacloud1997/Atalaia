@@ -861,6 +861,120 @@ begin
 end $$;
 
 -- =====================================================================
+-- TEST 9: p_tz parameter (migration 20260518110000_reports_rpcs_p_tz.sql)
+-- =====================================================================
+
+-- 9.a get_prayer_scale_summary accepts p_tz and still returns 1 summary row.
+select set_config('request.jwt.claim.sub', 'aaaaaaa1-aaaa-aaaa-aaaa-aaaaaaaaaaaa', false);
+do $$
+declare n int;
+begin
+  select count(*) into n from public.get_prayer_scale_summary(
+    'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    (now() at time zone 'America/Sao_Paulo')::date - 14,
+    (now() at time zone 'America/Sao_Paulo')::date,
+    'America/Sao_Paulo'
+  );
+  if n <> 1 then
+    raise exception 'rpc1 p_tz: expected exactly 1 summary row, got %', n;
+  end if;
+end $$;
+
+-- 9.b get_prayer_by_user_detailed accepts p_tz.
+do $$
+declare n int;
+begin
+  select count(*) into n from public.get_prayer_by_user_detailed(
+    'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    (now() at time zone 'America/Sao_Paulo')::date - 14,
+    (now() at time zone 'America/Sao_Paulo')::date,
+    'America/Sao_Paulo'
+  );
+  if n < 2 then
+    raise exception 'rpc2 p_tz: expected >= 2 user rows, got %', n;
+  end if;
+end $$;
+
+-- 9.c get_coverage_by_region accepts p_tz.
+do $$
+declare n int;
+begin
+  select count(*) into n from public.get_coverage_by_region(
+    'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    (now() at time zone 'America/Sao_Paulo')::date - 14,
+    (now() at time zone 'America/Sao_Paulo')::date,
+    'America/Sao_Paulo'
+  );
+  if n < 1 then
+    raise exception 'rpc4 p_tz: expected >= 1 region row, got %', n;
+  end if;
+end $$;
+
+-- 9.d get_coverage_by_target accepts p_tz.
+do $$
+declare n int;
+begin
+  select count(*) into n from public.get_coverage_by_target(
+    'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    (now() at time zone 'America/Sao_Paulo')::date - 14,
+    (now() at time zone 'America/Sao_Paulo')::date,
+    'America/Sao_Paulo'
+  );
+  if n < 2 then
+    raise exception 'rpc5 p_tz: expected >= 2 target rows, got %', n;
+  end if;
+end $$;
+
+-- 9.e get_time_slot_coverage accepts p_tz — still 24 hourly slots, but
+-- the runs may now land in different hour buckets (shift of 3h vs UTC).
+do $$
+declare n int;
+begin
+  select count(*) into n from public.get_time_slot_coverage(
+    'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    (now() at time zone 'America/Sao_Paulo')::date - 14,
+    (now() at time zone 'America/Sao_Paulo')::date,
+    60,
+    'America/Sao_Paulo'
+  );
+  if n <> 24 then
+    raise exception 'rpc6 p_tz: expected 24 slots, got %', n;
+  end if;
+end $$;
+
+-- 9.f get_failure_analysis accepts p_tz.
+do $$
+declare n int;
+begin
+  select count(*) into n from public.get_failure_analysis(
+    'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    (now() at time zone 'America/Sao_Paulo')::date - 14,
+    (now() at time zone 'America/Sao_Paulo')::date,
+    'America/Sao_Paulo'
+  );
+  if n < 2 then
+    raise exception 'rpc7 p_tz: expected >= 2 failure rows, got %', n;
+  end if;
+end $$;
+
+-- 9.g get_prayer_report_cross_data accepts p_tz (note: p_tz is the LAST
+-- positional arg, so we pass all the optionals explicitly).
+do $$
+declare n int;
+begin
+  select count(*) into n from public.get_prayer_report_cross_data(
+    'dddddddd-dddd-dddd-dddd-dddddddddddd',
+    now() - interval '14 days', now() + interval '14 days',
+    null, null, null, null, null,
+    0, 23, 200, 0,
+    'America/Sao_Paulo'
+  );
+  if n < 5 then
+    raise exception 'rpc8 p_tz: expected >= 5 rows, got %', n;
+  end if;
+end $$;
+
+-- =====================================================================
 -- DONE — if we got here without an exception, all assertions passed.
 -- =====================================================================
 

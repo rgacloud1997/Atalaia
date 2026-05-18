@@ -179,16 +179,16 @@ PrayerReportScreen
 - [x] 8 RPCs SQL implementadas com RLS via `community_is_admin`
 - [x] 8 Models Dart + factories `fromSupabase`
 - [x] 8 métodos no `DemoRepository` com guard offline
+- [x] **Smoke suite das 8 RPCs** (`supabase/tests/prayer_reports_rpcs_smoke.sql`) — 54 asserções verdes
+- [x] **Bug fix**: cast `dense_rank()::int` em 3 RPCs (region/target/failure) — pegou no primeiro run da suite
+- [x] **Refactor p_tz**: 7 RPCs aceitam `p_tz text default 'UTC'`; RPC 3 não precisou (sem date grouping). `DemoRepository` atualizado com `String tz = 'UTC'` opcional.
 
 ---
 
-### ⏳ TODO 1: Testar RPCs Isoladamente (Fase 2.3)
-- [ ] Criar `supabase/tests/prayer_reports_rpcs_smoke.sql` cobrindo:
-  - Sucesso básico de cada uma das 8 RPCs com dados de seed
-  - Negativo: `auth_required`, `not_allowed` (não-admin), `invalid_range`, `community_required`
-- [ ] Rodar localmente via `supabase test db` antes do próximo deploy
-
-**Tempo estimado**: ~4-6 horas
+### ✅ TODO 1: Testar RPCs Isoladamente (Fase 2.3) — CONCLUÍDO em `f22af36` + `350526e`
+- [x] `supabase/tests/prayer_reports_rpcs_smoke.sql` com 54 asserções
+- [x] Validado contra cluster Postgres 18.1 temporário; exit 0
+- [x] Detectou bug latente nas RPCs 4/5/7 (`dense_rank()` bigint vs `rank integer`) que teria virado relatórios silenciosamente vazios em produção. Fix em `20260518100000_fix_reports_rank_bigint_cast.sql`.
 
 ---
 
@@ -203,13 +203,12 @@ PrayerReportScreen
 
 ---
 
-### ⏳ TODO 2: Refactor RPCs para `p_tz` (decorrência da decisão de timezone)
-- [ ] Nova migration `20260518xxxxxx_reports_rpcs_tz.sql` que substitui as 8 RPCs adicionando `p_tz text default 'UTC'`
-- [ ] Trocar todas as expressões `at time zone 'utc'` por `at time zone p_tz`
-- [ ] Atualizar `DemoRepository` para passar o tz do dispositivo (ex.: `DateTime.now().timeZoneName` ou IANA via package `flutter_timezone`)
-- [ ] Cobrir nos testes da Fase 2.3
-
-**Tempo estimado**: ~3-4 horas
+### ✅ TODO 2: Refactor RPCs para `p_tz` — CONCLUÍDO
+- [x] Migration `20260518110000_reports_rpcs_p_tz.sql` substitui 7 das 8 RPCs com `p_tz text default 'UTC'` (RPC 3 não usa date grouping, ficou como está)
+- [x] `at time zone 'utc'` → `at time zone p_tz` em todos os pontos relevantes
+- [x] `DemoRepository` atualizado com `String tz = 'UTC'` opcional em 7 métodos
+- [x] 7 asserções adicionais na smoke suite validando `p_tz='America/Sao_Paulo'`
+- [x] Assinaturas antigas (sem `p_tz`) explicitamente dropadas para evitar ambiguidade na resolução de overload
 
 ---
 
@@ -371,9 +370,9 @@ Antes de iniciar Fase 2, confirme com o time:
 | Fase | Duração | Status |
 |------|---------|--------|
 | Fase 1: Diagnóstico | 1 dia | ✅ Concluída |
-| Fase 2: Backend (8 RPCs + tabela) | 4-5 dias | ✅ Concluída (commit `9331fc8`); falta só 2.3 (testes isolados) |
-| Fase 3: Models + Repository | 2-3 dias | ✅ Concluída (commit `9331fc8`) |
-| Fase 4: UI | 4 semanas | 🔄 **Próxima** |
+| Fase 2: Backend (8 RPCs + tabela) | 4-5 dias | ✅ 100% concluída (RPCs + testes + bug fix + refactor p_tz) |
+| Fase 3: Models + Repository | 2-3 dias | ✅ Concluída + tz opcional |
+| Fase 4: UI | 4 semanas | 🔄 **Próxima** (destravada: pode consumir todas as 8 RPCs com tz local) |
 | Fase 5: Filtros cruzados | 2-3 dias (paralelo) | 🟡 Backend pronto; UI pendente |
 | Fase 6: Helpers | 1-2 dias | ⏳ Aguardando |
 | **RESTANTE** | **~4-5 semanas** | |

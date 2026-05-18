@@ -1259,13 +1259,15 @@ Map<String, List<T>> groupByPeriod<T>(
 | **Exportação V1** | PDF + CSV | Packages `pdf` + `printing` (PDF) e geração nativa Dart (CSV); `share_plus` para enviar |
 | **Refresh** | Pull-to-refresh + botão | `RefreshIndicator` + `IconButton` no AppBar; sem realtime, sem auto-refresh |
 
-### ⏳ AGORA — Fechar Fase 2 (testes) + preparar Fase 4
+### ✅ Entregue na sessão de 18/05/2026
 
-1. **2.3 — Testes isolados das RPCs** em `supabase/tests/prayer_reports_rpcs_smoke.sql`
-   - Caminho feliz de cada RPC com seed mínimo
-   - Casos negativos: `auth_required`, `not_allowed`, `community_required`, `invalid_range`, `invalid_hour_range`
-2. **2.4 (novo) — Refactor de timezone**: nova migration substituindo as 8 RPCs com `p_tz text default 'UTC'` e trocando `at time zone 'utc'` por `at time zone p_tz` (~3-4 h)
-3. **2.5 (novo) — Variantes "self" para membros**: adicionar `p_self_only boolean default false` em `get_prayer_scale_summary`, `get_prayer_by_user_detailed` e `get_prayer_report_cross_data`. Quando true, dispensar `community_is_admin` e forçar `assigned_user_id = auth.uid()` (~4-6 h)
+1. **2.3 — Testes isolados das RPCs** ✅ `supabase/tests/prayer_reports_rpcs_smoke.sql` com 54 asserções (commit `f22af36`)
+2. **Bug fix latente** ✅ Smoke suite pegou na primeira execução: `dense_rank()` bigint vs `rank integer` em RPCs 4/5/7 — corrigido em `20260518100000_fix_reports_rank_bigint_cast.sql` (commit `350526e`)
+3. **2.4 — Refactor de timezone** ✅ `20260518110000_reports_rpcs_p_tz.sql` com `p_tz text default 'UTC'` em 7 das 8 RPCs + `DemoRepository` atualizado + 7 asserções de smoke para o parâmetro
+
+### ⏳ AGORA — Próximos passos
+
+1. **2.5 (futuro) — Variantes "self" para membros**: adicionar `p_self_only boolean default false` em `get_prayer_scale_summary`, `get_prayer_by_user_detailed` e `get_prayer_report_cross_data`. Quando true, dispensar `community_is_admin` e forçar `assigned_user_id = auth.uid()` (~4-6 h)
 
 ### 📅 PRÓXIMA SEMANA — Fase 4, Sprint 1
 - [ ] Criar `PrayerReportScreen` em `app/lib/main.dart` + rota

@@ -13567,6 +13567,7 @@ class DemoRepository extends ChangeNotifier {
     required String communityId,
     required DateTime from,
     required DateTime to,
+    String tz = 'UTC',
   }) async {
     final sb = supabase;
     if (sb == null) {
@@ -13617,6 +13618,7 @@ class DemoRepository extends ChangeNotifier {
           'p_community_id': cid,
           'p_from': from.toUtc().toIso8601String().split('T').first,
           'p_to': to.toUtc().toIso8601String().split('T').first,
+          'p_tz': tz,
         },
       );
       if (rows is List && rows.isNotEmpty && rows.first is Map) {
@@ -13652,6 +13654,7 @@ class DemoRepository extends ChangeNotifier {
     required String communityId,
     required DateTime from,
     required DateTime to,
+    String tz = 'UTC',
   }) async {
     final sb = supabase;
     if (sb == null) return const [];
@@ -13665,6 +13668,7 @@ class DemoRepository extends ChangeNotifier {
           'p_community_id': cid,
           'p_from': from.toUtc().toIso8601String().split('T').first,
           'p_to': to.toUtc().toIso8601String().split('T').first,
+          'p_tz': tz,
         },
       );
       final list = <UserPrayerStatsModel>[];
@@ -13745,6 +13749,7 @@ class DemoRepository extends ChangeNotifier {
     required String communityId,
     required DateTime from,
     required DateTime to,
+    String tz = 'UTC',
   }) async {
     final sb = supabase;
     if (sb == null) return const [];
@@ -13758,6 +13763,7 @@ class DemoRepository extends ChangeNotifier {
           'p_community_id': cid,
           'p_from': from.toUtc().toIso8601String().split('T').first,
           'p_to': to.toUtc().toIso8601String().split('T').first,
+          'p_tz': tz,
         },
       );
       final list = <RegionCoverageModel>[];
@@ -13775,6 +13781,7 @@ class DemoRepository extends ChangeNotifier {
     required String communityId,
     required DateTime from,
     required DateTime to,
+    String tz = 'UTC',
   }) async {
     final sb = supabase;
     if (sb == null) return const [];
@@ -13788,6 +13795,7 @@ class DemoRepository extends ChangeNotifier {
           'p_community_id': cid,
           'p_from': from.toUtc().toIso8601String().split('T').first,
           'p_to': to.toUtc().toIso8601String().split('T').first,
+          'p_tz': tz,
         },
       );
       final list = <TargetCoverageModel>[];
@@ -13806,6 +13814,7 @@ class DemoRepository extends ChangeNotifier {
     required DateTime from,
     required DateTime to,
     int slotMinutes = 60,
+    String tz = 'UTC',
   }) async {
     final sb = supabase;
     if (sb == null) return const [];
@@ -13820,6 +13829,7 @@ class DemoRepository extends ChangeNotifier {
           'p_from': from.toUtc().toIso8601String().split('T').first,
           'p_to': to.toUtc().toIso8601String().split('T').first,
           'p_slot_minutes': slotMinutes,
+          'p_tz': tz,
         },
       );
       final list = <TimeSlotCoverageModel>[];
@@ -13837,6 +13847,7 @@ class DemoRepository extends ChangeNotifier {
     required String communityId,
     required DateTime from,
     required DateTime to,
+    String tz = 'UTC',
   }) async {
     final sb = supabase;
     if (sb == null) return const [];
@@ -13850,6 +13861,7 @@ class DemoRepository extends ChangeNotifier {
           'p_community_id': cid,
           'p_from': from.toUtc().toIso8601String().split('T').first,
           'p_to': to.toUtc().toIso8601String().split('T').first,
+          'p_tz': tz,
         },
       );
       final list = <FailureAnalysisModel>[];
@@ -13868,6 +13880,7 @@ class DemoRepository extends ChangeNotifier {
     required PrayerFilterOptions filters,
     int limit = 200,
     int offset = 0,
+    String tz = 'UTC',
   }) async {
     final sb = supabase;
     if (sb == null) return const [];
@@ -13893,6 +13906,7 @@ class DemoRepository extends ChangeNotifier {
           'p_hour_end': filters.hourEnd,
           'p_limit': limit,
           'p_offset': offset,
+          'p_tz': tz,
         },
       );
       final out = <Map<String, dynamic>>[];
