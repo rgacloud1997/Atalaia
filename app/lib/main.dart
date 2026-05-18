@@ -37623,7 +37623,8 @@ class _CommunityMembersScreenState extends State<CommunityMembersScreen> {
         }
 
         final canModerate = repo.canModerateCommunity(c.id, s.userId);
-        final canManageRoles = c.ownerId == s.userId;
+        final isOwner = c.ownerId == s.userId;
+        final canManageRoles = canModerate;
         final showRequests = c.isClosed && canModerate;
         final members = repo.membersForCommunity(c.id);
         final requests = showRequests ? repo.joinRequestsForCommunity(c.id) : const <ProfileModel>[];
@@ -37690,10 +37691,11 @@ class _CommunityMembersScreenState extends State<CommunityMembersScreen> {
                                                 : t(context).communityMemberActionPromoteToAdmin,
                                           ),
                                         ),
-                                        PopupMenuItem<String>(
-                                          value: 'transfer',
-                                          child: Text(t(context).communityMemberActionTransferOwnership),
-                                        ),
+                                        if (isOwner)
+                                          PopupMenuItem<String>(
+                                            value: 'transfer',
+                                            child: Text(t(context).communityMemberActionTransferOwnership),
+                                          ),
                                       ];
                                     },
                                     onSelected: (action) async {
